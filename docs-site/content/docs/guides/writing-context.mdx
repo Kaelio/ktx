@@ -321,6 +321,23 @@ Useful frontmatter:
 5. Add `sl_refs` for relevant semantic sources.
 6. Search again with a user-like phrase.
 
+### Ingest an authoritative document verbatim
+
+When the document is already the source of truth — a metric-definition sheet, a
+formula spec, a runbook, compliance text — you want **ktx** to index and surface
+it, not re-author it. Instead of hand-copying the file into `wiki/global/`, ingest
+it verbatim:
+
+```bash
+ktx ingest --file docs/rfm-bucket-definitions.md --verbatim
+```
+
+The body is stored byte-for-byte (the LLM only derives `summary`, `tags`, and
+`sl_refs` for the absent frontmatter fields), the page key is derived from the
+filename, and re-running is a safe no-op. Existing frontmatter — including fields
+**ktx** does not model, like `effective_date` — passes through unchanged. See
+[`ktx ingest`](/docs/cli-reference/ktx-ingest) for the full flag reference.
+
 ## Review context changes
 
 Before accepting agent-written context:

@@ -36,6 +36,7 @@ connection is selected.
 | `--query-history-window-days <days>` | BigQuery/Snowflake query-history lookback window for this run | Stored connection default |
 | `--text <content>` | Capture inline text into **ktx** memory; repeatable | `[]` |
 | `--file <path>` | Capture a text file into **ktx** memory; use `-` for stdin; repeatable | `[]` |
+| `--verbatim` | Store each `--text`/`--file` document body unchanged as a `GLOBAL` wiki page; the LLM derives metadata only | `false` |
 | `--connection-id <connectionId>` | **ktx** connection id to tag captured text/file notes | - |
 | `--user-id <id>` | Memory user id for text/file capture attribution | `local-cli` |
 | `--fail-fast` | Stop after the first failed text/file item | `false` |
@@ -62,6 +63,30 @@ use `--no-input` to fail fast with install guidance.
 
 `--text` and `--file` cannot be combined with a positional `connectionId` or
 `--all`; pass `--connection-id <id>` instead to tag captured notes.
+
+### Verbatim ingest
+
+By default, captured text is routed through the memory agent, which decides what
+to persist and may rewrite, condense, split, or re-title it. For *authoritative*
+documents — metric definitions, formula specs, runbooks, compliance text — that
+paraphrasing is a defect. Add `--verbatim` to store each `--text`/`--file`
+document body **unchanged** as a `GLOBAL` wiki page:
+
+- The stored body is the input document, written by code; the LLM never edits it.
+  It is used only to derive page metadata (`summary`, `tags`, `sl_refs`), and even
+  that is skipped for fields the document's own frontmatter already sets.
+- The page key is deterministic: a `--file` derives it from the filename, inline
+  `--text` from the document's leading Markdown heading (inline text without a
+  heading is rejected — pass it as `--file` instead).
+- Ingest is idempotent. Re-running the same document is a safe no-op; a different
+  body at the same key fails loudly rather than overwriting.
+- `--verbatim` works with `llm.provider.backend: none` — the only ingest path that
+  does. With no backend the `summary` is derived from the heading or first
+  sentence and `tags`/`sl_refs` are left empty; the full body is still stored.
+- Existing frontmatter passes through untouched (including fields **ktx** does not
+  model, such as `effective_date` or `version`); generated metadata only fills
+  absent fields. `--connection-id <id>` scopes the page to that connection by
+  setting its `connections` frontmatter.
 
 ## Examples
 
@@ -91,6 +116,12 @@ ktx ingest --file docs/revenue-notes.md --connection-id warehouse
 
 # Capture one stdin item
 printf "Refunds are excluded from net revenue." | ktx ingest --file -
+
+# Store an authoritative document verbatim (body preserved exactly)
+ktx ingest --file docs/rfm-bucket-definitions.md --verbatim
+
+# Store it verbatim and scope it to one connection
+ktx ingest --file docs/haversine-formula.md --verbatim --connection-id warehouse
 ```
 
 ## Output
@@ -191,3 +222,7 @@ according to `ingest.rateLimit`.
 | Python runtime is missing | The selected ingest target needs runtime-backed SQL analysis or source parsing | Accept the interactive prompt, rerun with `--yes`, or run the suggested `ktx admin runtime install` command |
 | Context-source options were ignored | Query-history flags were supplied for a context-source connection | Omit database-only flags when ingesting context-source connections |
 | Text ingest stops early | `--fail-fast` was used and one item failed | Fix the failed item or rerun without `--fail-fast` to collect all failures |
+| `--verbatim requires --text or --file` | `--verbatim` was passed without a document to store | Add `--text` or `--file`, or drop `--verbatim` |
+| Inline verbatim text needs a leading heading | `--text --verbatim` content has no `# Heading` to derive a stable key | Add a leading Markdown heading, or pass the content as `--file <path>` |
+| A different page already exists at key | A verbatim re-run targeted an existing key with a different body | Use a distinct document name/key, or remove the existing page first |
+| Connection scope conflict | Frontmatter `connections` disagrees with `--connection-id` | Remove one so the intended scope is unambiguous |

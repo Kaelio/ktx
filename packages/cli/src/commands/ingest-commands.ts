@@ -34,6 +34,11 @@ export function registerIngestCommands(
     .option('--query-history-window-days <days>', 'Query-history lookback window for this run', parsePositiveIntegerOption)
     .option('--text <content>', 'Capture inline text into ktx memory; repeatable', collectOption, [])
     .option('--file <path>', 'Capture a text file into ktx memory; use - for stdin; repeatable', collectOption, [])
+    .option(
+      '--verbatim',
+      'Store each --text/--file document body unchanged as a GLOBAL wiki page; the LLM derives only metadata',
+      false,
+    )
     .option('--connection-id <connectionId>', 'ktx connection id to tag captured text/file notes')
     .option('--user-id <id>', 'Memory user id for text/file capture attribution', 'local-cli')
     .option('--fail-fast', 'Stop after the first failed text/file item', false)
@@ -46,6 +51,10 @@ export function registerIngestCommands(
   ingest.action(async (connectionId: string | undefined, options, command) => {
     const projectDir = resolveCommandProjectDir(command);
     const hasTextCapture = options.text.length > 0 || options.file.length > 0;
+
+    if (options.verbatim === true && !hasTextCapture) {
+      command.error('error: --verbatim requires --text or --file');
+    }
 
     if (hasTextCapture) {
       if (connectionId !== undefined) {
@@ -66,6 +75,7 @@ export function registerIngestCommands(
             userId: options.userId,
             json: options.json === true,
             failFast: options.failFast === true,
+            ...(options.verbatim === true ? { verbatim: true } : {}),
           },
           context.io,
           context.deps,
