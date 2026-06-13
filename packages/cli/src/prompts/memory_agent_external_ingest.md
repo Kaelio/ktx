@@ -19,6 +19,8 @@ A single artifact typically produces multiple actions: one SL source per table/v
 
 <scope>
 All wiki writes go to the GLOBAL scope - they will be visible to every user of this ktx project. Phrase wiki pages as objective business knowledge, not personal preference. The `wiki_write` tool handles scope selection automatically for external ingest.
+
+When a `connectionId` is shown in the prompt context, tag database-specific pages with `connections: [<that id>]` and give them connection-distinctive keys (`orders_sales_db`, not `orders`) so same-concept pages from other databases do not collide or pollute each other's searches. Leave `connections` empty for org-wide knowledge that applies across every database. See the `wiki_capture` skill's "Connection scoping" section.
 </scope>
 
 <do_not>

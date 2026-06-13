@@ -6,6 +6,7 @@ import { initKtxProject, type KtxLocalProject } from '../../../src/context/proje
 import {
   listLocalKnowledgePageKeys,
   listLocalKnowledgePages,
+  listReferencedConnectionIds,
   readLocalKnowledgePage,
   searchLocalKnowledgePages,
   writeLocalKnowledgePage,
@@ -282,6 +283,167 @@ describe('local knowledge helpers', () => {
     expect(raw.content).toContain("representative_sql: SELECT count(*) FROM analytics.orders WHERE status = 'paid'");
     expect(raw.content).toContain(['usage:', '  executions: 42', '  distinct_users: 3'].join('\n'));
     expect(raw.content).toContain(['fingerprints:', '  - fp_paid_orders'].join('\n'));
+  });
+
+  it('round-trips a connections list through write, read, and list', async () => {
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-sales-db',
+      scope: 'GLOBAL',
+      summary: 'Orders concept for the sales database',
+      content: 'In sales_db, orders are recognized when paid.',
+      connections: ['sales_db'],
+    });
+
+    const raw = await project.fileStore.readFile('wiki/global/orders-sales-db.md');
+    expect(raw.content).toContain(['connections:', '  - sales_db'].join('\n'));
+
+    await expect(readLocalKnowledgePage(project, { key: 'orders-sales-db', userId: 'local' })).resolves.toMatchObject({
+      key: 'orders-sales-db',
+      connections: ['sales_db'],
+    });
+  });
+
+  it('normalizes a single connections string to a list at parse time', async () => {
+    await project.fileStore.writeFile(
+      'wiki/global/single-scoped.md',
+      '---\nsummary: Single connection as scalar\nusage_mode: auto\nconnections: events_db\n---\n\nBody\n',
+      'Test',
+      'test@example.com',
+      'Write scalar connections page',
+    );
+
+    await expect(readLocalKnowledgePage(project, { key: 'single-scoped', userId: 'local' })).resolves.toMatchObject({
+      key: 'single-scoped',
+      connections: ['events_db'],
+    });
+  });
+
+  it('treats an absent connections field as unscoped (empty list)', async () => {
+    await writeLocalKnowledgePage(project, {
+      key: 'fiscal-year',
+      scope: 'GLOBAL',
+      summary: 'Org-wide fiscal year',
+      content: 'Fiscal year starts in February.',
+    });
+
+    await expect(readLocalKnowledgePage(project, { key: 'fiscal-year', userId: 'local' })).resolves.toMatchObject({
+      key: 'fiscal-year',
+      connections: [],
+    });
+  });
+
+  it('scopes search to unscoped pages plus pages listing the requested connection', async () => {
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-sales-db',
+      scope: 'GLOBAL',
+      summary: 'Sales DB orders',
+      content: 'Orders are paid in the sales database.',
+      connections: ['sales_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-events-db',
+      scope: 'GLOBAL',
+      summary: 'Events DB orders',
+      content: 'Orders are paid in the events database.',
+      connections: ['events_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-global',
+      scope: 'GLOBAL',
+      summary: 'Org-wide orders note',
+      content: 'Orders are paid everywhere in the org.',
+    });
+
+    const scoped = await searchLocalKnowledgePages(project, {
+      query: 'orders paid',
+      userId: 'local',
+      connectionId: 'sales_db',
+    });
+    const keys = scoped.map((result) => result.key).sort();
+    expect(keys).toEqual(['orders-global', 'orders-sales-db']);
+    expect(keys).not.toContain('orders-events-db');
+
+    const unfiltered = await searchLocalKnowledgePages(project, { query: 'orders paid', userId: 'local' });
+    expect(unfiltered.map((result) => result.key).sort()).toEqual([
+      'orders-events-db',
+      'orders-global',
+      'orders-sales-db',
+    ]);
+  });
+
+  it('filters search per connection across lexical and token lanes when embeddings are disabled', async () => {
+    await writeLocalKnowledgePage(project, {
+      key: 'rfm-events-db',
+      scope: 'GLOBAL',
+      summary: 'RFM definition for events_db',
+      content: 'RFM segmentation rules for the events database.',
+      connections: ['events_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'rfm-sales-db',
+      scope: 'GLOBAL',
+      summary: 'RFM definition for sales_db',
+      content: 'RFM segmentation rules for the sales database.',
+      connections: ['sales_db'],
+    });
+
+    const lexical = await searchLocalKnowledgePages(project, {
+      query: 'rfm segmentation',
+      userId: 'local',
+      connectionId: 'events_db',
+    });
+    expect(lexical.map((result) => result.key)).toEqual(['rfm-events-db']);
+
+    const token = await searchLocalKnowledgePages(project, {
+      query: 'segmentation---',
+      userId: 'local',
+      connectionId: 'events_db',
+    });
+    expect(token.map((result) => result.key)).toEqual(['rfm-events-db']);
+  });
+
+  it('filters list output by connection while keeping unscoped pages', async () => {
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-sales-db',
+      scope: 'GLOBAL',
+      summary: 'Sales DB orders',
+      content: 'Sales orders.',
+      connections: ['sales_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-events-db',
+      scope: 'GLOBAL',
+      summary: 'Events DB orders',
+      content: 'Events orders.',
+      connections: ['events_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-global',
+      scope: 'GLOBAL',
+      summary: 'Org-wide orders',
+      content: 'Global orders.',
+    });
+
+    const scoped = await listLocalKnowledgePages(project, { userId: 'local', connectionId: 'sales_db' });
+    expect(scoped.map((page) => page.key).sort()).toEqual(['orders-global', 'orders-sales-db']);
+  });
+
+  it('keeps a page referencing an unconfigured connection searchable and readable', async () => {
+    await writeLocalKnowledgePage(project, {
+      key: 'rfm-removed-db',
+      scope: 'GLOBAL',
+      summary: 'RFM for a since-removed database',
+      content: 'RFM rules.',
+      connections: ['removed_db'],
+    });
+
+    await expect(readLocalKnowledgePage(project, { key: 'rfm-removed-db', userId: 'local' })).resolves.toMatchObject({
+      key: 'rfm-removed-db',
+      connections: ['removed_db'],
+    });
+    const search = await searchLocalKnowledgePages(project, { query: 'rfm rules', userId: 'local' });
+    expect(search.map((result) => result.key)).toContain('rfm-removed-db');
+    await expect(listReferencedConnectionIds(project, { userId: 'local' })).resolves.toEqual(['removed_db']);
   });
 
   it('falls back to Markdown scanning when the config does not select sqlite-fts5', async () => {

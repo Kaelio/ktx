@@ -9,6 +9,7 @@ import { runCodexAuthProbe } from './context/llm/codex-runtime.js';
 import type { KtxConfigIssue, KtxProjectConfig, KtxProjectConnectionConfig, KtxProjectEmbeddingConfig, KtxProjectLlmConfig } from './context/project/config.js';
 import type { KtxLocalProject } from './context/project/project.js';
 import { ktxLocalStateDbPath } from './context/project/local-state-db.js';
+import { listReferencedConnectionIds } from './context/wiki/local-knowledge.js';
 import {
   isQueryHistoryEnabled,
   queryHistoryDialectForConnection,
@@ -581,6 +582,29 @@ function buildStorageStatus(config: KtxProjectConfig): StorageStatus {
   };
 }
 
+/**
+ * Warn (never fail) when stored wiki pages reference connection ids that are no
+ * longer in `ktx.yaml`. Config and page content evolve independently, so a
+ * dangling reference is a soft condition — the pages still load, search, and
+ * read; it just signals a typo or a removed connection.
+ */
+async function buildUnknownConnectionWarning(project: KtxLocalProject): Promise<WarningItem | null> {
+  let referenced: string[];
+  try {
+    referenced = await listReferencedConnectionIds(project);
+  } catch {
+    return null;
+  }
+  const unknown = referenced.filter((id) => !Object.hasOwn(project.config.connections, id));
+  if (unknown.length === 0) {
+    return null;
+  }
+  return {
+    message: `Wiki pages reference connection id(s) not in ktx.yaml: ${unknown.join(', ')}. Those pages still load and search.`,
+    fix: 'Add the connection(s) via `ktx setup`, or update the pages’ `connections` frontmatter.',
+  };
+}
+
 function buildWarnings(
   config: KtxProjectConfig,
   connections: ConnectionStatus[],
@@ -953,6 +977,10 @@ export async function buildProjectStatus(project: KtxLocalProject, options: Buil
   const queryHistory = await buildQueryHistoryStatus(project, options);
   const pipeline = buildPipelineStatus(config);
   const warnings = buildWarnings(config, connections, llm, embeddings);
+  const unknownConnectionWarning = await buildUnknownConnectionWarning(project);
+  if (unknownConnectionWarning) {
+    warnings.push(unknownConnectionWarning);
+  }
   const localStats = await buildLocalStatsStatus(project);
   const { verdict, reason, nextActions } = buildVerdict(llm, embeddings, connections, queryHistory, warnings);
 

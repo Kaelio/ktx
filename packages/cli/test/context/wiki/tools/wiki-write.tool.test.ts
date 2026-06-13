@@ -263,6 +263,108 @@ describe('WikiWriteTool', () => {
     });
   });
 
+  it('sets connections on a new page and normalizes a single string to a list', async () => {
+    const { tool, wikiService } = makeTool();
+
+    await tool.call(
+      { key: 'orders-sales-db', summary: 'Sales orders', content: '# Orders', connections: 'sales_db' } as any,
+      baseContext,
+    );
+
+    expect(wikiService.writePage.mock.calls[0][3]).toMatchObject({ connections: ['sales_db'] });
+  });
+
+  it('applies REPLACE semantics for connections on update', async () => {
+    const existing = {
+      pageKey: 'orders',
+      frontmatter: { summary: 'Orders', usage_mode: 'auto' as const, sort_order: 0, connections: ['sales_db'] },
+      content: 'body',
+    };
+    // omit ⇒ keep existing connections
+    {
+      const { tool, wikiService } = makeTool({ wikiService: { readPage: vi.fn().mockResolvedValue(existing) } });
+      await tool.call({ key: 'orders', summary: 'Orders', content: 'new body' } as any, baseContext);
+      expect(wikiService.writePage.mock.calls[0][3]).toMatchObject({ connections: ['sales_db'] });
+    }
+    // [] ⇒ clear to unscoped
+    {
+      const { tool, wikiService } = makeTool({ wikiService: { readPage: vi.fn().mockResolvedValue(existing) } });
+      await tool.call({ key: 'orders', summary: 'Orders', content: 'new body', connections: [] } as any, baseContext);
+      expect(wikiService.writePage.mock.calls[0][3]).toMatchObject({ connections: [] });
+    }
+    // [ids] ⇒ set (broaden within overlap is allowed)
+    {
+      const { tool, wikiService } = makeTool({ wikiService: { readPage: vi.fn().mockResolvedValue(existing) } });
+      await tool.call(
+        { key: 'orders', summary: 'Orders', content: 'new body', connections: ['sales_db', 'events_db'] } as any,
+        baseContext,
+      );
+      expect(wikiService.writePage.mock.calls[0][3]).toMatchObject({ connections: ['sales_db', 'events_db'] });
+    }
+  });
+
+  it('blocks a connection-scoped write whose key collides with a disjoint-connection page', async () => {
+    const { tool, wikiService } = makeTool({
+      wikiService: {
+        readPage: vi.fn().mockResolvedValue({
+          pageKey: 'orders',
+          frontmatter: { summary: 'Events orders', usage_mode: 'auto', sort_order: 0, connections: ['events_db'] },
+          content: 'events body',
+        }),
+      },
+    });
+
+    const result = await tool.call(
+      { key: 'orders', summary: 'Sales orders', content: 'sales body', connections: ['sales_db'] } as any,
+      baseContext,
+    );
+
+    expect(result.structured).toEqual({ success: false, key: 'orders' });
+    expect(result.markdown).toContain('already exists scoped to a different connection');
+    expect(result.markdown).toContain('orders_sales_db');
+    expect(wikiService.writePage).not.toHaveBeenCalled();
+  });
+
+  it('allows narrowing a connection-scoped page within its own scope', async () => {
+    const { tool, wikiService } = makeTool({
+      wikiService: {
+        readPage: vi.fn().mockResolvedValue({
+          pageKey: 'orders',
+          frontmatter: { summary: 'Orders', usage_mode: 'auto', sort_order: 0, connections: ['sales_db', 'events_db'] },
+          content: 'body',
+        }),
+      },
+    });
+
+    const result = await tool.call(
+      { key: 'orders', summary: 'Orders', content: 'body', connections: ['sales_db'] } as any,
+      baseContext,
+    );
+
+    expect(result.structured).toMatchObject({ success: true, action: 'updated' });
+    expect(wikiService.writePage.mock.calls[0][3]).toMatchObject({ connections: ['sales_db'] });
+  });
+
+  it('allows scoping a previously unscoped page (existing connections empty)', async () => {
+    const { tool, wikiService } = makeTool({
+      wikiService: {
+        readPage: vi.fn().mockResolvedValue({
+          pageKey: 'orders',
+          frontmatter: { summary: 'Orders', usage_mode: 'auto', sort_order: 0 },
+          content: 'body',
+        }),
+      },
+    });
+
+    const result = await tool.call(
+      { key: 'orders', summary: 'Orders', content: 'body', connections: ['sales_db'] } as any,
+      baseContext,
+    );
+
+    expect(result.structured).toMatchObject({ success: true, action: 'updated' });
+    expect(wikiService.writePage.mock.calls[0][3]).toMatchObject({ connections: ['sales_db'] });
+  });
+
   it('rejects frontmatter refs that target missing wiki pages', async () => {
     const { tool, wikiService } = makeTool({
       wikiService: {

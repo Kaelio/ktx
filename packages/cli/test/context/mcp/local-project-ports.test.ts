@@ -739,6 +739,47 @@ describe('createLocalProjectMcpContextPorts', () => {
     expect(search?.results[0]?.score).toBeGreaterThan(0);
   });
 
+  it('scopes wiki_search to a connection and validates the connection id', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.sales_db = { driver: 'sqlite', url: 'file:sales.db' };
+    project.config.connections.events_db = { driver: 'sqlite', url: 'file:events.db' };
+    const seed = async (key: string, connections: string[]) => {
+      await project.fileStore.writeFile(
+        `wiki/global/${key}.md`,
+        [
+          '---',
+          `summary: Orders for ${key}`,
+          'usage_mode: auto',
+          ...(connections.length > 0 ? ['connections:', ...connections.map((id) => `  - ${id}`)] : []),
+          '---',
+          '',
+          'Orders are recognized when paid.',
+          '',
+        ].join('\n'),
+        'ktx',
+        'ktx@example.com',
+        `seed ${key}`,
+      );
+    };
+    await seed('orders-sales', ['sales_db']);
+    await seed('orders-events', ['events_db']);
+    await seed('orders-global', []);
+
+    const ports = createLocalProjectMcpContextPorts(project, { embeddingService: null });
+
+    const scoped = await ports.knowledge?.search({
+      userId: 'local-user',
+      query: 'orders paid',
+      limit: 10,
+      connectionId: 'sales_db',
+    });
+    expect(scoped?.results.map((result) => result.key).sort()).toEqual(['orders-global', 'orders-sales']);
+
+    await expect(
+      ports.knowledge?.search({ userId: 'local-user', query: 'orders', limit: 10, connectionId: 'warehouse' }),
+    ).rejects.toThrow('Unknown connection "warehouse". Configured connections: events_db, sales_db.');
+  });
+
   it('reads seeded semantic-layer sources', async () => {
     const project = await initKtxProject({ projectDir: tempDir });
     await seedSlSourceFile(project, {

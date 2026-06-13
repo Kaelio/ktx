@@ -111,7 +111,12 @@ interface KtxKnowledgePage {
 
 /** @internal */
 export interface KtxKnowledgeMcpPort {
-  search(input: { userId: string; query: string; limit: number }): Promise<KtxKnowledgeSearchResponse>;
+  search(input: {
+    userId: string;
+    query: string;
+    limit: number;
+    connectionId?: string;
+  }): Promise<KtxKnowledgeSearchResponse>;
   read(input: { userId: string; key: string }): Promise<KtxKnowledgePage | null>;
 }
 

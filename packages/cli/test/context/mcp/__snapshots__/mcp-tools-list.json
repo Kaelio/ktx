@@ -54,7 +54,7 @@
   {
     "name": "wiki_search",
     "title": "Wiki Search",
-    "description": "Search ktx wiki pages for reusable business context. Example: wiki_search({ query: \"revenue recognition\", limit: 5 }).",
+    "description": "Search ktx wiki pages for reusable business context. Pass connectionId to scope results to one warehouse (unscoped pages plus pages tagged with that connection) when a concept name collides across databases. Example: wiki_search({ query: \"revenue recognition\", connectionId: \"warehouse\", limit: 5 }).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -69,6 +69,11 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 50
+        },
+        "connectionId": {
+          "description": "Scope results to one connection: returns unscoped pages plus pages tagged with this connection. Omit to search all pages.",
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [

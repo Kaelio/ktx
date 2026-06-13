@@ -168,7 +168,7 @@ export class MemoryAgentService {
       : '';
     const prompt = [
       `# Wiki Index\n\n${wikiIndex}`,
-      hasSL ? `\n# Semantic Layer Sources\n\n${slIndex}` : '',
+      hasSL ? `\n# Semantic Layer Sources (connectionId: ${input.connectionId})\n\n${slIndex}` : '',
       '\n---\n',
       assistantSection,
       `\n## User Message\n\n${input.userMessage.trim()}`,

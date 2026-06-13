@@ -14,6 +14,7 @@ import { compileLocalSlQuery } from '../../context/sl/local-query.js';
 import { createKtxDictionarySearchService } from '../../context/sl/dictionary-search.js';
 import { readLocalSlSource } from '../../context/sl/local-sl.js';
 import { assertSafeConnectionId } from '../../context/sl/source-files.js';
+import { assertConfiguredConnectionId } from '../../context/connections/configured-connections.js';
 import { readLocalKnowledgePage, searchLocalKnowledgePages } from '../wiki/local-knowledge.js';
 import type { KtxMcpContextPorts, KtxMcpProgressCallback, KtxSqlExecutionResponse } from './types.js';
 
@@ -113,11 +114,16 @@ export function createLocalProjectMcpContextPorts(
     },
     knowledge: {
       async search(input) {
+        const connectionId =
+          input.connectionId === undefined
+            ? undefined
+            : assertConfiguredConnectionId(project.config.connections, input.connectionId);
         const results = await searchLocalKnowledgePages(project, {
           query: input.query,
           userId: input.userId,
           limit: input.limit,
           embeddingService,
+          ...(connectionId !== undefined ? { connectionId } : {}),
         });
         return {
           results: results.slice(0, input.limit).map((result) => ({

@@ -16,6 +16,12 @@ export interface WikiFrontmatter {
   tags?: string[];
   refs?: string[];
   sl_refs?: string[];
+  /**
+   * Connection ids this page applies to. Absent or empty ⇒ unscoped: the page
+   * applies to all connections. Additive metadata, orthogonal to GLOBAL/USER
+   * scope; it does not namespace page keys.
+   */
+  connections?: string[];
   usage_mode: 'always' | 'auto' | 'never';
   sort_order?: number;
   source?: string;

@@ -10,6 +10,11 @@ import {
   buildProjectStatus,
   renderProjectStatus,
 } from '../src/status-project.js';
+import { initKtxProject, loadKtxProject } from '../src/context/project/project.js';
+import { serializeKtxProjectConfig } from '../src/context/project/config.js';
+import { writeLocalKnowledgePage } from '../src/context/wiki/local-knowledge.js';
+
+const stubClaudeCodeAuthProbeForFileBacked = async () => ({ ok: true as const });
 
 function projectWithConfig(config: KtxProjectConfig): KtxLocalProject {
   return {
@@ -753,5 +758,69 @@ describe('renderProjectStatus Local data', () => {
     const rendered = renderProjectStatus(status, { useColor: false });
     expect(rendered).toContain('Local data');
     expect(rendered).toContain('no .ktx/db.sqlite yet');
+  });
+});
+
+describe('buildProjectStatus connection-scoped wiki warnings', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ktx-status-connections-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function projectWithConnections(ids: string[]): Promise<KtxLocalProject> {
+    const projectDir = join(tempDir, 'project');
+    await initKtxProject({ projectDir });
+    const project = await loadKtxProject({ projectDir });
+    project.config.llm = { ...project.config.llm, provider: { backend: 'claude-code' }, models: { default: 'sonnet' } };
+    for (const id of ids) {
+      project.config.connections[id] = { driver: 'sqlite', url: `file:${id}.db` };
+    }
+    await project.fileStore.writeFile(
+      'ktx.yaml',
+      serializeKtxProjectConfig(project.config),
+      'ktx',
+      'ktx@example.com',
+      'configure connections',
+    );
+    return loadKtxProject({ projectDir });
+  }
+
+  it('warns when a wiki page references a connection id absent from ktx.yaml', async () => {
+    const project = await projectWithConnections(['sales_db']);
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-removed',
+      scope: 'GLOBAL',
+      summary: 'Orders for a removed db',
+      content: 'Orders.',
+      connections: ['removed_db'],
+    });
+
+    const status = await buildProjectStatus(project, { claudeCodeAuthProbe: stubClaudeCodeAuthProbeForFileBacked });
+    expect(status.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining('reference connection id(s) not in ktx.yaml: removed_db'),
+        }),
+      ]),
+    );
+  });
+
+  it('does not warn when all referenced connection ids are configured', async () => {
+    const project = await projectWithConnections(['sales_db']);
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-sales',
+      scope: 'GLOBAL',
+      summary: 'Sales orders',
+      content: 'Orders.',
+      connections: ['sales_db'],
+    });
+
+    const status = await buildProjectStatus(project, { claudeCodeAuthProbe: stubClaudeCodeAuthProbeForFileBacked });
+    expect(status.warnings.some((warning) => warning.message.includes('not in ktx.yaml'))).toBe(false);
   });
 });

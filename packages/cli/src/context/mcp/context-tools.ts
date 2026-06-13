@@ -60,7 +60,7 @@ const toolDescriptions = {
   discover_data:
     'Search across ktx wiki pages, semantic-layer sources, measures, dimensions, raw tables, and columns. Example: discover_data({ query: "monthly orders by customer", connectionId: "warehouse", kinds: ["sl_source", "table"] }).',
   wiki_search:
-    'Search ktx wiki pages for reusable business context. Example: wiki_search({ query: "revenue recognition", limit: 5 }).',
+    'Search ktx wiki pages for reusable business context. Pass connectionId to scope results to one warehouse (unscoped pages plus pages tagged with that connection) when a concept name collides across databases. Example: wiki_search({ query: "revenue recognition", connectionId: "warehouse", limit: 5 }).',
   wiki_read: 'Read a ktx wiki page by key returned from wiki_search. Example: wiki_read({ key: "global/revenue" }).',
   entity_details:
     'Read table and column metadata from the latest live-database scan snapshot. Example: entity_details({ connectionId: "warehouse", entities: [{ table: { catalog: null, db: "public", name: "orders" }, columns: ["id"] }] }).',
@@ -83,6 +83,11 @@ const connectionListSchema = z.object({});
 const knowledgeSearchSchema = z.object({
   query: z.string().min(1).describe('Natural-language wiki search query, e.g. "revenue recognition policy".'),
   limit: z.number().int().min(1).max(50).default(10).describe('Maximum wiki pages to return.'),
+  connectionId: connectionIdSchema
+    .optional()
+    .describe(
+      'Scope results to one connection: returns unscoped pages plus pages tagged with this connection. Omit to search all pages.',
+    ),
 });
 
 const knowledgeReadSchema = z.object({
@@ -675,6 +680,7 @@ export function registerKtxContextTools(deps: RegisterKtxContextToolsDeps): void
             userId: userContext.userId,
             query: input.query,
             limit: input.limit,
+            ...(input.connectionId !== undefined ? { connectionId: input.connectionId } : {}),
           }),
         ),
       toolTelemetry,
