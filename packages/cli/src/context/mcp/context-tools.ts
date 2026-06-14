@@ -50,6 +50,7 @@ const toolAnnotations = {
   sl_read_source: { title: 'Semantic Layer Read Source', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   sl_query: { title: 'Semantic Layer Query', readOnlyHint: true, openWorldHint: false },
   sql_execution: { title: 'SQL Execution', readOnlyHint: true, openWorldHint: false },
+  sql_dialect_notes: { title: 'SQL Dialect Notes', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   memory_ingest: { title: 'Memory Ingest', destructiveHint: true, openWorldHint: false },
   memory_ingest_status: { title: 'Memory Ingest Status', readOnlyHint: true, openWorldHint: false },
 } satisfies Record<string, ToolAnnotations>;
@@ -72,6 +73,8 @@ const toolDescriptions = {
     'Execute a semantic-layer query and return headers, rows, and total row count, plus correctness notes (e.g. compile-only or fan-out) when relevant. The generated SQL and full query plan are omitted by default; request them with include: ["sql"] and/or include: ["plan"]. Example: sl_query({ connectionId: "warehouse", measures: ["orders.order_count"], dimensions: [{ field: "orders.created_at", granularity: "month" }], include: ["sql"] }).',
   sql_execution:
     'Execute one parser-validated read-only SQL query against a configured ktx connection. Example: sql_execution({ connectionId: "warehouse", sql: "select count(*) from public.orders", maxRows: 100 }).',
+  sql_dialect_notes:
+    'Return the SQL syntax conventions for the dialect of a ktx connection: fully-qualified table-name form, identifier quoting and case-folding, date/time functions, top-N / window-filtering idiom, and JSON access. Call this before writing raw sql_execution SQL against a connection so the SQL matches that engine. Example: sql_dialect_notes({ connectionId: "warehouse" }).',
   memory_ingest:
     'Ingest free-form markdown knowledge into durable ktx memory. Use this for business rules, metric definitions, schema gotchas, recurring findings, or explicit user requests to remember something. Example: memory_ingest({ connectionId: "warehouse", content: "ARR is reported in cents in this warehouse." }).',
   memory_ingest_status:
@@ -206,6 +209,10 @@ const sqlExecutionSchema = z.object({
   connectionId: connectionIdSchema.describe('Connection id to execute against. Required for raw SQL.'),
   sql: z.string().min(1).describe('Parser-validated read-only SQL, e.g. "select count(*) from public.orders".'),
   maxRows: z.number().int().min(1).max(10_000).default(1000).optional().describe('Maximum rows to return.'),
+});
+
+const sqlDialectNotesSchema = z.object({
+  connectionId: connectionIdSchema.describe('Connection id whose engine dialect conventions to return.'),
 });
 
 const memoryIngestSchema = z.object({
@@ -406,6 +413,12 @@ const sqlExecutionOutputSchema = z.object({
   headerTypes: z.array(z.string()).optional(),
   rows: z.array(z.array(z.unknown())),
   rowCount: z.number(),
+});
+
+const sqlDialectNotesOutputSchema = z.object({
+  connectionId: z.string(),
+  dialect: z.string(),
+  notes: z.string(),
 });
 
 const memoryIngestOutputSchema = z.object({
@@ -841,6 +854,24 @@ export function registerKtxContextTools(deps: RegisterKtxContextToolsDeps): void
           ),
         );
       },
+      toolTelemetry,
+    );
+  }
+
+  if (ports.dialectNotes) {
+    const dialectNotes = ports.dialectNotes;
+    registerParsedTool(
+      server,
+      'sql_dialect_notes',
+      {
+        title: toolAnnotations.sql_dialect_notes.title!,
+        description: toolDescriptions.sql_dialect_notes,
+        inputSchema: sqlDialectNotesSchema.shape,
+        outputSchema: sqlDialectNotesOutputSchema,
+        annotations: toolAnnotations.sql_dialect_notes,
+      },
+      sqlDialectNotesSchema,
+      async (input) => jsonToolResult(await dialectNotes.read(input)),
       toolTelemetry,
     );
   }

@@ -175,6 +175,11 @@ export interface KtxSqlExecutionMcpPort {
   ): Promise<KtxSqlExecutionResponse>;
 }
 
+/** @internal */
+export interface KtxDialectNotesMcpPort {
+  read(input: { connectionId: string }): Promise<{ connectionId: string; dialect: string; notes: string }>;
+}
+
 export interface KtxMcpContextPorts {
   connections?: KtxConnectionsMcpPort;
   knowledge?: KtxKnowledgeMcpPort;
@@ -183,6 +188,7 @@ export interface KtxMcpContextPorts {
   dictionarySearch?: KtxDictionarySearchMcpPort;
   discover?: KtxDiscoverDataMcpPort;
   sqlExecution?: KtxSqlExecutionMcpPort;
+  dialectNotes?: KtxDialectNotesMcpPort;
   memoryIngest?: MemoryIngestPort;
 }
 

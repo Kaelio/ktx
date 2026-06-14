@@ -178,6 +178,7 @@ describe('createLocalProjectMcpContextPorts', () => {
 
     expect(Object.keys(ports).sort()).toEqual([
       'connections',
+      'dialectNotes',
       'dictionarySearch',
       'discover',
       'entityDetails',
@@ -187,6 +188,7 @@ describe('createLocalProjectMcpContextPorts', () => {
     expect(Object.keys(ports.connections ?? {}).sort()).toEqual(['list']);
     expect(Object.keys(ports.knowledge ?? {}).sort()).toEqual(['read', 'search']);
     expect(Object.keys(ports.semanticLayer ?? {}).sort()).toEqual(['query', 'readSource']);
+    expect(Object.keys(ports.dialectNotes ?? {}).sort()).toEqual(['read']);
     await expect(ports.connections?.list()).resolves.toEqual([
       { id: 'warehouse', name: 'warehouse', connectionType: 'POSTGRESQL' },
     ]);

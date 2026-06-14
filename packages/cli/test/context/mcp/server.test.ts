@@ -12,6 +12,7 @@ import { initKtxProject } from '../../../src/context/project/project.js';
 import { jsonToolResult } from '../../../src/context/mcp/context-tools.js';
 import { createDefaultKtxMcpServer, createKtxMcpServer } from '../../../src/context/mcp/server.js';
 import type {
+  KtxDialectNotesMcpPort,
   KtxDiscoverDataMcpPort,
   KtxDictionarySearchMcpPort,
   KtxEntityDetailsMcpPort,
@@ -84,6 +85,7 @@ const retainedToolNames = [
   'memory_ingest_status',
   'sl_query',
   'sl_read_source',
+  'sql_dialect_notes',
   'sql_execution',
   'wiki_read',
   'wiki_search',
@@ -134,6 +136,13 @@ function makeAllContextTools(): KtxMcpContextPorts {
         headerTypes: ['integer'],
         rows: [[1]],
         rowCount: 1,
+      }),
+    },
+    dialectNotes: {
+      read: vi.fn<KtxDialectNotesMcpPort['read']>().mockResolvedValue({
+        connectionId: 'warehouse',
+        dialect: 'postgres',
+        notes: '**postgres** SQL conventions',
       }),
     },
     memoryIngest: {
@@ -203,6 +212,12 @@ describe('createKtxMcpServer', () => {
       },
       sl_query: { title: 'Semantic Layer Query', readOnlyHint: true, openWorldHint: false },
       sql_execution: { title: 'SQL Execution', readOnlyHint: true, openWorldHint: false },
+      sql_dialect_notes: {
+        title: 'SQL Dialect Notes',
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       memory_ingest: { title: 'Memory Ingest', destructiveHint: true, openWorldHint: false },
       memory_ingest_status: { title: 'Memory Ingest Status', readOnlyHint: true, openWorldHint: false },
     };
@@ -217,6 +232,22 @@ describe('createKtxMcpServer', () => {
         expect(inputSchema.description).toEqual(expect.any(String));
       }
     }
+  });
+
+  it('routes sql_dialect_notes through the dialect-notes port', async () => {
+    const fake = makeFakeServer();
+    const contextTools = makeAllContextTools();
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'mcp-user' },
+      contextTools,
+    });
+
+    const result = await getTool(fake.tools, 'sql_dialect_notes').handler({ connectionId: 'warehouse' });
+    expect(contextTools.dialectNotes!.read).toHaveBeenCalledWith({ connectionId: 'warehouse' });
+    expect(result).toMatchObject({
+      structuredContent: { connectionId: 'warehouse', dialect: 'postgres' },
+    });
   });
 
   it('exposes annotations and output schemas through the SDK tools/list response', async () => {

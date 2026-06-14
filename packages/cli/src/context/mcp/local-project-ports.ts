@@ -1,5 +1,8 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
-import { KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
+import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
+import { isDatabaseDriver, normalizeConnectionDriver } from '../../connection-drivers.js';
+import { sqlDialectNotes } from '../../context/sql-analysis/dialect-notes.js';
+import type { KtxProjectConnectionConfig } from '../../context/project/config.js';
 import { localConnectionInfoFromConfig } from '../../context/connections/local-warehouse-descriptor.js';
 import type { KtxEmbeddingPort } from '../../context/core/embedding.js';
 import type { KtxSemanticLayerComputePort } from '../../context/daemon/semantic-layer-compute.js';
@@ -94,6 +97,24 @@ async function executeValidatedReadOnlySql(
   } finally {
     await cleanupConnector(connector);
   }
+}
+
+/** @internal Resolves a connection's dialect SQL notes; throws KtxExpectedError for an unknown or non-SQL-warehouse connection. */
+export function resolveDialectNotesForConnection(
+  connectionId: string,
+  connection: KtxProjectConnectionConfig | undefined,
+): { connectionId: string; dialect: string; notes: string } {
+  if (!connection) {
+    throw new KtxExpectedError(`Connection "${connectionId}" is not configured in ktx.yaml`);
+  }
+  const driver = normalizeConnectionDriver(connection);
+  if (!isDatabaseDriver(driver)) {
+    throw new KtxExpectedError(
+      `Connection "${connectionId}" uses the "${driver}" context source, not a SQL warehouse; sql_dialect_notes applies only to SQL database connections.`,
+    );
+  }
+  const dialect = sqlAnalysisDialectForDriver(driver);
+  return { connectionId, dialect, notes: sqlDialectNotes(dialect) };
 }
 
 export function createLocalProjectMcpContextPorts(
@@ -192,6 +213,12 @@ export function createLocalProjectMcpContextPorts(
     discover: {
       async search(input) {
         return createKtxDiscoverDataService(project, { userId: 'local', embeddingService }).search(input);
+      },
+    },
+    dialectNotes: {
+      async read(input) {
+        const connectionId = assertSafeConnectionId(input.connectionId);
+        return resolveDialectNotesForConnection(connectionId, project.config.connections[connectionId]);
       },
     },
   };

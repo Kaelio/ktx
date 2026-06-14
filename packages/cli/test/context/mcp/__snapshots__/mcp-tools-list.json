@@ -1475,6 +1475,55 @@
     }
   },
   {
+    "name": "sql_dialect_notes",
+    "title": "SQL Dialect Notes",
+    "description": "Return the SQL syntax conventions for the dialect of a ktx connection: fully-qualified table-name form, identifier quoting and case-folding, date/time functions, top-N / window-filtering idiom, and JSON access. Call this before writing raw sql_execution SQL against a connection so the SQL matches that engine. Example: sql_dialect_notes({ connectionId: \"warehouse\" }).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "connectionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Connection id whose engine dialect conventions to return."
+        }
+      },
+      "required": [
+        "connectionId"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "connectionId": {
+          "type": "string"
+        },
+        "dialect": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "connectionId",
+        "dialect",
+        "notes"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "SQL Dialect Notes",
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
     "name": "memory_ingest",
     "title": "Memory Ingest",
     "description": "Ingest free-form markdown knowledge into durable ktx memory. Use this for business rules, metric definitions, schema gotchas, recurring findings, or explicit user requests to remember something. Example: memory_ingest({ connectionId: \"warehouse\", content: \"ARR is reported in cents in this warehouse.\" }).",
