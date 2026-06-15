@@ -389,7 +389,8 @@ type KtxScanWarningCode =
   | 'credential_redacted'
   | 'enrichment_failed'
   | 'description_fallback_used'
-  | 'constraint_discovery_unauthorized';
+  | 'constraint_discovery_unauthorized'
+  | 'object_introspection_failed';
 
 export interface KtxScanWarning {
   code: KtxScanWarningCode;

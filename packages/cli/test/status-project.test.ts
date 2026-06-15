@@ -651,8 +651,8 @@ describe('buildLocalStatsStatus', () => {
     expect(stats.unavailable).toBeUndefined();
     expect(stats.ingest.totalCompletedRuns).toBe(3);
     expect(stats.ingest.perConnection).toEqual([
-      { connectionId: 'analytics', adapter: 'live-database', lastCompletedAt: '2026-05-10T10:00:00Z' },
-      { connectionId: 'docs', adapter: 'notion', lastCompletedAt: '2026-05-01T10:00:00Z' },
+      { connectionId: 'analytics', adapter: 'live-database', lastCompletedAt: '2026-05-10T10:00:00Z', skippedObjects: [] },
+      { connectionId: 'docs', adapter: 'notion', lastCompletedAt: '2026-05-01T10:00:00Z', skippedObjects: [] },
     ]);
     expect(stats.wikiPages).toEqual([
       { scope: 'GLOBAL', count: 2, embeddedCount: 1 },
@@ -696,6 +696,47 @@ describe('buildLocalStatsStatus', () => {
     expect(stats.wikiPages).toEqual([]);
     expect(stats.semanticLayer).toEqual([]);
   });
+
+  it('surfaces skipped objects from the latest report body', async () => {
+    await mkdir(join(tempDir, '.ktx'), { recursive: true });
+    const dbPath = join(tempDir, '.ktx', 'db.sqlite');
+    const db = new Database(dbPath);
+    const body = JSON.stringify({
+      fetch: {
+        status: 'partial',
+        retryRecommended: false,
+        warnings: [],
+        skipped: [
+          { rawPath: '', entityType: 'database_object', entityId: 'emp_hire_periods_with_name', severity: 'warning', statusCode: null, message: 'no such column: ehp.start_date', retryRecommended: false },
+        ],
+      },
+    });
+    db.exec(`
+      CREATE TABLE local_ingest_reports (
+        run_id TEXT PRIMARY KEY,
+        adapter TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        raw_content_hashes_json TEXT NOT NULL,
+        body_json TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      `INSERT INTO local_ingest_reports VALUES ('r1', 'live-database', 'oracle_sql', 'done', '2026-06-13T10:00:00Z', '{}', ?)`,
+    ).run(body);
+    db.close();
+
+    const stats = await buildLocalStatsStatus(projectIn(tempDir));
+    expect(stats.ingest.perConnection).toEqual([
+      {
+        connectionId: 'oracle_sql',
+        adapter: 'live-database',
+        lastCompletedAt: '2026-06-13T10:00:00Z',
+        skippedObjects: [{ name: 'emp_hire_periods_with_name', reason: 'no such column: ehp.start_date' }],
+      },
+    ]);
+  });
 });
 
 describe('renderProjectStatus Local data', () => {
@@ -706,7 +747,12 @@ describe('renderProjectStatus Local data', () => {
       ingest: {
         totalCompletedRuns: 3,
         perConnection: [
-          { connectionId: 'analytics', adapter: 'live-database', lastCompletedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
+          {
+            connectionId: 'analytics',
+            adapter: 'live-database',
+            lastCompletedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+            skippedObjects: [],
+          },
         ],
       },
       wikiPages: [
@@ -732,6 +778,7 @@ describe('renderProjectStatus Local data', () => {
     expect(rendered).toContain('Wiki');
     expect(rendered).not.toContain('Knowledge');
     expect(rendered).toContain('3 completed runs');
+    expect(rendered).not.toContain('skipped —');
     expect(rendered).toContain('GLOBAL=2 (2 embedded)');
     expect(rendered).toContain('PROJECT=1 (0 embedded)');
     expect(rendered).toContain('12 sources (10 embedded) · 200 dictionary values');
@@ -739,6 +786,29 @@ describe('renderProjectStatus Local data', () => {
     expect(rendered).toContain('cache=1.00 MiB');
     expect(rendered).not.toMatch(/wiki=\d+ md/);
     expect(rendered).not.toMatch(/semantic-layer=\d+ yaml/);
+  });
+
+  it('renders a per-connection skipped-objects line when the latest ingest skipped objects', async () => {
+    const project = projectWithConfig(baseProjectConfig());
+    const status = await buildProjectStatus(project, { claudeCodeAuthProbe: stubClaudeCodeAuthProbe });
+    status.localStats = {
+      ingest: {
+        totalCompletedRuns: 1,
+        perConnection: [
+          {
+            connectionId: 'oracle_sql',
+            adapter: 'live-database',
+            lastCompletedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+            skippedObjects: [{ name: 'emp_hire_periods_with_name', reason: 'no such column: ehp.start_date' }],
+          },
+        ],
+      },
+      wikiPages: [],
+      semanticLayer: [],
+      projectDir: { dbSqliteBytes: 4096, ktxCacheBytes: 0, rawSources: { fileCount: 0, bytes: 0 } },
+    };
+    const rendered = renderProjectStatus(status, { useColor: false });
+    expect(rendered).toContain('1 object skipped — emp_hire_periods_with_name: no such column: ehp.start_date');
   });
 
   it('renders unavailable note when DB is missing', async () => {

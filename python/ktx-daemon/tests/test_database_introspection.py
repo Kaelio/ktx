@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from ktx_daemon.database_introspection import (
+    OBJECT_INTROSPECTION_FAILED_CODE,
     DatabaseIntrospectionRequest,
     DatabaseIntrospectionRows,
     LiveDatabaseTableScopeRef,
@@ -124,6 +125,52 @@ def test_introspect_database_response_maps_postgres_catalog_rows() -> None:
             }
         ],
     }
+
+
+def test_introspect_database_response_isolates_a_broken_object() -> None:
+    def fake_load_rows(
+        request: DatabaseIntrospectionRequest,
+    ) -> DatabaseIntrospectionRows:
+        return DatabaseIntrospectionRows(
+            table_rows=[
+                {
+                    "table_catalog": "warehouse",
+                    "table_schema": "public",
+                    "table_name": "customers",
+                    "table_comment": None,
+                },
+                # Malformed/inaccessible object: missing table_name.
+                {
+                    "table_catalog": "warehouse",
+                    "table_schema": "public",
+                    "table_name": None,
+                    "table_comment": None,
+                },
+            ],
+            column_rows=[],
+            foreign_key_rows=[],
+        )
+
+    response = introspect_database_response(
+        DatabaseIntrospectionRequest(
+            connection_id="warehouse",
+            driver="postgres",
+            url="postgresql://readonly@example.test/warehouse",
+            schemas=["public"],
+        ),
+        load_rows=fake_load_rows,
+        now=lambda: "2026-04-28T10:00:00+00:00",
+    )
+
+    assert [table.name for table in response.tables] == ["customers"]
+    assert len(response.warnings) == 1
+    # Parity with the Node KtxScanWarningCode the adapter renders.
+    assert (
+        response.warnings[0].code
+        == OBJECT_INTROSPECTION_FAILED_CODE
+        == "object_introspection_failed"
+    )
+    assert response.warnings[0].recoverable is True
 
 
 def test_introspect_database_response_rejects_non_postgres_driver() -> None:

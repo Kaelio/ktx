@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSqliteLiveDatabaseIntrospection } from '../../../src/connectors/sqlite/live-database-introspection.js';
 import { isKtxSqliteConnectionConfig, KtxSqliteScanConnector, sqliteDatabasePathFromConfig } from '../../../src/connectors/sqlite/connector.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
+import { resolveEnabledTables } from '../../../src/context/scan/enabled-tables.js';
 
 describe('KtxSqliteScanConnector', () => {
   let tempDir: string;
@@ -148,6 +149,74 @@ describe('KtxSqliteScanConnector', () => {
         constraintName: null,
       },
     ]);
+  });
+
+  it('skips an object that fails introspection and ingests the rest with one recoverable warning', async () => {
+    const brokenDbPath = join(tempDir, 'broken.db');
+    const brokenDb = new Database(brokenDbPath);
+    brokenDb.exec(`
+      CREATE TABLE base (id INTEGER PRIMARY KEY, start_date TEXT);
+      CREATE VIEW emp_hire_periods_with_name AS SELECT id, start_date FROM base;
+      CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+      INSERT INTO customers (id, name) VALUES (1, 'Ada');
+      DROP TABLE base;
+    `);
+    brokenDb.close();
+
+    const connector = new KtxSqliteScanConnector({
+      connectionId: 'warehouse',
+      connection: { driver: 'sqlite', path: brokenDbPath },
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'sqlite' }, { runId: 'scan-run-broken' });
+
+    expect(snapshot.tables.map((table) => table.name)).toEqual(['customers']);
+    expect(snapshot.warnings).toHaveLength(1);
+    expect(snapshot.warnings?.[0]).toMatchObject({
+      code: 'object_introspection_failed',
+      table: 'emp_hire_periods_with_name',
+      recoverable: true,
+    });
+    expect(snapshot.warnings?.[0]?.message).toContain('no such table');
+  });
+
+  it('returns no tables and only warnings when every object fails introspection', async () => {
+    const brokenDbPath = join(tempDir, 'all-broken.db');
+    const brokenDb = new Database(brokenDbPath);
+    brokenDb.exec(`
+      CREATE TABLE base (id INTEGER PRIMARY KEY, value TEXT);
+      CREATE VIEW only_view AS SELECT id, value FROM base;
+      DROP TABLE base;
+    `);
+    brokenDb.close();
+
+    const connector = new KtxSqliteScanConnector({
+      connectionId: 'warehouse',
+      connection: { driver: 'sqlite', path: brokenDbPath },
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'sqlite' }, { runId: 'scan-run-all-broken' });
+
+    expect(snapshot.tables).toEqual([]);
+    expect(snapshot.warnings).toHaveLength(1);
+    expect(snapshot.warnings?.[0]?.code).toBe('object_introspection_failed');
+  });
+
+  it('restricts introspection to enabled_tables, accepting both "main.<name>" and bare "<name>"', async () => {
+    const connector = new KtxSqliteScanConnector({
+      connectionId: 'warehouse',
+      connection: { driver: 'sqlite', path: dbPath },
+    });
+
+    for (const entry of ['main.customers', 'customers']) {
+      const tableScope = resolveEnabledTables({ driver: 'sqlite', enabled_tables: [entry] }) ?? undefined;
+      const snapshot = await connector.introspect(
+        { connectionId: 'warehouse', driver: 'sqlite', ...(tableScope ? { tableScope } : {}) },
+        { runId: `scan-run-scope-${entry}` },
+      );
+      expect(snapshot.tables.map((table) => table.name)).toEqual(['customers']);
+      expect(snapshot.metadata.discovered_object_names).toEqual(['customers', 'orders', 'recent_orders']);
+    }
   });
 
   it('lists schemaless tables and views for setup discovery', async () => {

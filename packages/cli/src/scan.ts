@@ -182,6 +182,8 @@ function describeWarningGroup(code: string, count: number): string {
       return 'Scan enrichment backend is not configured; AI stages were skipped.';
     case 'credential_redacted':
       return `${count} ${plural(count, 'credential')} were redacted from scan output.`;
+    case 'object_introspection_failed':
+      return `${count} ${plural(count, 'object')} skipped during introspection (broken or inaccessible objects were excluded; the rest were ingested).`;
     default:
       return `${count} ${plural(count, 'warning')} (${code})`;
   }

@@ -330,6 +330,50 @@ describe('KtxBigQueryScanConnector', () => {
     expect(skippedGet).not.toHaveBeenCalled();
   });
 
+  it('skips a table that fails introspection and ingests its healthy siblings', async () => {
+    const ordersGet = vi.fn(async (): ReturnType<KtxBigQueryTableRef['get']> => [
+      { metadata: { type: 'TABLE', numRows: '5', schema: { fields: [{ name: 'id', type: 'INT64', mode: 'REQUIRED' }] } } },
+    ]);
+    const brokenGet = vi.fn(async (): ReturnType<KtxBigQueryTableRef['get']> => {
+      throw new Error('Access Denied: Table project-1:analytics.locked');
+    });
+    const clientFactory: KtxBigQueryClientFactory = {
+      createClient: vi.fn(() => ({
+        getDatasets: vi.fn(async (): ReturnType<KtxBigQueryClient['getDatasets']> => [[{ id: 'analytics' }]]),
+        dataset: vi.fn(
+          (): KtxBigQueryDataset => ({
+            get: vi.fn(async () => [{ id: 'analytics' }]),
+            getTables: vi.fn(async (): ReturnType<KtxBigQueryDataset['getTables']> => [
+              [
+                { id: 'orders', get: ordersGet },
+                { id: 'locked', get: brokenGet },
+              ],
+            ]),
+          }),
+        ),
+        createQueryJob: vi.fn(async (): ReturnType<KtxBigQueryClient['createQueryJob']> => [
+          {
+            getQueryResults: async (): ReturnType<KtxBigQueryQueryJob['getQueryResults']> => [
+              [],
+              undefined,
+              { schema: { fields: [{ name: 'table_name', type: 'STRING' }, { name: 'column_name', type: 'STRING' }] } },
+            ],
+          },
+        ]),
+      })),
+    };
+    const connector = new KtxBigQueryScanConnector({ connectionId: 'warehouse', connection, clientFactory });
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'skip-test' });
+
+    expect(snapshot.tables.map((table) => table.name)).toEqual(['orders']);
+    expect(snapshot.warnings).toHaveLength(1);
+    expect(snapshot.warnings?.[0]).toMatchObject({
+      code: 'object_introspection_failed',
+      table: 'locked',
+      metadata: { object: 'project-1.analytics.locked' },
+    });
+  });
+
   it('constructs for discovery without dataset scope and lists tables through one region information schema query', async () => {
     const createQueryJob = vi.fn(
       async (

@@ -110,6 +110,7 @@ interface LocalStatsIngestPerConnection {
   connectionId: string;
   adapter: string;
   lastCompletedAt: string;
+  skippedObjects: Array<{ name: string; reason: string }>;
 }
 
 interface LocalStatsSemanticLayerEntry {
@@ -806,6 +807,20 @@ function tryQuery<T>(run: () => T, fallback: T): T {
   }
 }
 
+function skippedObjectsFromReportBody(bodyJson: string): Array<{ name: string; reason: string }> {
+  try {
+    const body = JSON.parse(bodyJson) as { fetch?: { skipped?: Array<{ entityId?: unknown; message?: unknown }> } };
+    const skipped = body.fetch?.skipped;
+    if (!Array.isArray(skipped)) return [];
+    return skipped.map((issue) => ({
+      name: typeof issue.entityId === 'string' && issue.entityId.length > 0 ? issue.entityId : 'object',
+      reason: typeof issue.message === 'string' ? issue.message : 'introspection failed',
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** @internal */
 export async function buildLocalStatsStatus(project: KtxLocalProject): Promise<LocalStatsStatus> {
   const dbPath = ktxLocalStateDbPath(project);
@@ -843,17 +858,19 @@ export async function buildLocalStatsStatus(project: KtxLocalProject): Promise<L
       0,
     );
 
+    type IngestStatsRow = { connection_id: string; adapter: string; last_completed_at: string; body_json: string };
     const ingestRows = tryQuery(
       () =>
+        // SQLite returns body_json from the MAX(completed_at) row for each group.
         db
           .prepare(
-            `SELECT connection_id, adapter, MAX(completed_at) AS last_completed_at
+            `SELECT connection_id, adapter, MAX(completed_at) AS last_completed_at, body_json
              FROM local_ingest_reports
              WHERE status = 'done'
              GROUP BY connection_id, adapter`,
           )
-          .all() as Array<{ connection_id: string; adapter: string; last_completed_at: string }>,
-      [] as Array<{ connection_id: string; adapter: string; last_completed_at: string }>,
+          .all() as IngestStatsRow[],
+      [] as IngestStatsRow[],
     );
     const perConnectionMap = new Map<string, LocalStatsIngestPerConnection>();
     for (const row of ingestRows) {
@@ -863,6 +880,7 @@ export async function buildLocalStatsStatus(project: KtxLocalProject): Promise<L
           connectionId: row.connection_id,
           adapter: row.adapter,
           lastCompletedAt: row.last_completed_at,
+          skippedObjects: skippedObjectsFromReportBody(row.body_json),
         });
       }
     }
@@ -1112,6 +1130,14 @@ function renderLocalStats(
       lines.push(
         `      ${entry.connectionId.padEnd(nameWidth)}   ${dim(entry.adapter.padEnd(adapterWidth))}   ${dim(`last ${formatRelativeFromNow(entry.lastCompletedAt)}`)}`,
       );
+      if (entry.skippedObjects.length > 0) {
+        const first = entry.skippedObjects[0]!;
+        const extra = entry.skippedObjects.length - 1;
+        const detail = `${first.name}: ${first.reason}${extra > 0 ? ` (+${extra} more)` : ''}`;
+        lines.push(
+          `      ${' '.repeat(nameWidth)}   ${dim(`${entry.skippedObjects.length} object${entry.skippedObjects.length === 1 ? '' : 's'} skipped — ${detail}`)}`,
+        );
+      }
     }
   }
 

@@ -3,6 +3,7 @@ import { normalizeBigQueryProjectId, normalizeBigQueryRegion } from '../../conte
 import { getDialectForDriver } from '../../context/connections/dialects.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
+import { tryIntrospectObject } from '../../context/scan/object-introspection.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
 import {
   connectorTestFailure,
@@ -541,18 +542,28 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     const tables: KtxSchemaTable[] = [];
     for (const tableRef of filteredTableRefs) {
       const tableName = tableRef.id || '';
-      const [table] = await tableRef.get();
-      const fields = table.metadata.schema?.fields ?? [];
-      tables.push({
-        catalog: this.resolved.projectId,
-        db: datasetId,
-        name: tableName,
-        kind: tableKind(table.metadata.type),
-        comment: table.metadata.description || null,
-        estimatedRows: firstNumber(table.metadata.numRows) ?? 0,
-        columns: fields.map((field) => this.toSchemaColumn(tableName, field, primaryKeys)),
-        foreignKeys: [],
-      });
+      const outcome = await tryIntrospectObject<KtxSchemaTable>(
+        { object: tableName, catalog: this.resolved.projectId, db: datasetId },
+        async () => {
+          const [table] = await tableRef.get();
+          const fields = table.metadata.schema?.fields ?? [];
+          return {
+            catalog: this.resolved.projectId,
+            db: datasetId,
+            name: tableName,
+            kind: tableKind(table.metadata.type),
+            comment: table.metadata.description || null,
+            estimatedRows: firstNumber(table.metadata.numRows) ?? 0,
+            columns: fields.map((field) => this.toSchemaColumn(tableName, field, primaryKeys)),
+            foreignKeys: [],
+          };
+        },
+      );
+      if (outcome.ok) {
+        tables.push(outcome.table);
+      } else {
+        snapshotWarnings.push(outcome.warning);
+      }
     }
     return tables;
   }

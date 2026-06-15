@@ -130,6 +130,39 @@ describe('createDaemonLiveDatabaseIntrospection', () => {
     });
   });
 
+  it('maps daemon warnings into the snapshot and drops codes Node cannot render', async () => {
+    const runJson = vi.fn(async () => ({
+      ...daemonResponse,
+      tables: [],
+      warnings: [
+        {
+          code: 'object_introspection_failed',
+          message: 'permission denied for relation locked',
+          table: 'locked',
+          recoverable: true,
+          metadata: { object: 'public.locked' },
+        },
+        { code: 'totally_unknown_code', message: 'ignored', recoverable: true },
+      ],
+    }));
+    const introspection = createDaemonLiveDatabaseIntrospection({
+      connections: { warehouse: { driver: 'postgres', url: 'postgres://localhost:5432/warehouse' } },
+      schemas: ['public'],
+      runJson,
+    });
+
+    const snapshot = await introspection.extractSchema('warehouse');
+    expect(snapshot.warnings).toEqual([
+      {
+        code: 'object_introspection_failed',
+        message: 'permission denied for relation locked',
+        table: 'locked',
+        recoverable: true,
+        metadata: { object: 'public.locked' },
+      },
+    ]);
+  });
+
   it('calls a running daemon HTTP endpoint when baseUrl is configured', async () => {
     const requests: Array<{ url: string | undefined; body: unknown }> = [];
     const server = createServer((request, response) => {

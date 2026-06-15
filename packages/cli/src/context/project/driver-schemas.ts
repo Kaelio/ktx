@@ -30,7 +30,7 @@ function warehouseConnectionSchema<const Driver extends WarehouseDriver>(driver:
         .array(z.string().min(1))
         .optional()
         .describe(
-          'Optional allowlist of fully-qualified table names ("schema.table") to ingest. When set, live-database ingest discards any table whose schema-qualified name is not in this list. Useful for smoke-testing ingest on a single table.',
+          'Optional allowlist of object names to ingest. Accepted forms: "catalog.db.name", "db.name" (schema-qualified), or bare "name". When set, live-database ingest restricts the scan to the listed objects and fails with a clear error if none match. For SQLite, "main.<name>" and the bare "<name>" are equivalent (SQLite exposes a single "main" schema). Useful for smoke-testing ingest on a single table.',
         ),
     })
     .describe(
