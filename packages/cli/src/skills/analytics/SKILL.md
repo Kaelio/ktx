@@ -50,7 +50,37 @@ Heuristics for writing *correct* (not merely runnable) SQL. Each is a default pl
 
 **Composition**
 - **Build incrementally.** Assemble complex queries one CTE at a time, checking each layer's output on a small sample before stacking the next; a wrong intermediate layer is far cheaper to catch early than to debug in the final number.
-- **Avoid fan-out joins.** Add columns only from tables already at the target grain, or pre-aggregate to that grain before joining. A join that multiplies rows quietly inflates every downstream `SUM`/`COUNT`.
+- **Avoid fan-out joins — the danger is cumulative.** Any one-to-many hop on the path between a measure's owning table and the aggregate inflates that measure, even when the offending join sits several hops below the `SUM`/`COUNT` and is easy to miss. The fix is the single-hop one applied per measure-owning table along the whole chain: pre-aggregate each coarse-grained measure to its own grain in a CTE, then join the already-aggregated result.
+- **Verify the grain holds across each join.** As you compose, confirm a join you intend to be one-to-one / many-to-one did not change the grain you aggregate at — e.g. the row count (or the count of the aggregate's key) is unchanged across it. When a join is genuinely one-to-many, reach for the default fix (pre-aggregate to grain); for a pure count, `COUNT(DISTINCT key)` is an acceptable escape hatch. A `SUM`/`AVG` of a fanned-out measure must pre-aggregate — `DISTINCT` cannot de-duplicate a sum.
+
+```sql
+-- "How many orders per region contain a returned item?" — count each order once.
+-- WRONG: order_lines is joined to apply the line-level filter, which multiplies
+-- orders; an order with two returned lines is counted twice, three joins below
+-- the COUNT, where the inflation is easy to miss.
+SELECT r.region_id, COUNT(*) AS n_orders
+FROM regions r
+JOIN stores s      ON s.region_id = r.region_id
+JOIN orders o      ON o.store_id  = s.store_id
+JOIN order_lines l ON l.order_id  = o.order_id
+WHERE l.status = 'returned'
+GROUP BY r.region_id;
+
+-- RIGHT: collapse order_lines to one row per qualifying order first, then join up
+-- so each order contributes exactly once.
+WITH returned_orders AS (
+  SELECT order_id FROM order_lines WHERE status = 'returned' GROUP BY order_id
+)
+SELECT r.region_id, COUNT(*) AS n_orders
+FROM regions r
+JOIN stores s           ON s.region_id = r.region_id
+JOIN orders o           ON o.store_id  = s.store_id
+JOIN returned_orders ro ON ro.order_id = o.order_id
+GROUP BY r.region_id;
+-- A pure count could also use COUNT(DISTINCT o.order_id); a SUM/AVG of an
+-- order-level measure fanned out this way must pre-aggregate — DISTINCT can't
+-- de-duplicate a sum.
+```
 
 **Window functions**
 - **Make the ordering deterministic.** Give every ranking/ordering window a complete tie-breaker by appending unique key column(s) to `ORDER BY`, so `RANK`/`ROW_NUMBER`/`LAG` results are stable instead of flickering between runs.

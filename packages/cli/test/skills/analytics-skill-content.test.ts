@@ -28,6 +28,8 @@ describe('analytics SKILL.md SQL craft', () => {
       'Cast to the real type before comparing', // string-vs-number compares
       'Build incrementally', // one CTE at a time
       'Avoid fan-out joins', // grain / pre-aggregate
+      'the danger is cumulative', // multi-hop fan-out generalization
+      'Verify the grain holds across each join', // affirmative grain-verification habit
       'Make the ordering deterministic', // window tie-breaker
       'Filter after the window, not before', // window-then-filter
       'Round only at the end', // precision + truncation
@@ -43,12 +45,16 @@ describe('analytics SKILL.md SQL craft', () => {
     }
   });
 
-  it('ships exactly one dialect-agnostic window-then-filter worked example', () => {
+  it('ships two dialect-agnostic worked examples: window-then-filter and multi-hop fan-out', () => {
     const sqlFences = skill.match(/```sql/g) ?? [];
-    expect(sqlFences).toHaveLength(1);
+    expect(sqlFences).toHaveLength(2);
+    // window-then-filter (spec 07)
     expect(skill).toContain('WITH ranked AS');
     expect(skill).toContain('ROW_NUMBER() OVER');
     expect(skill).toContain('WHERE seq = 1');
+    // multi-hop fan-out, pre-aggregated right side + count-only escape hatch (spec 09)
+    expect(skill).toContain('WITH returned_orders AS');
+    expect(skill).toContain('COUNT(DISTINCT o.order_id)');
   });
 
   it('leaves the existing interactive guidance intact', () => {

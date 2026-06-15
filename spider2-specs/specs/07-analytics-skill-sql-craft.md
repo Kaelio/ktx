@@ -211,6 +211,9 @@ the full partition in a CTE, then filter to the top rank in the outer query),
 using generic table/column names and standard SQL only (no `QUALIFY`, no
 dialect functions). Keep it ~6–10 lines. Do not add a second example; the
 existing three tool-orchestration examples stay as the primary example set.
+*(Superseded by spec 09: the skill now carries a second `sql` worked example —
+the multi-hop fan-out case — so the one-example constraint applies to spec 07's
+window-then-filter example only.)*
 
 ### 4. Explicit exclusions
 
@@ -254,7 +257,9 @@ SQL craft in `<sql_craft>`.
 - **None of the excluded items** (output-shape contract, `MAX(date)` anchoring of
   “recent”, grader-driven advice, dialect syntax) appear.
 - Exactly **one** new worked example is present, demonstrating window-then-filter,
-  in standard dialect-agnostic SQL.
+  in standard dialect-agnostic SQL. *(Superseded by spec 09, which adds a second
+  `sql` worked example for the multi-hop fan-out case; the shipped skill then
+  contains two worked examples and the content test asserts two `sql` fences.)*
 - The craft is **inline in `SKILL.md`** — no bundled reference file is introduced,
   and the skill still installs as a single file through `setup-agents.ts` for all
   targets (Claude Code, Codex, Cursor, OpenCode, universal, Claude Desktop zip).
