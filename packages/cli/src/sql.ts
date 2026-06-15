@@ -1,3 +1,4 @@
+import { resolveConfiguredConnection } from './context/connections/resolve-connection.js';
 import { loadKtxProject, type KtxLocalProject } from './context/project/project.js';
 import type { KtxQueryResult, KtxScanConnector } from './context/scan/types.js';
 import type { SqlAnalysisDialect, SqlAnalysisPort } from './context/sql-analysis/ports.js';
@@ -146,10 +147,7 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
   let project: KtxLocalProject | undefined;
   try {
     project = await (deps.loadProject ?? loadKtxProject)({ projectDir: args.projectDir });
-    const connection = project.config.connections[args.connectionId];
-    if (!connection) {
-      throw new Error(`Connection "${args.connectionId}" is not configured in ktx.yaml`);
-    }
+    const connection = resolveConfiguredConnection(project.config, args.connectionId);
     driver = String(connection.driver ?? 'unknown').toLowerCase();
     demoConnection = isDemoConnection(args.connectionId, connection);
 

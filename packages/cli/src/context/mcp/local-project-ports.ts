@@ -1,4 +1,5 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
+import { resolveConfiguredConnection } from '../../context/connections/resolve-connection.js';
 import { KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
 import { localConnectionInfoFromConfig } from '../../context/connections/local-warehouse-descriptor.js';
 import type { KtxEmbeddingPort } from '../../context/core/embedding.js';
@@ -39,10 +40,7 @@ async function executeValidatedReadOnlySql(
 ): Promise<KtxSqlExecutionResponse> {
   await onProgress?.({ progress: 0, message: 'Validating SQL' });
   const connectionId = assertSafeConnectionId(input.connectionId);
-  const connection = project.config.connections[connectionId];
-  if (!connection) {
-    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
-  }
+  const connection = resolveConfiguredConnection(project.config, connectionId);
   if (!options.sqlAnalysis) {
     throw new Error('sql_execution requires parser-backed SQL validation.');
   }
