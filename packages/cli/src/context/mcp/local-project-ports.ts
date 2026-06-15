@@ -1,7 +1,8 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
-import { KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
+import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
 import { executeProjectReadOnlySql } from '../../context/connections/project-sql-executor.js';
 import { FEDERATED_CONNECTION_ID, federatedConnectionListing } from '../../context/connections/federation.js';
+import { resolveConfiguredConnection } from '../../context/connections/resolve-connection.js';
 import {
   type LocalConnectionInfo,
   localConnectionInfoFromConfig,
@@ -46,15 +47,14 @@ async function executeValidatedReadOnlySql(
 
   const isFederated = input.connectionId === FEDERATED_CONNECTION_ID;
   const connectionId = isFederated ? input.connectionId : assertSafeConnectionId(input.connectionId);
-  const connection = isFederated ? undefined : project.config.connections[connectionId];
-  if (!isFederated && !connection) {
-    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
-  }
+  const connection = isFederated ? undefined : resolveConfiguredConnection(project.config, connectionId);
 
   const dialect = sqlAnalysisDialectForDriver(isFederated ? 'duckdb' : connection!.driver);
   const validation = await options.sqlAnalysis.validateReadOnly(input.sql, dialect);
   if (!validation.ok) {
-    throw new Error(validation.error ?? 'SQL is not read-only.');
+    // A read-only guard rejecting the agent's SQL is an expected outcome, not a
+    // ktx fault: classify it so reportException keeps it out of Error Tracking.
+    throw new KtxQueryError(validation.error ?? 'SQL is not read-only.');
   }
 
   await onProgress?.({ progress: 0.3, message: 'Executing' });
@@ -75,7 +75,7 @@ async function executeValidatedReadOnlySql(
     // preserving the warehouse's own diagnostics. A native JS error (TypeError,
     // etc.) signals a bug in connector code — let it propagate unchanged so Error
     // Tracking still sees it.
-    if (isNativeProgrammingFault(error)) {
+    if (isNativeProgrammingFault(error) || error instanceof KtxExpectedError) {
       throw error;
     }
     throw new KtxQueryError(error instanceof Error ? error.message : String(error), { cause: error });

@@ -3,6 +3,7 @@ import type { KtxSemanticLayerComputePort } from '../../context/daemon/semantic-
 import type { KtxMcpProgressCallback } from '../mcp/types.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { FEDERATED_CONNECTION_ID } from '../connections/federation.js';
+import { resolveRequiredConnectionId } from '../connections/resolve-connection.js';
 import { sqlAnalysisDialectForDriver } from '../sql-analysis/dialect.js';
 import { loadLocalSlSourceRecords } from './local-sl.js';
 import { toResolvedWire } from './semantic-layer.service.js';
@@ -34,14 +35,7 @@ export interface CompileLocalSlQueryResult extends SemanticLayerQueryExecutionRe
 }
 
 function resolveLocalConnectionId(project: KtxLocalProject, requested: string | undefined): string {
-  if (requested) {
-    return assertSafeConnectionId(requested);
-  }
-  const ids = Object.keys(project.config.connections).sort();
-  if (ids.length === 1) {
-    return assertSafeConnectionId(ids[0]);
-  }
-  throw new Error('connectionId is required when the local project has zero or multiple connections.');
+  return assertSafeConnectionId(resolveRequiredConnectionId(project.config, requested));
 }
 
 // The planner rejects a source set carrying a join whose `to` names a source

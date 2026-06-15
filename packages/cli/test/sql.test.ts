@@ -306,7 +306,9 @@ describe('runKtxSql', () => {
       ),
     ).resolves.toBe(1);
 
-    expect(io.stderr()).toContain('Connection "warehouse" is not configured in ktx.yaml');
+    expect(io.stderr()).toContain(
+      'Connection "warehouse" is not configured in ktx.yaml. No connections are configured in ktx.yaml.',
+    );
   });
 
   it('rejects connectors without read-only SQL support and still cleans up', async () => {

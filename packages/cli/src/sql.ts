@@ -2,6 +2,7 @@ import { executeFederatedQuery } from './connectors/duckdb/federated-executor.js
 import { FEDERATED_CONNECTION_ID } from './context/connections/federation.js';
 import { executeProjectReadOnlySql } from './context/connections/project-sql-executor.js';
 import type { KtxSqlQueryExecutionResult } from './context/connections/query-executor.js';
+import { resolveConfiguredConnection } from './context/connections/resolve-connection.js';
 import { loadKtxProject, type KtxLocalProject } from './context/project/project.js';
 import { sqlAnalysisDialectForDriver } from './context/sql-analysis/dialect.js';
 import type { SqlAnalysisDialect, SqlAnalysisPort } from './context/sql-analysis/ports.js';
@@ -132,7 +133,7 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
   try {
     project = await (deps.loadProject ?? loadKtxProject)({ projectDir: args.projectDir });
     const isFederated = args.connectionId === FEDERATED_CONNECTION_ID;
-    const connection = project.config.connections[args.connectionId];
+    const connection = isFederated ? undefined : resolveConfiguredConnection(project.config, args.connectionId);
     driver = isFederated ? 'duckdb' : String(connection?.driver ?? 'unknown').toLowerCase();
     demoConnection = isFederated ? false : isDemoConnection(args.connectionId, connection);
 

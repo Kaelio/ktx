@@ -31,6 +31,10 @@ function sanitizedGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
  * directory is an existing repo ktx did not create and the machine has no configured git
  * identity (e.g. a fresh Mac with no ~/.gitconfig), without mutating the user's repo config.
  * Explicit `--author` flags on individual commits still take precedence over GIT_AUTHOR_NAME.
+ *
+ * `commit.gpgsign=false` is injected as a per-invocation `-c` override so ktx's commits never
+ * attempt GPG signing: ktx commits under a synthetic identity that can never own a secret key, so
+ * a user's `commit.gpgsign=true` would otherwise fail every commit with "No secret key".
  */
 export function createSimpleGit(baseDir: string, identity?: { name: string; email: string }): SimpleGit {
   const env = sanitizedGitEnv();
@@ -40,5 +44,5 @@ export function createSimpleGit(baseDir: string, identity?: { name: string; emai
     env.GIT_COMMITTER_NAME = identity.name;
     env.GIT_COMMITTER_EMAIL = identity.email;
   }
-  return simpleGit({ baseDir, unsafe: { allowUnsafeAskPass: true } }).env(env);
+  return simpleGit({ baseDir, config: ['commit.gpgsign=false'], unsafe: { allowUnsafeAskPass: true } }).env(env);
 }

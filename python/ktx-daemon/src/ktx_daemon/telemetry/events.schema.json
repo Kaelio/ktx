@@ -162,6 +162,7 @@
         "outcome",
         "durationMs",
         "errorClass",
+        "errorDetail",
         "sampleRate",
         "mcpClientName",
         "mcpClientVersion"
@@ -1166,6 +1167,10 @@
         },
         "errorClass": {
           "type": "string"
+        },
+        "errorDetail": {
+          "type": "string",
+          "maxLength": 1000
         },
         "sampleRate": {
           "type": "number",
