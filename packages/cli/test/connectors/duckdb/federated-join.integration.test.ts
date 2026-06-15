@@ -86,6 +86,38 @@ describe('federated cross-catalog join (live DuckDB)', () => {
     }
   });
 
+  it('preserves a BIGINT beyond 2^53 as an exact string instead of rounding', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ktx-fed-bigint-large-'));
+    const idsPath = join(dir, 'ids.db');
+    const otherPath = join(dir, 'other.db');
+
+    const ids = new Database(idsPath);
+    // 9007199254740993 = 2^53 + 1, which rounds to ...992 as a JS number; the
+    // literal lives in SQL text so sqlite stores it exactly.
+    ids.exec('CREATE TABLE ids (big_id INTEGER); INSERT INTO ids VALUES (9007199254740993);');
+    ids.close();
+    const other = new Database(otherPath);
+    other.exec('CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);');
+    other.close();
+
+    const members: FederatedMember[] = [
+      { connectionId: 'ids_db', driver: 'sqlite', projectDir: dir, connection: { driver: 'sqlite', path: idsPath } },
+      { connectionId: 'other_db', driver: 'sqlite', projectDir: dir, connection: { driver: 'sqlite', path: otherPath } },
+    ];
+
+    try {
+      const result = await executeFederatedQuery(members, {
+        connectionId: '_ktx_federated',
+        connection: undefined,
+        sql: 'SELECT big_id FROM ids_db.ids',
+      });
+      expect(result.rows[0][0]).toBe('9007199254740993');
+      expect(() => JSON.stringify(result)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('joins catalogs whose connection ids contain hyphens', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ktx-fed-hyphen-'));
     const booksPath = join(dir, 'books.db');

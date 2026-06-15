@@ -10,6 +10,10 @@ describe('federationNoticeFor', () => {
     expect(notice).toMatch(/pg_books/);
     expect(notice).toMatch(/sqlite_reviews/);
     expect(notice).toMatch(/cross-database/i);
+    // Cross-DB joins via a source's `joins:` list are unsupported; the notice
+    // must steer users to raw SQL against the federated connection instead.
+    expect(notice).toMatch(/_ktx_federated/);
+    expect(notice).not.toMatch(/joins:/);
   });
 
   it('returns null with fewer than 2 compatible', () => {

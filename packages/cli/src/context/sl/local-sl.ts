@@ -179,8 +179,16 @@ export async function loadLocalSlSourceRecords(
       descriptor.members.map(async (member) => {
         const records = await loadSingleConnectionSourceRecords(project, member.connectionId);
         return records.map((record) => {
+          // The federated view is one virtual connection: rows carry its id and a
+          // member-prefixed name, so a listing/search row round-trips to
+          // `ktx sl -c _ktx_federated read <name>`. Member origin lives in the name.
           const name = `${member.connectionId}.${record.name}`;
-          return { ...record, name, source: { ...record.source, name } };
+          return {
+            ...record,
+            connectionId: FEDERATED_CONNECTION_ID,
+            name,
+            source: { ...record.source, name },
+          };
         });
       }),
     );

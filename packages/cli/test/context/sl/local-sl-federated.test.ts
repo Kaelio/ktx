@@ -93,11 +93,12 @@ describe('federated semantic-layer source loading', () => {
     expect(records.map((r) => r.source.name).sort()).toEqual(['pg_a.users', 'sqlite_b.users']);
   });
 
-  it('reads from member dirs, never a literal _ktx_federated dir', async () => {
+  it('tags member records with the virtual federated connection id so reads round-trip', async () => {
     const records = await loadLocalSlSourceRecords(project, { connectionId: '_ktx_federated' });
-    // The federated connection owns no directory; records carry their member
-    // connection ids, proving the union read from member dirs only.
-    expect(records.map((r) => r.connectionId).sort()).toEqual(['pg_books', 'sqlite_reviews']);
+    // The federated connection owns no directory and is addressed by one virtual
+    // id; the member-prefixed names (asserted above) prove the union read from
+    // member dirs, so the (connectionId, name) pair resolves back via `sl read`.
+    expect(records.map((r) => r.connectionId)).toEqual(['_ktx_federated', '_ktx_federated']);
   });
 
   it('returns empty for _ktx_federated when fewer than 2 compatible members', async () => {

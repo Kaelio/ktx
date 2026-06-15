@@ -78,6 +78,6 @@ export function federatedConnectionListing(
     id: FEDERATED_CONNECTION_ID,
     driver: 'duckdb',
     members: descriptor.members.map((member) => member.connectionId),
-    hint: 'Cross-database queries run here. Name tables connectionId.schema.table (or connectionId.table for sqlite).',
+    hint: 'Cross-database queries run here. Name tables connectionId.schema.table (or connectionId.table for sqlite); double-quote any id that is not a bare SQL identifier, e.g. "books-db".public.books.',
   };
 }

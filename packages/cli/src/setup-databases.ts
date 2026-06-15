@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { deriveFederatedConnection } from './context/connections/federation.js';
+import { deriveFederatedConnection, FEDERATED_CONNECTION_ID } from './context/connections/federation.js';
 import { getDriverRegistration } from './context/connections/drivers.js';
 import { createLocalKtxLlmRuntimeFromConfig } from './context/llm/local-config.js';
 import type { KtxLlmRuntimePort } from './context/llm/runtime-port.js';
@@ -1191,7 +1191,7 @@ export function federationNoticeFor(
     return null;
   }
   const names = descriptor.members.map((m) => m.connectionId).join(', ');
-  return `Detected ${descriptor.members.length} attach-compatible databases (${names}). They're queryable together as one federated connection. Declare cross-database joins in a source's \`joins:\` list.`;
+  return `Detected ${descriptor.members.length} attach-compatible databases (${names}). Run a cross-database join as read-only SQL against \`${FEDERATED_CONNECTION_ID}\` (ktx sql -c ${FEDERATED_CONNECTION_ID} "SELECT ..."), using catalog-qualified table names.`;
 }
 
 async function disableConnectionQueryHistory(projectDir: string, connectionId: string): Promise<void> {
