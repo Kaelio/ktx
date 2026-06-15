@@ -287,6 +287,35 @@ describe('createKtxMcpServer', () => {
     expect(io.stderrText()).not.toContain('mcpClientVersion');
   });
 
+  it('records the failure message as errorDetail when a tool returns an error', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    vi.stubEnv('KTX_TELEMETRY_DEBUG', '1');
+    vi.stubEnv('CI', '');
+    const fake = makeFakeServer();
+    const io = makeIo();
+
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local-user' },
+      projectDir: '/tmp/ktx-mcp-error-detail',
+      io,
+      contextTools: {
+        knowledge: {
+          search: vi.fn<KtxKnowledgeMcpPort['search']>().mockRejectedValue(new Error('wiki search exploded')),
+          read: vi.fn<KtxKnowledgeMcpPort['read']>().mockResolvedValue(null),
+        },
+      },
+    });
+
+    await expect(getTool(fake.tools, 'wiki_search').handler({ query: 'revenue', limit: 5 })).resolves.toMatchObject({
+      isError: true,
+    });
+
+    expect(io.stderrText()).toContain('"event":"mcp_request_completed"');
+    expect(io.stderrText()).toContain('"outcome":"error"');
+    expect(io.stderrText()).toContain('"errorDetail":"wiki search exploded"');
+  });
+
   it('reports MCP tool exceptions with a tool-derived source', async () => {
     reportExceptionMock.mockClear();
     vi.stubEnv('ANTHROPIC_API_KEY', 'mcp-anthropic-secret'); // pragma: allowlist secret

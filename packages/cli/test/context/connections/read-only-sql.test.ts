@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { KtxExpectedError, KtxQueryError } from '../../../src/errors.js';
 import {
   assertReadOnlySql,
   limitSqlForExecution,
@@ -18,6 +19,20 @@ describe('assertReadOnlySql', () => {
     expect(() => assertReadOnlySql('create table x(id int)')).toThrow(
       'Only read-only SELECT/WITH queries can be executed locally',
     );
+  });
+
+  // A guard refusing the agent's SQL is an expected outcome; classifying it as
+  // KtxQueryError keeps reportException from filing it as a ktx fault.
+  it('rejects with an expected KtxQueryError, not a bare Error', () => {
+    expect(() => assertReadOnlySql('delete from orders')).toThrow(KtxQueryError);
+    expect(() => assertReadOnlySql('describe orders')).toThrow(KtxQueryError);
+    expect(() => assertReadOnlySql('select 1; drop table orders')).toThrow(KtxQueryError);
+    try {
+      assertReadOnlySql('describe orders');
+      expect.unreachable('expected a throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(KtxExpectedError);
+    }
   });
 
   it('accepts read-only queries that begin with leading comments', () => {

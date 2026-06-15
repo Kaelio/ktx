@@ -10,7 +10,7 @@ import {
   shouldEmitMcpTelemetry,
 } from '../../telemetry/index.js';
 import { collectTelemetryRedactionSecrets } from '../../telemetry/redaction-secrets.js';
-import { scrubErrorClass } from '../../telemetry/scrubber.js';
+import { formatErrorDetail, scrubErrorClass } from '../../telemetry/scrubber.js';
 import type {
   KtxMcpClientInfo,
   KtxMcpContextPorts,
@@ -564,6 +564,28 @@ function clientTelemetryFields(
   };
 }
 
+// Tools registered via registerParsedTool catch their own errors and return an
+// isError result, so the telemetry layer never sees the thrown Error. Recover
+// the failure message from the result's text content (the same string the agent
+// reads) so the outcome event is self-diagnosing.
+function mcpErrorResultDetail(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null || !('content' in result)) {
+    return undefined;
+  }
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .map((block) =>
+      typeof block === 'object' && block !== null && typeof (block as { text?: unknown }).text === 'string'
+        ? (block as { text: string }).text
+        : '',
+    )
+    .join('\n');
+  return formatErrorDetail(text);
+}
+
 function instrumentMcpServer(
   server: KtxMcpServerLike,
   telemetry: { projectDir?: string; io?: KtxCliIo; getClientInfo?: () => KtxMcpClientInfo | undefined },
@@ -577,6 +599,7 @@ function instrumentMcpServer(
           if (telemetry.io && telemetry.projectDir && shouldEmitMcpTelemetry()) {
             const isError =
               typeof result === 'object' && result !== null && 'isError' in result && result.isError === true;
+            const errorDetail = isError ? mcpErrorResultDetail(result) : undefined;
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
               projectDir: telemetry.projectDir,
@@ -586,6 +609,7 @@ function instrumentMcpServer(
                 outcome: isError ? 'error' : 'ok',
                 durationMs: Math.max(0, performance.now() - startedAt),
                 sampleRate: mcpTelemetrySampleRate(),
+                ...(errorDetail ? { errorDetail } : {}),
                 ...clientTelemetryFields(telemetry.getClientInfo),
               },
             });
@@ -608,6 +632,7 @@ function instrumentMcpServer(
           }
           if (telemetry.io && telemetry.projectDir && shouldEmitMcpTelemetry()) {
             const errorClass = scrubErrorClass(error);
+            const errorDetail = formatErrorDetail(error);
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
               projectDir: telemetry.projectDir,
@@ -616,6 +641,7 @@ function instrumentMcpServer(
                 toolName: name,
                 outcome: 'error',
                 ...(errorClass ? { errorClass } : {}),
+                ...(errorDetail ? { errorDetail } : {}),
                 durationMs: Math.max(0, performance.now() - startedAt),
                 sampleRate: mcpTelemetrySampleRate(),
                 ...clientTelemetryFields(telemetry.getClientInfo),

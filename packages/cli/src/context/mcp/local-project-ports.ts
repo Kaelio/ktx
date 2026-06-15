@@ -1,5 +1,5 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
-import { KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
+import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
 import { localConnectionInfoFromConfig } from '../../context/connections/local-warehouse-descriptor.js';
 import type { KtxEmbeddingPort } from '../../context/core/embedding.js';
 import type { KtxSemanticLayerComputePort } from '../../context/daemon/semantic-layer-compute.js';
@@ -48,7 +48,9 @@ async function executeValidatedReadOnlySql(
   }
   const validation = await options.sqlAnalysis.validateReadOnly(input.sql, sqlAnalysisDialectForDriver(connection.driver));
   if (!validation.ok) {
-    throw new Error(validation.error ?? 'SQL is not read-only.');
+    // A read-only guard rejecting the agent's SQL is an expected outcome, not a
+    // ktx fault: classify it so reportException keeps it out of Error Tracking.
+    throw new KtxQueryError(validation.error ?? 'SQL is not read-only.');
   }
   const createConnector = options.localScan?.createConnector;
   if (!createConnector) {
@@ -77,7 +79,7 @@ async function executeValidatedReadOnlySql(
         // while preserving the warehouse's own diagnostics. A native JS error
         // (TypeError, etc.) signals a bug in connector code — let it propagate
         // unchanged so Error Tracking still sees it.
-        if (isNativeProgrammingFault(error)) {
+        if (isNativeProgrammingFault(error) || error instanceof KtxExpectedError) {
           throw error;
         }
         throw new KtxQueryError(error instanceof Error ? error.message : String(error), { cause: error });
