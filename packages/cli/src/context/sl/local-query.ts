@@ -2,6 +2,7 @@ import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-ex
 import type { KtxSemanticLayerComputePort } from '../../context/daemon/semantic-layer-compute.js';
 import type { KtxMcpProgressCallback } from '../mcp/types.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
+import { resolveRequiredConnectionId } from '../connections/resolve-connection.js';
 import { sqlAnalysisDialectForDriver } from '../sql-analysis/dialect.js';
 import { loadLocalSlSourceRecords } from './local-sl.js';
 import { toResolvedWire } from './semantic-layer.service.js';
@@ -27,14 +28,7 @@ export interface CompileLocalSlQueryResult extends SemanticLayerQueryExecutionRe
 }
 
 function resolveLocalConnectionId(project: KtxLocalProject, requested: string | undefined): string {
-  if (requested) {
-    return assertSafeConnectionId(requested);
-  }
-  const ids = Object.keys(project.config.connections).sort();
-  if (ids.length === 1) {
-    return assertSafeConnectionId(ids[0]);
-  }
-  throw new Error('connectionId is required when the local project has zero or multiple connections.');
+  return assertSafeConnectionId(resolveRequiredConnectionId(project.config, requested));
 }
 
 async function loadComputableSources(

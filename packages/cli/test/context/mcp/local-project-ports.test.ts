@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initKtxProject } from '../../../src/context/project/project.js';
-import { KtxQueryError } from '../../../src/errors.js';
+import { KtxExpectedError, KtxQueryError } from '../../../src/errors.js';
 import { createKtxConnectorCapabilities, type KtxQueryResult, type KtxScanConnector, type KtxSchemaSnapshot } from '../../../src/context/scan/types.js';
 import { SemanticLayerService } from '../../../src/context/sl/semantic-layer.service.js';
 import type { SemanticLayerSource } from '../../../src/context/sl/types.js';
@@ -243,6 +243,43 @@ describe('createLocalProjectMcpContextPorts', () => {
       { runId: 'mcp-sql-execution' },
     );
     expect(connector.cleanup).toHaveBeenCalled();
+  });
+
+  it('rejects sql_execution against an unconfigured connection with an actionable expected error', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.warehouse = {
+      driver: 'postgres',
+      url: 'env:DATABASE_URL',
+    };
+    const connector = testConnector(testSnapshot(), {
+      headers: ['id'],
+      headerTypes: ['integer'],
+      rows: [[1]],
+      totalRows: 1,
+      rowCount: 1,
+    });
+    const createConnector = vi.fn(async () => connector);
+    const sqlAnalysis = {
+      analyzeForFingerprint: vi.fn(),
+      analyzeBatch: vi.fn(),
+      validateReadOnly: vi.fn(async () => ({ ok: true, error: null })),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis,
+      localScan: { createConnector },
+      embeddingService: null,
+    });
+
+    const execution = ports.sqlExecution?.execute({
+      connectionId: 'DIG_SMART_REP',
+      sql: 'select 1',
+      maxRows: 5,
+    });
+    await expect(execution).rejects.toBeInstanceOf(KtxExpectedError);
+    await expect(execution).rejects.toThrow(
+      'Connection "DIG_SMART_REP" is not configured in ktx.yaml. Configured connections: warehouse.',
+    );
+    expect(createConnector).not.toHaveBeenCalled();
   });
 
   it('emits sql_execution progress stages from local MCP ports', async () => {
