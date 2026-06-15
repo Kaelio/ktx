@@ -219,6 +219,75 @@ describe('ClaudeCodeKtxLlmRuntime', () => {
     });
   });
 
+  it('surfaces a Claude Code session limit without retrying the capped query', async () => {
+    const query = vi.fn((_input: any) =>
+      stream([
+        initMessage(),
+        resultMessage({
+          subtype: 'error_during_execution',
+          is_error: true,
+          result: '',
+          errors: ["You've hit your session limit · resets 10:50pm (Asia/Saigon)"],
+        } as never),
+      ]),
+    );
+    const runtime = new ClaudeCodeKtxLlmRuntime({
+      projectDir: '/tmp/project',
+      modelSlots: { default: 'sonnet' },
+      query,
+      env: {},
+      rateLimitGovernor: { waitForReady: vi.fn().mockResolvedValue(undefined), report: vi.fn(), maxRetryAttempts: () => 6 } as never,
+    });
+
+    // The subscription cap cannot clear until reset, so retrying only re-hits the
+    // cap; surface it on the first attempt instead of spinning maxRetryAttempts times.
+    await expect(runtime.generateText({ role: 'default', prompt: 'hello' })).rejects.toThrow(/session limit/);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('cooperatively retries a session-limit result when the SDK reports a structured rejected reset', async () => {
+    const waitForReady = vi.fn().mockResolvedValue(undefined);
+    const report = vi.fn();
+    const resetAtMs = 1_700_000_000_000;
+    const query = vi
+      .fn()
+      .mockReturnValueOnce(
+        stream([
+          {
+            type: 'rate_limit_event',
+            rate_limit_info: { status: 'rejected', resetsAt: resetAtMs, rateLimitType: 'five_hour', utilization: 1 },
+          } as unknown as SDKMessage,
+          resultMessage({
+            subtype: 'error_during_execution',
+            is_error: true,
+            result: '',
+            errors: ["You've hit your session limit · resets 10:50pm (Asia/Saigon)"],
+          } as never),
+        ]),
+      )
+      .mockReturnValueOnce(stream([resultMessage({ result: 'ok' })]));
+    const runtime = new ClaudeCodeKtxLlmRuntime({
+      projectDir: '/tmp/project',
+      modelSlots: { default: 'sonnet' },
+      query,
+      env: {},
+      rateLimitGovernor: { waitForReady, report, maxRetryAttempts: () => 6 } as never,
+    });
+
+    // A structured rejected event carries the real reset time, so the governor pauses
+    // until reset and resumes — the session-limit text must not suppress that cooperative
+    // retry, unlike the bare-string case above where no reset time is available to wait on.
+    await expect(runtime.generateText({ role: 'default', prompt: 'hello' })).resolves.toBe('ok');
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenCalledWith({
+      provider: 'claude-subscription',
+      status: 'rejected',
+      resetAtMs,
+      rateLimitType: 'five_hour',
+      utilization: 1,
+    });
+  });
+
   it('reports Claude Code api retry messages as warning signals', async () => {
     const report = vi.fn();
     const query = vi.fn((_input: any) =>

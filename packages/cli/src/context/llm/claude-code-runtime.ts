@@ -151,15 +151,16 @@ function expectedMcpServerNames(tools: KtxRuntimeToolSet | undefined): Set<strin
   return tools && Object.keys(tools).length > 0 ? new Set([KTX_MCP_SERVER_NAME]) : new Set();
 }
 
-// "session limit" is the Claude Code subscription cap ("You've hit your session
-// limit · resets …"); the rest are transient 429-style throttling. All mean
-// Claude Code authenticated successfully, so they must not be read as auth
-// failures by the governor classifier or the auth probe.
+// Transient 429-style throttling that a retry can clear. Drives both the runtime
+// retry classifier and the auth probe message; all mean Claude Code authenticated,
+// so they must never surface as auth failures. The subscription cap is excluded —
+// see CLAUDE_SESSION_LIMIT_MARKERS — because retrying it only re-hits the cap.
 const CLAUDE_RATE_LIMIT_ERROR_MARKERS =
-  /\b429\b|rate limit|session limit|usage limit|too many requests|quota exceeded|overloaded|max_retries/i;
+  /\b429\b|rate limit|too many requests|quota exceeded|overloaded|max_retries/i;
 
-// The subscription cap is its own case: re-authenticating and retrying both fail
-// until reset, so it gets a distinct message from transient rate limiting.
+// The subscription cap ("You've hit your session limit · resets …") is the
+// non-retryable case: re-authenticating and retrying both fail until reset, so it
+// stays out of the retry classifier and gets its own probe message.
 const CLAUDE_SESSION_LIMIT_MARKERS = /session limit|usage limit/i;
 
 function describeClaudeProbeFailure(message: string): string {
