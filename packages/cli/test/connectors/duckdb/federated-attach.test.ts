@@ -59,6 +59,23 @@ describe('federatedAttachTarget', () => {
     expect(target).toBe('postgresql://localhost/books');
   });
 
+  it('adds sslmode=require to a postgres url when the member sets ssl', () => {
+    const target = federatedAttachTarget(
+      member({ driver: 'postgres', connection: { driver: 'postgres', url: 'env:PG_URL', ssl: true } }),
+      { PG_URL: 'postgresql://localhost/books' },
+    );
+    expect(target).toContain('sslmode=require');
+  });
+
+  it('keeps a stronger sslmode already pinned in a postgres url', () => {
+    const target = federatedAttachTarget(
+      member({ driver: 'postgres', connection: { driver: 'postgres', url: 'env:PG_URL', ssl: true } }),
+      { PG_URL: 'postgresql://localhost/books?sslmode=verify-full' },
+    );
+    expect(target).toContain('sslmode=verify-full');
+    expect(target).not.toContain('sslmode=require');
+  });
+
   it('builds a mysql connection string from host/database/user', () => {
     const target = federatedAttachTarget(
       member({

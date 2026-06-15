@@ -11,6 +11,17 @@ function kvKeyword(value: string): string {
   return /[\s'\\]/.test(value) ? `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'` : value;
 }
 
+function withRequiredSslMode(connectionString: string): string {
+  // DuckDB passes this libpq URL straight to the server, so an ssl:true member
+  // must carry sslmode in the URL itself; keep a stronger mode the URL already pins.
+  const url = new URL(connectionString);
+  if (url.searchParams.has('sslmode')) {
+    return connectionString;
+  }
+  url.searchParams.set('sslmode', 'require');
+  return url.toString();
+}
+
 function postgresAttachString(member: FederatedMember, env: NodeJS.ProcessEnv): string {
   const cfg = postgresPoolConfigFromConfig({
     connectionId: member.connectionId,
@@ -18,7 +29,7 @@ function postgresAttachString(member: FederatedMember, env: NodeJS.ProcessEnv): 
     env,
   });
   if (cfg.connectionString) {
-    return cfg.connectionString;
+    return cfg.ssl ? withRequiredSslMode(cfg.connectionString) : cfg.connectionString;
   }
   const parts: string[] = [];
   if (cfg.host) parts.push(`host=${kvKeyword(cfg.host)}`);
