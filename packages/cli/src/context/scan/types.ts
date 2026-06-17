@@ -8,7 +8,8 @@ export type KtxConnectionDriver =
   | 'snowflake'
   | 'mysql'
   | 'clickhouse'
-  | 'mongodb';
+  | 'mongodb'
+  | 'redshift';
 
 export type KtxScanMode = 'structural' | 'relationships' | 'enriched';
 
