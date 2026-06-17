@@ -48,15 +48,18 @@ describe('analytics SKILL.md SQL craft', () => {
       'Parse text-encoded numerics before doing math on them', // detect text-encoded numbers (spec 12)
       'Strip, scale, and cast in one early CTE', // parse/scale early (spec 12)
       'Confirm the parse covered every value', // failure-detecting cast coverage (spec 12)
+      'Answer every requested output', // multi-part/multi-output umbrella over identity+inputs (spec 14)
+      'Final completeness check', // re-read the question, confirm the projection covers all four facets (spec 14)
+      "Don't over-project", // match the request exactly, no padding columns (spec 14)
     ];
     for (const phrase of phrases) {
       expect(skill).toContain(phrase);
     }
   });
 
-  it('ships five dialect-agnostic worked examples: window-then-filter, multi-hop fan-out, panel-completeness spine, cumulative running total, text-encoded-numeric parse-and-scale', () => {
+  it('ships six dialect-agnostic worked examples: window-then-filter, multi-hop fan-out, panel-completeness spine, cumulative running total, text-encoded-numeric parse-and-scale, multi-part output completeness', () => {
     const sqlFences = skill.match(/```sql/g) ?? [];
-    expect(sqlFences).toHaveLength(5);
+    expect(sqlFences).toHaveLength(6);
     // window-then-filter (spec 07)
     expect(skill).toContain('WITH ranked AS');
     expect(skill).toContain('ROW_NUMBER() OVER');
@@ -76,6 +79,12 @@ describe('analytics SKILL.md SQL craft', () => {
     expect(skill).toContain('REPLACE(');
     expect(skill).toMatch(/AS DECIMAL\(/);
     expect(skill).toContain("LIKE '%K' THEN 1000");
+    // multi-part output completeness: a column per clause + entity identity, at grain (spec 14)
+    expect(skill).toContain('region_monthly');
+    expect(skill).toContain('MAX(rm.monthly_orders)');
+    expect(skill).toContain('MIN(rm.monthly_orders)');
+    expect(skill).toContain('MAX(rm.monthly_orders) - MIN(rm.monthly_orders)');
+    expect(skill).toContain('r.region_id, r.region_name');
   });
 
   it('leaves the existing interactive guidance intact', () => {
