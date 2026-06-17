@@ -106,8 +106,9 @@ GROUP BY r.region_id;
 -- de-duplicate a sum.
 ```
 
-**Window functions**
+**Ordering & aggregation determinism**
 - **Make the ordering deterministic.** Give every ranking/ordering window a complete tie-breaker by appending unique key column(s) to `ORDER BY`, so `RANK`/`ROW_NUMBER`/`LAG` results are stable instead of flickering between runs.
+- **Order inside string/array aggregation.** When concatenating rows into a delimited string or building an ordered array (`GROUP_CONCAT` / `string_agg` / `array_agg`), the element order is **undefined unless you specify it** — put an explicit `ORDER BY` on the aggregate. Be deliberate about collation: the default text sort is **binary/case-sensitive** (so `'BBQ'` sorts before `'Bacon'` because uppercase code points precede lowercase), which differs from a case-insensitive sort; pick the one the question implies and apply it consistently (`ORDER BY ... COLLATE NOCASE` for case-insensitive). *Why:* an unordered or differently-collated concatenation produces a string with the right elements in the wrong order — runnable but not matching the expected text.
 - **Filter after the window, not before**, for sequence / "first" / "most recent" / "since" questions: compute the window over the full partition, then keep the rows you want. A pre-filter shrinks the partition the window ranks over, so "first"/"most recent" is measured against the wrong set.
 
 ```sql
