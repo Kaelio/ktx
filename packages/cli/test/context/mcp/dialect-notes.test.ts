@@ -45,6 +45,9 @@ describe('per-dialect SQL notes', () => {
       expect(notes, `${dialect}: identifiers`).toContain('**Identifiers:**');
       expect(notes, `${dialect}: date/time`).toContain('**Date/time:**');
       expect(notes, `${dialect}: top-N`).toMatch(/\*\*Top-N/);
+      expect(notes, `${dialect}: series`).toMatch(/\*\*Series/);
+      expect(notes, `${dialect}: rolling window`).toMatch(/\*\*Rolling/);
+      expect(notes, `${dialect}: safe cast`).toMatch(/\*\*Safe cast/);
       expect(notes, `${dialect}: semi-structured`).toMatch(/\*\*(JSON|Semi-structured)/);
     }
   });

@@ -36,18 +36,27 @@ describe('analytics SKILL.md SQL craft', () => {
       'Macro vs micro average', // AVG(group) vs SUM/SUM
       'Top / highest / most / lowest', // winning row(s) only
       'For each X / per X / by X', // one row per X
+      'Complete the panel', // full-domain spine for "each/every/all" panels
+      'Default by additivity', // COALESCE 0 for additive, NULL otherwise
       'Keep the inputs to a derived value', // inputs alongside ratio
       'Expose identity, not just the label', // entity identifier
       'Diagnose empty results', // relax filters one at a time
+      'Cumulative / running total', // explicit unbounded-preceding frame (spec 11)
+      'Rolling window over calendar time', // calendar range, not row count (spec 11)
+      'minimum periods', // emit NULL until the window is full (spec 11)
+      'Period-over-period', // LAG + guarded growth ratio (spec 11)
+      'Parse text-encoded numerics before doing math on them', // detect text-encoded numbers (spec 12)
+      'Strip, scale, and cast in one early CTE', // parse/scale early (spec 12)
+      'Confirm the parse covered every value', // failure-detecting cast coverage (spec 12)
     ];
     for (const phrase of phrases) {
       expect(skill).toContain(phrase);
     }
   });
 
-  it('ships two dialect-agnostic worked examples: window-then-filter and multi-hop fan-out', () => {
+  it('ships five dialect-agnostic worked examples: window-then-filter, multi-hop fan-out, panel-completeness spine, cumulative running total, text-encoded-numeric parse-and-scale', () => {
     const sqlFences = skill.match(/```sql/g) ?? [];
-    expect(sqlFences).toHaveLength(2);
+    expect(sqlFences).toHaveLength(5);
     // window-then-filter (spec 07)
     expect(skill).toContain('WITH ranked AS');
     expect(skill).toContain('ROW_NUMBER() OVER');
@@ -55,6 +64,18 @@ describe('analytics SKILL.md SQL craft', () => {
     // multi-hop fan-out, pre-aggregated right side + count-only escape hatch (spec 09)
     expect(skill).toContain('WITH returned_orders AS');
     expect(skill).toContain('COUNT(DISTINCT o.order_id)');
+    // panel completeness: distinct-dimension spine -> LEFT JOIN -> COALESCE (spec 10)
+    expect(skill).toContain('SELECT DISTINCT region_id FROM regions');
+    expect(skill).toContain('LEFT JOIN');
+    expect(skill).toMatch(/COALESCE\(/);
+    // cumulative running total: explicit unbounded-preceding frame + complete tie-breaker (spec 11)
+    expect(skill).toContain('ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW');
+    expect(skill).toContain('ORDER BY txn_date, txn_id');
+    // text-encoded numeric: strip with chained REPLACE -> CASE suffix scale -> CAST (spec 12)
+    expect(skill).toContain('WITH parsed AS');
+    expect(skill).toContain('REPLACE(');
+    expect(skill).toMatch(/AS DECIMAL\(/);
+    expect(skill).toContain("LIKE '%K' THEN 1000");
   });
 
   it('leaves the existing interactive guidance intact', () => {
@@ -73,7 +94,24 @@ describe('analytics SKILL.md SQL craft', () => {
   });
 
   it('stays dialect-agnostic and free of any benchmark/grader reference', () => {
-    const banned = [/\bQUALIFY\b/i, /strftime/i, /julianday/i, /\bspider\b/i, /\bbenchmark\b/i, /\bgold\b/i, /\bgrader\b/i];
+    const banned = [
+      /\bQUALIFY\b/i,
+      /strftime/i,
+      /julianday/i,
+      /generate_series/i, // postgres-only series generator — belongs in dialect notes, not the skill
+      /GENERATE_DATE_ARRAY/i, // bigquery-only series generator — belongs in dialect notes, not the skill
+      /\bRANGE\b[\s\S]{0,40}\bINTERVAL\b/i, // inline dialect range-interval frame — belongs in dialect notes, not the skill
+      /\bSAFE_CAST\b/i, // bigquery failure-detecting cast — belongs in dialect notes, not the skill
+      /\bTRY_CAST\b/i, // snowflake/tsql failure-detecting cast — belongs in dialect notes, not the skill
+      /\bTRY_TO_NUMBER\b/i, // snowflake failure-detecting cast — belongs in dialect notes, not the skill
+      /\bREGEXP_REPLACE\b/i, // dialect regex strip — the portable strip is chained REPLACE
+      /toFloat64OrNull/i, // clickhouse failure-detecting cast — belongs in dialect notes, not the skill
+      /\bGLOB\b/i, // sqlite numeric-pattern guard — belongs in dialect notes, not the skill
+      /\bspider\b/i,
+      /\bbenchmark\b/i,
+      /\bgold\b/i,
+      /\bgrader\b/i,
+    ];
     for (const pattern of banned) {
       expect(skill).not.toMatch(pattern);
     }
