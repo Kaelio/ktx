@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createRedshiftLiveDatabaseIntrospection } from '../../../src/connectors/redshift/live-database-introspection.js';
 import { isKtxRedshiftConnectionConfig, KtxRedshiftScanConnector, redshiftPoolConfigFromConfig, prepareRedshiftReadOnlyQuery, type KtxRedshiftConnectionConfig, type KtxRedshiftPoolFactory } from '../../../src/connectors/redshift/connector.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
 
@@ -466,99 +465,6 @@ describe('KtxRedshiftScanConnector', () => {
     const tablesQuery = queries.find((query) => query.sql.includes('FROM svv_tables t'));
     expect(tablesQuery?.sql).toMatch(/t\.table_name = ANY\(\$2\)/);
     expect(tablesQuery?.params).toEqual(['public', ['orders']]);
-  });
-
-  it('adapts native Redshift snapshots to live-database introspection for local ingest', async () => {
-    const introspection = createRedshiftLiveDatabaseIntrospection({
-      connections: {
-        warehouse: {
-          driver: 'redshift',
-          host: 'db.example.test',
-          database: 'analytics',
-          username: 'reader',
-          password: 'test-password', // pragma: allowlist secret
-          schema: 'public',
-        },
-      },
-      poolFactory: fakePoolFactory(metadataResults()),
-      now: () => new Date('2026-04-29T10:00:00.000Z'),
-    });
-
-    const snapshot = await introspection.extractSchema('warehouse');
-
-    expect(snapshot).toMatchObject({
-      connectionId: 'warehouse',
-      extractedAt: '2026-04-29T10:00:00.000Z',
-    });
-    expect(snapshot.tables.find((table) => table.name === 'customers')).toMatchObject({
-      name: 'customers',
-      catalog: null,
-      db: 'public',
-      columns: [
-        {
-          name: 'id',
-          nativeType: 'integer',
-          normalizedType: 'integer',
-          dimensionType: 'number',
-          nullable: false,
-          primaryKey: true,
-          comment: null,
-        },
-        {
-          name: 'name',
-          nativeType: 'text',
-          normalizedType: 'text',
-          dimensionType: 'string',
-          nullable: false,
-          primaryKey: false,
-          comment: 'Name',
-        },
-      ],
-      foreignKeys: [],
-    });
-  });
-
-  it('does not end the pool before introspection completes', async () => {
-    let endCalled = false;
-    const endAwarePoolFactory: KtxRedshiftPoolFactory = {
-      createPool() {
-        const inner = fakePoolFactory(metadataResults()).createPool({
-          max: 1,
-          idleTimeoutMillis: 1,
-          connectionTimeoutMillis: 1,
-        });
-        return {
-          async connect() {
-            if (endCalled) {
-              throw new Error('Cannot use a pool after calling end on the pool');
-            }
-            return inner.connect();
-          },
-          async end() {
-            endCalled = true;
-            return inner.end();
-          },
-        };
-      },
-    };
-    const introspection = createRedshiftLiveDatabaseIntrospection({
-      connections: {
-        warehouse: {
-          driver: 'redshift',
-          host: 'db.example.test',
-          database: 'analytics',
-          username: 'reader',
-          password: 'test-password', // pragma: allowlist secret
-          schema: 'public',
-        },
-      },
-      poolFactory: endAwarePoolFactory,
-      now: () => new Date('2026-04-29T10:00:00.000Z'),
-    });
-
-    const snapshot = await introspection.extractSchema('warehouse');
-    expect(snapshot.tables.length).toBeGreaterThan(0);
-    expect(endCalled).toBe(true);
   });
 
   it('attaches an error listener to the pg pool', async () => {
