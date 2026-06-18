@@ -1,3 +1,5 @@
+import { stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { DEFAULT_METABASE_CLIENT_CONFIG, DefaultMetabaseConnectionClientFactory } from './context/ingest/adapters/metabase/client.js';
 import { DefaultLookerConnectionClientFactory } from './context/ingest/adapters/looker/factory.js';
 import type { LookerClient } from './context/ingest/adapters/looker/client.js';
@@ -9,6 +11,7 @@ import { testRepoConnection } from './context/ingest/repo-fetch.js';
 import { getDriverRegistration } from './context/connections/drivers.js';
 import { parseNotionConnectionConfig, resolveNotionConnectionAuthToken } from './context/connections/notion-config.js';
 import { resolveKtxConfigReference } from './context/core/config-reference.js';
+import { readGitRepoConnectionFields } from './context/project/git-connection-fields.js';
 import { type KtxLocalProject, loadKtxProject } from './context/project/project.js';
 import type { KtxScanConnector } from './context/scan/types.js';
 import type { KtxCliIo } from './index.js';
@@ -182,35 +185,14 @@ async function testNotionConnection(
   return { bot: describeNotionBot(bot) };
 }
 
-interface GitConnectionFields {
-  repoUrl: string;
-  authToken: string | null;
-}
-
-function extractGitConnectionFields(
-  project: KtxLocalProject,
-  connectionId: string,
-  driver: string,
-): GitConnectionFields {
-  const connection = project.config.connections[connectionId];
-  if (!connection) {
-    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
+async function checkLocalDbtSourceDir(projectDir: string, sourceDir: string): Promise<void> {
+  const stats = await stat(resolve(projectDir, sourceDir)).catch(() => null);
+  if (!stats) {
+    throw new Error(`dbt source_dir "${sourceDir}" does not exist`);
   }
-  const stringField = (value: unknown): string | null =>
-    typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-  const record =
-    driver === 'metricflow' && typeof connection.metricflow === 'object' && connection.metricflow !== null
-      ? (connection.metricflow as Record<string, unknown>)
-      : (connection as Record<string, unknown>);
-  const repoUrl = driver === 'dbt' ? stringField(record.repo_url) : stringField(record.repoUrl);
-  if (!repoUrl) {
-    const field = driver === 'dbt' ? 'repo_url' : 'repoUrl';
-    throw new Error(`Connection "${connectionId}" (driver: ${driver}) is missing ${field}`);
+  if (!stats.isDirectory()) {
+    throw new Error(`dbt source_dir "${sourceDir}" is not a directory`);
   }
-  const literalToken = stringField(record.auth_token);
-  const ref = stringField(record.auth_token_ref);
-  const resolvedRef = ref ? resolveKtxConfigReference(ref, process.env) : null;
-  return { repoUrl, authToken: literalToken ?? resolvedRef ?? null };
 }
 
 async function testGitRepoConnection(
@@ -218,13 +200,31 @@ async function testGitRepoConnection(
   connectionId: string,
   driver: string,
   runTest: TestRepoConnection,
-): Promise<{ repoUrl: string }> {
-  const { repoUrl, authToken } = extractGitConnectionFields(project, connectionId, driver);
-  const result = await runTest({ repoUrl, authToken });
+): Promise<{ location: string }> {
+  const connection = project.config.connections[connectionId];
+  if (!connection) {
+    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
+  }
+  const fields = readGitRepoConnectionFields(connection, driver);
+
+  // dbt setup writes source_dir for a local project and ingest consumes it, so a
+  // local source check must stand in for the remote repo reachability check.
+  if (fields.sourceDir) {
+    await checkLocalDbtSourceDir(project.projectDir, fields.sourceDir);
+    return { location: fields.sourceDir };
+  }
+
+  if (!fields.repoUrl) {
+    const field = driver === 'dbt' ? 'repo_url or source_dir' : 'repoUrl';
+    throw new Error(`Connection "${connectionId}" (driver: ${driver}) is missing ${field}`);
+  }
+  const resolvedRef = fields.authTokenRef ? resolveKtxConfigReference(fields.authTokenRef, process.env) : null;
+  const authToken = fields.authTokenLiteral ?? resolvedRef ?? null;
+  const result = await runTest({ repoUrl: fields.repoUrl, authToken });
   if (!result.ok) {
     throw new Error(`${driver} repository check failed: ${result.error}`);
   }
-  return { repoUrl };
+  return { location: fields.repoUrl };
 }
 
 interface DriverTestOutcome {
@@ -277,7 +277,7 @@ async function testConnectionByDriver(
       driver,
       deps.testRepoConnection ?? testRepoConnection,
     );
-    return { driver, detailKey: 'Repo', detailValue: result.repoUrl };
+    return { driver, detailKey: 'Repo', detailValue: result.location };
   }
 
   if (getDriverRegistration(driver)) {

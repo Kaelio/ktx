@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LookerClient } from '../src/context/ingest/adapters/looker/client.js';
@@ -468,6 +468,49 @@ describe('runKtxConnection', () => {
       authToken: null,
     });
     expect(io.stderr()).toContain('dbt repository check failed: fatal: auth failed');
+  });
+
+  it('tests a local dbt source_dir without a remote repo check', async () => {
+    const projectDir = join(tempDir, 'project');
+    await initKtxProject({ projectDir });
+    const sourceDir = join(tempDir, 'local-dbt');
+    await mkdir(sourceDir, { recursive: true });
+    await writeConnections(projectDir, {
+      'dbt-local': {
+        driver: 'dbt',
+        source_dir: sourceDir,
+      },
+    });
+    const testRepoConnection = vi.fn(async () => ({ ok: true as const }));
+    const io = makeIo();
+
+    await expect(
+      runKtxConnection({ command: 'test', projectDir, connectionId: 'dbt-local' }, io.io, { testRepoConnection }),
+    ).resolves.toBe(0);
+
+    expect(testRepoConnection).not.toHaveBeenCalled();
+    expect(io.stdout()).toContain('Connection test passed: dbt-local');
+    expect(io.stdout()).toContain(`Repo: ${sourceDir}`);
+  });
+
+  it('fails a dbt source_dir that does not exist', async () => {
+    const projectDir = join(tempDir, 'project');
+    await initKtxProject({ projectDir });
+    await writeConnections(projectDir, {
+      'dbt-local': {
+        driver: 'dbt',
+        source_dir: join(tempDir, 'missing-dbt'),
+      },
+    });
+    const testRepoConnection = vi.fn(async () => ({ ok: true as const }));
+    const io = makeIo();
+
+    await expect(
+      runKtxConnection({ command: 'test', projectDir, connectionId: 'dbt-local' }, io.io, { testRepoConnection }),
+    ).resolves.toBe(1);
+
+    expect(testRepoConnection).not.toHaveBeenCalled();
+    expect(io.stderr()).toContain('does not exist');
   });
 
   it('tests a LookML connection via testRepoConnection with camelCase repoUrl', async () => {
