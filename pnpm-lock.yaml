@@ -143,6 +143,9 @@ importers:
       '@commander-js/extra-typings':
         specifier: 14.0.0
         version: 14.0.0(commander@14.0.3)
+      '@duckdb/node-api':
+        specifier: 1.5.3-r.3
+        version: 1.5.3-r.3
       '@google-cloud/bigquery':
         specifier: ^8.3.1
         version: 8.3.1
@@ -746,6 +749,56 @@ packages:
 
   '@dabh/diagnostics@2.0.8':
     resolution: {integrity: sha512-R4MSXTVnuMzGD7bzHdW2ZhhdPC/igELENcq5IjEverBvq5hn1SXCWcsi6eSsdWP0/Ur+SItRRjAktmdoX/8R/Q==}
+
+  '@duckdb/node-api@1.5.3-r.3':
+    resolution: {integrity: sha512-FzuL6sevuFfEFwkgiUMRMUAj4TaVqV//L0oo2FVZ9s9oYpLpALF9qZyQv2ucclTNQZwDCkm8+e6yLMc6t8IjlA==}
+
+  '@duckdb/node-bindings-darwin-arm64@1.5.3-r.3':
+    resolution: {integrity: sha512-ttD8QBesgzHu7Sc4qouuIGLM7PWedLW8GvFbnZEyMqk24mQz1HWFgaT0ivw6nDRaDPUQLB9QnAOq8MZUh1zWHQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@duckdb/node-bindings-darwin-x64@1.5.3-r.3':
+    resolution: {integrity: sha512-Vp9MYtoYf6zUWHdCmHXwUcJlHq3YaaIeULWeSiPUM1hsDflLiZKXtz5i250Ulz03VsfWBjpO4wdM99sjjrYKkg==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@duckdb/node-bindings-linux-arm64-musl@1.5.3-r.3':
+    resolution: {integrity: sha512-IadRyx+98FEynKLXAk2MzReinFgduiDXgNd5Z8c5VKch+8FgBfqkEUYGOnBMMUPT8kuheKdLj23vpWXaCzOgoQ==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  '@duckdb/node-bindings-linux-arm64@1.5.3-r.3':
+    resolution: {integrity: sha512-3HLcrzQE83947JS51UVR7C9qnXQMltCOk4Dnhiz1CD+9u32DGLMgPTIIxclk7O+Q7EwfqzD8JV86Ud+LT1crcQ==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@duckdb/node-bindings-linux-x64-musl@1.5.3-r.3':
+    resolution: {integrity: sha512-5bulS16YhftXcarki4tvCufVslntpQDLOEF6RZ+FSMOGiv5d7SDXqklmVRy4DKW3C5ekgN7S2oYzuGL/ss9BuA==}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
+  '@duckdb/node-bindings-linux-x64@1.5.3-r.3':
+    resolution: {integrity: sha512-TXndAL0ZoETq17Df6wB+SUZjLGDmOsKuDSySxB+wy6sHfpRtbDgQibyXRlajVeUkRDwSzBFC5ymy16YG0Fl4iw==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@duckdb/node-bindings-win32-arm64@1.5.3-r.3':
+    resolution: {integrity: sha512-55Vu13S0jUudiAGlNWJd7UvlW1iKjwWehD8s93jBCNm0AdE/EJN4nz5rQ0IuWzPWXpMjAYuKu00yE7NdtbTyug==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@duckdb/node-bindings-win32-x64@1.5.3-r.3':
+    resolution: {integrity: sha512-rlOc9ltWQNHuDq99Ah8XaD80nN1ucrSK5AcH/7ibSp9ogX/jswPYlRVE7ODFJAjnQNf8bVvs++Mp+wyGvuG7ag==}
+    cpu: [x64]
+    os: [win32]
+
+  '@duckdb/node-bindings@1.5.3-r.3':
+    resolution: {integrity: sha512-Dphw1a9kKXZnCiWX1YCEAJsQ7WJQO2Ikgxy7m8jy0QVXqAwB9esr5NGsuEL3vMKL7velZHeZCjGOMnHZEcIsdg==}
 
   '@electric-sql/pglite-socket@0.1.5':
     resolution: {integrity: sha512-/RAye+3EPKfO9nY4tljzxXmkT7yIpFDm0L3F+c28b+Z6uxPOjy/Zz/QEHYHXcrfuUC88/a9S72EO0+3E0j97wQ==}
@@ -6754,6 +6807,47 @@ snapshots:
       '@so-ric/colorspace': 1.1.6
       enabled: 2.0.0
       kuler: 2.0.0
+
+  '@duckdb/node-api@1.5.3-r.3':
+    dependencies:
+      '@duckdb/node-bindings': 1.5.3-r.3
+
+  '@duckdb/node-bindings-darwin-arm64@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings-darwin-x64@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings-linux-arm64-musl@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings-linux-arm64@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings-linux-x64-musl@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings-linux-x64@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings-win32-arm64@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings-win32-x64@1.5.3-r.3':
+    optional: true
+
+  '@duckdb/node-bindings@1.5.3-r.3':
+    dependencies:
+      detect-libc: 2.1.2
+    optionalDependencies:
+      '@duckdb/node-bindings-darwin-arm64': 1.5.3-r.3
+      '@duckdb/node-bindings-darwin-x64': 1.5.3-r.3
+      '@duckdb/node-bindings-linux-arm64': 1.5.3-r.3
+      '@duckdb/node-bindings-linux-arm64-musl': 1.5.3-r.3
+      '@duckdb/node-bindings-linux-x64': 1.5.3-r.3
+      '@duckdb/node-bindings-linux-x64-musl': 1.5.3-r.3
+      '@duckdb/node-bindings-win32-arm64': 1.5.3-r.3
+      '@duckdb/node-bindings-win32-x64': 1.5.3-r.3
 
   '@electric-sql/pglite-socket@0.1.5(@electric-sql/pglite@0.4.5)':
     dependencies:

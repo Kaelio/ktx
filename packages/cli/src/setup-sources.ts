@@ -20,6 +20,7 @@ import type { KtxCliIo } from './cli-runtime.js';
 import { createCliSpinner, errorMessage, writePrefixedLines } from './clack.js';
 import { pickNotionRootPages } from './notion-page-picker.js';
 import { runKtxSourceMapping } from './source-mapping.js';
+import { assertSafeConnectionId } from './context/sl/source-files.js';
 import {
   runConnectionSetupWithRecovery,
   type ConfigureResult,
@@ -204,12 +205,6 @@ async function promptText(
   options: { message: string; placeholder?: string; initialValue?: string },
 ): Promise<string | undefined> {
   return await prompts.text({ ...options, message: withTextInputNavigation(options.message) });
-}
-
-function assertSafeConnectionId(connectionId: string): void {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(connectionId)) {
-    throw new Error(`Unsafe connection id: ${connectionId}`);
-  }
 }
 
 function credentialRef(value: string | undefined, label: string): string {

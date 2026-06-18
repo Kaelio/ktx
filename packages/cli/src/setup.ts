@@ -80,6 +80,7 @@ export type KtxSetupArgs =
       agents: boolean;
       target?: KtxAgentTarget;
       agentScope?: KtxAgentScope;
+      installRoot?: string;
       skipAgents?: boolean;
       inputMode: 'auto' | 'disabled';
       debug?: boolean;
@@ -919,6 +920,7 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
             agents: true,
             ...(args.target ? { target: args.target } : {}),
             scope: args.agentScope ?? 'project',
+            ...(args.installRoot ? { installRoot: args.installRoot } : {}),
             mode: 'mcp',
             skipAgents: false,
             showNextActions: agentsRequested,

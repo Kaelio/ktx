@@ -16,6 +16,8 @@ export interface LocalConnectionInfo {
   id: string;
   name: string;
   connectionType: string;
+  members?: string[];
+  hint?: string;
 }
 
 const DRIVER_TO_CONNECTION_TYPE: Record<string, ConnectionType> = {

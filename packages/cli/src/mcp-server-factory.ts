@@ -8,7 +8,7 @@ import type { KtxCliIo } from './cli-runtime.js';
 import { resolveProjectEmbeddingProvider } from './embedding-resolution.js';
 import { createKtxCliIngestQueryExecutor } from './ingest-query-executor.js';
 import { createKtxCliScanConnector } from './local-scan-connectors.js';
-import { createManagedPythonSemanticLayerComputePort } from './managed-python-command.js';
+import { createLazyManagedPythonSemanticLayerComputePort } from './managed-python-command.js';
 import { resolveSqlAnalysisPort } from './managed-python-http.js';
 
 function noopMcpIo(): KtxCliIo {
@@ -26,7 +26,7 @@ export async function createKtxMcpServerFactory(input: {
 }): Promise<() => McpServer> {
   const io = input.io ?? noopMcpIo();
   const queryExecutor = createKtxCliIngestQueryExecutor(input.project);
-  const semanticLayerCompute = createManagedPythonSemanticLayerComputePort({
+  const semanticLayerCompute = createLazyManagedPythonSemanticLayerComputePort({
     cliVersion: input.cliVersion,
     installPolicy: 'auto',
     io,

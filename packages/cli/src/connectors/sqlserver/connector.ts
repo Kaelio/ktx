@@ -25,10 +25,8 @@ import {
   type KtxTableSampleInput,
   type KtxTableSampleResult,
 } from '../../context/scan/types.js';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
 import sql from 'mssql';
+import { resolveStringReference } from '../shared/string-reference.js';
 
 export interface KtxSqlServerConnectionConfig {
   driver?: string;
@@ -206,18 +204,6 @@ function stringConfigValue(
 ): string | undefined {
   const value = connection?.[key];
   return typeof value === 'string' && value.trim().length > 0 ? resolveStringReference(value.trim(), env) : undefined;
-}
-
-function resolveStringReference(value: string, env: NodeJS.ProcessEnv): string {
-  if (value.startsWith('env:')) {
-    return env[value.slice('env:'.length)] ?? '';
-  }
-  if (value.startsWith('file:')) {
-    const rawPath = value.slice('file:'.length);
-    const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(1)) : rawPath;
-    return readFileSync(path, 'utf-8').trim();
-  }
-  return value;
 }
 
 function parseSqlServerUrl(url: string): Partial<KtxSqlServerConnectionConfig> {

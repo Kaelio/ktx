@@ -1,6 +1,6 @@
 [project]
 name = "ktx-daemon"
-version = "0.11.0"
+version = "0.12.0"
 description = "Portable compute package for ktx semantic-layer operations"
 readme = "README.md"
 requires-python = ">=3.13"

@@ -89,6 +89,7 @@ function shouldShowSetupEntryMenu(
     target?: string;
     global?: boolean;
     local?: boolean;
+    installDir?: string;
     skipAgents?: boolean;
     yes?: boolean;
     input?: boolean;
@@ -159,6 +160,7 @@ function shouldShowSetupEntryMenu(
     'target',
     'global',
     'local',
+    'installDir',
     'skipAgents',
     'yes',
     'input',
@@ -217,6 +219,10 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
     )
     .option('--global', 'Install agent integration into the global target scope', false)
     .option('--local', 'Install Claude Code MCP config into the private per-project ~/.claude.json scope', false)
+    .option(
+      '--install-dir <path>',
+      'Directory to install project-scoped agent config into (defaults to the ktx project directory)',
+    )
     .addOption(new Option('--skip-agents', 'Leave agent integration incomplete for now').hideHelp().default(false))
     .option('--yes', 'Accept project creation and runtime install defaults where setup confirms', false)
     .option('--no-input', 'Disable interactive terminal input')
@@ -394,6 +400,16 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
       context.setExitCode(1);
       return;
     }
+    if (options.installDir && (options.global || options.local)) {
+      context.io.stderr.write('Choose either --install-dir or a scope flag (--global / --local), not both.\n');
+      context.setExitCode(1);
+      return;
+    }
+    if (options.installDir && options.target === 'claude-desktop') {
+      context.io.stderr.write('--install-dir does not apply to --target claude-desktop, which is always global.\n');
+      context.setExitCode(1);
+      return;
+    }
 
     const creatingDatabaseConnection = options.database.length > 0 || options.databaseUrl !== undefined;
     if (creatingDatabaseConnection && options.databaseConnectionId.length > 1) {
@@ -412,6 +428,7 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
       agents: options.agents === true,
       ...(options.target ? { target: options.target } : {}),
       agentScope: resolvedAgentScope,
+      ...(options.installDir ? { installRoot: options.installDir } : {}),
       skipAgents: options.skipAgents === true,
       inputMode: options.input === false ? 'disabled' : 'auto',
       ...(debugEnabled ? { debug: true } : {}),

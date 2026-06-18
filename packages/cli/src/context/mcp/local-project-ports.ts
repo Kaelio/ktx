@@ -1,11 +1,16 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
-import { KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
-import { localConnectionInfoFromConfig } from '../../context/connections/local-warehouse-descriptor.js';
+import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
+import { executeProjectReadOnlySql } from '../../context/connections/project-sql-executor.js';
+import { FEDERATED_CONNECTION_ID, federatedConnectionListing } from '../../context/connections/federation.js';
+import { resolveConfiguredConnection } from '../../context/connections/resolve-connection.js';
+import {
+  type LocalConnectionInfo,
+  localConnectionInfoFromConfig,
+} from '../../context/connections/local-warehouse-descriptor.js';
 import type { KtxEmbeddingPort } from '../../context/core/embedding.js';
 import type { KtxSemanticLayerComputePort } from '../../context/daemon/semantic-layer-compute.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { createKtxEntityDetailsService } from '../../context/scan/entity-details.js';
-import type { KtxScanConnector } from '../../context/scan/types.js';
 import type { LocalScanMcpOptions } from '../../context/scan/local-scan.js';
 import { createKtxDiscoverDataService } from '../../context/search/discover.js';
 import { sqlAnalysisDialectForDriver } from '../../context/sql-analysis/dialect.js';
@@ -25,12 +30,6 @@ interface CreateLocalProjectMcpContextPortsOptions {
   embeddingService: KtxEmbeddingPort | null;
 }
 
-async function cleanupConnector(connector: KtxScanConnector | null): Promise<void> {
-  if (connector?.cleanup) {
-    await connector.cleanup();
-  }
-}
-
 async function executeValidatedReadOnlySql(
   project: KtxLocalProject,
   options: CreateLocalProjectMcpContextPortsOptions,
@@ -38,61 +37,57 @@ async function executeValidatedReadOnlySql(
   onProgress?: KtxMcpProgressCallback,
 ): Promise<KtxSqlExecutionResponse> {
   await onProgress?.({ progress: 0, message: 'Validating SQL' });
-  const connectionId = assertSafeConnectionId(input.connectionId);
-  const connection = project.config.connections[connectionId];
-  if (!connection) {
-    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
-  }
   if (!options.sqlAnalysis) {
     throw new Error('sql_execution requires parser-backed SQL validation.');
-  }
-  const validation = await options.sqlAnalysis.validateReadOnly(input.sql, sqlAnalysisDialectForDriver(connection.driver));
-  if (!validation.ok) {
-    throw new Error(validation.error ?? 'SQL is not read-only.');
   }
   const createConnector = options.localScan?.createConnector;
   if (!createConnector) {
     throw new Error('sql_execution requires a local scan connector factory.');
   }
 
-  let connector: KtxScanConnector | null = null;
-  try {
-    connector = await createConnector(connectionId);
-    if (!connector.capabilities.readOnlySql || !connector.executeReadOnly) {
-      throw new Error(`Connection "${connectionId}" does not support read-only SQL execution.`);
-    }
-    await onProgress?.({ progress: 0.3, message: 'Executing' });
-    const result = await connector
-      .executeReadOnly(
-        {
-          connectionId,
-          sql: input.sql,
-          maxRows: input.maxRows,
-        },
-        { runId: 'mcp-sql-execution' },
-      )
-      .catch((error: unknown) => {
-        // A warehouse/driver rejection (e.g. the agent's SQL failed to compile)
-        // is a surfaced operational outcome, not a ktx fault: mark it expected
-        // while preserving the warehouse's own diagnostics. A native JS error
-        // (TypeError, etc.) signals a bug in connector code — let it propagate
-        // unchanged so Error Tracking still sees it.
-        if (isNativeProgrammingFault(error)) {
-          throw error;
-        }
-        throw new KtxQueryError(error instanceof Error ? error.message : String(error), { cause: error });
-      });
-    const response = {
-      headers: result.headers,
-      ...(result.headerTypes ? { headerTypes: result.headerTypes } : {}),
-      rows: result.rows,
-      rowCount: result.rowCount ?? result.rows.length,
-    };
-    await onProgress?.({ progress: 1, message: `Fetched ${response.rowCount} rows` });
-    return response;
-  } finally {
-    await cleanupConnector(connector);
+  const isFederated = input.connectionId === FEDERATED_CONNECTION_ID;
+  const connectionId = isFederated ? input.connectionId : assertSafeConnectionId(input.connectionId);
+  const connection = isFederated ? undefined : resolveConfiguredConnection(project.config, connectionId);
+
+  const dialect = sqlAnalysisDialectForDriver(isFederated ? 'duckdb' : connection!.driver);
+  const validation = await options.sqlAnalysis.validateReadOnly(input.sql, dialect);
+  if (!validation.ok) {
+    // A read-only guard rejecting the agent's SQL is an expected outcome, not a
+    // ktx fault: classify it so reportException keeps it out of Error Tracking.
+    throw new KtxQueryError(validation.error ?? 'SQL is not read-only.');
   }
+
+  await onProgress?.({ progress: 0.3, message: 'Executing' });
+  const result = await executeProjectReadOnlySql({
+    project,
+    input: {
+      connectionId,
+      projectDir: project.projectDir,
+      connection,
+      sql: input.sql,
+      maxRows: input.maxRows,
+    },
+    createConnector,
+    runId: 'mcp-sql-execution',
+  }).catch((error: unknown) => {
+    // A warehouse/driver rejection (e.g. the agent's SQL failed to compile) is a
+    // surfaced operational outcome, not a ktx fault: mark it expected while
+    // preserving the warehouse's own diagnostics. A native JS error (TypeError,
+    // etc.) signals a bug in connector code — let it propagate unchanged so Error
+    // Tracking still sees it.
+    if (isNativeProgrammingFault(error) || error instanceof KtxExpectedError) {
+      throw error;
+    }
+    throw new KtxQueryError(error instanceof Error ? error.message : String(error), { cause: error });
+  });
+  const response = {
+    headers: result.headers,
+    ...(result.headerTypes ? { headerTypes: result.headerTypes } : {}),
+    rows: result.rows,
+    rowCount: result.rowCount ?? result.rows.length,
+  };
+  await onProgress?.({ progress: 1, message: `Fetched ${response.rowCount} rows` });
+  return response;
 }
 
 export function createLocalProjectMcpContextPorts(
@@ -103,12 +98,21 @@ export function createLocalProjectMcpContextPorts(
   const ports: KtxMcpContextPorts = {
     connections: {
       async list() {
-        return Object.entries(project.config.connections)
+        const configured = Object.entries(project.config.connections)
           .map(([id, config]) => localConnectionInfoFromConfig(id, config))
-          .filter(
-            (connection): connection is { id: string; name: string; connectionType: string } => connection !== null,
-          )
+          .filter((connection): connection is LocalConnectionInfo => connection !== null)
           .sort((a, b) => a.id.localeCompare(b.id));
+        const federated = federatedConnectionListing(project.config.connections, project.projectDir);
+        if (federated) {
+          configured.push({
+            id: federated.id,
+            name: federated.id,
+            connectionType: 'DUCKDB',
+            members: federated.members,
+            hint: federated.hint,
+          });
+        }
+        return configured;
       },
     },
     knowledge: {

@@ -48,6 +48,11 @@ directory. Use it from any directory to generate editor or agent schema files.
 | `stop` | Stop the **ktx** daemon |
 | `status` | Show managed Python runtime status and readiness checks |
 
+`install` is self-contained: **ktx** downloads its own pinned, checksum-verified
+`uv` build under the runtime root and uses it to provision Python and the
+runtime wheel. Nothing needs to be installed on `PATH` first; the host only
+needs network access to `github.com` during the first install.
+
 ## `admin runtime` Options
 
 | Flag | Description | Default |

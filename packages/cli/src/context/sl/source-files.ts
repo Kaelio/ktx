@@ -23,7 +23,15 @@ function assertSafePathToken(kind: string, value: string): string {
   return value;
 }
 
+/** @internal */
+export function isReservedConnectionId(connectionId: string): boolean {
+  return connectionId.startsWith('_ktx_');
+}
+
 export function assertSafeConnectionId(connectionId: string): string {
+  if (isReservedConnectionId(connectionId)) {
+    throw new Error(`Connection id "${connectionId}" uses the reserved "_ktx_" prefix.`);
+  }
   if (!isSafeConnectionId(connectionId)) {
     throw new Error(`Unsafe connection id: ${connectionId}`);
   }

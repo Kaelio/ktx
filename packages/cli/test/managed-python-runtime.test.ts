@@ -1,19 +1,61 @@
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { strToU8, zipSync } from 'fflate';
+import { dirname, join } from 'node:path';
+import { gzipSync, strToU8, zipSync } from 'fflate';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { KtxExpectedError } from '../src/errors.js';
 import {
-  MISSING_UV_RUNTIME_INSTALL_MESSAGE,
   doctorManagedPythonRuntime,
+  ensureManagedUv,
   installManagedPythonRuntime,
   managedPythonDaemonLayout,
   managedPythonRuntimeLayout,
+  managedUvPath,
   readManagedPythonRuntimeStatus,
   verifyRuntimeAsset,
   type ManagedPythonRuntimeExec,
+  type ManagedUvRelease,
 } from '../src/managed-python-runtime.js';
+import type { ManagedUvPlatformKey } from '../src/managed-uv-release.js';
+
+async function placeFakeUv(runtimeRoot: string): Promise<string> {
+  const uvPath = managedUvPath({ runtimeRoot });
+  await mkdir(dirname(uvPath), { recursive: true });
+  await writeFile(uvPath, '#!/bin/sh\n');
+  return uvPath;
+}
+
+function tarball(entries: Record<string, Uint8Array>): Uint8Array {
+  const blocks: Uint8Array[] = [];
+  for (const [name, data] of Object.entries(entries)) {
+    const header = new Uint8Array(512);
+    header.set(strToU8(name), 0);
+    header.set(strToU8('0000755\0'), 100);
+    header.set(strToU8(`${data.length.toString(8).padStart(11, '0')}\0`), 124);
+    blocks.push(header);
+    const padded = new Uint8Array(Math.ceil(data.length / 512) * 512);
+    padded.set(data);
+    blocks.push(padded);
+  }
+  blocks.push(new Uint8Array(1024));
+  const out = new Uint8Array(blocks.reduce((total, block) => total + block.length, 0));
+  let offset = 0;
+  for (const block of blocks) {
+    out.set(block, offset);
+    offset += block.length;
+  }
+  return out;
+}
+
+function releaseFor(file: string, contents: Uint8Array, key: ManagedUvPlatformKey): ManagedUvRelease {
+  return {
+    version: '9.9.9-test',
+    artifacts: {
+      [key]: { file, sha256: createHash('sha256').update(contents).digest('hex') },
+    },
+  };
+}
 
 function runtimeWheelContents(input: { label?: string; requiresPython?: string | null } = {}): Buffer {
   const label = input.label ?? 'runtime-wheel';
@@ -246,10 +288,11 @@ describe('installManagedPythonRuntime', () => {
 
   it('creates a venv, installs the core wheel, and writes a manifest', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const commands: Array<{ command: string; args: string[] }> = [];
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => {
       commands.push({ command, args });
-      return { stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.9.5\n' : '', stderr: '' };
+      return { stdout: command === uvPath && args[0] === '--version' ? 'uv 0.9.5\n' : '', stderr: '' };
     });
 
     const result = await installManagedPythonRuntime({
@@ -262,11 +305,11 @@ describe('installManagedPythonRuntime', () => {
 
     expect(result.status).toBe('installed');
     expect(commands).toEqual([
-      { command: 'uv', args: ['--version'] },
-      { command: 'uv', args: ['python', 'install', '3.13'] },
-      { command: 'uv', args: ['venv', '--python', '3.13', result.layout.venvDir] },
+      { command: uvPath, args: ['--version'] },
+      { command: uvPath, args: ['python', 'install', '3.13'] },
+      { command: uvPath, args: ['venv', '--python', '3.13', result.layout.venvDir] },
       {
-        command: 'uv',
+        command: uvPath,
         args: ['pip', 'install', '--python', result.layout.pythonPath, result.asset.wheelPath],
       },
     ]);
@@ -283,10 +326,11 @@ describe('installManagedPythonRuntime', () => {
 
   it('disables repo uv config for managed runtime uv commands', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const commands: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args, options) => {
       commands.push({ command, args, env: options?.env });
-      return { stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.11.13\n' : '', stderr: '' };
+      return { stdout: command === uvPath && args[0] === '--version' ? 'uv 0.11.13\n' : '', stderr: '' };
     });
 
     await installManagedPythonRuntime({
@@ -299,19 +343,20 @@ describe('installManagedPythonRuntime', () => {
     });
 
     expect(commands.map((call) => [call.command, call.args[0], call.env?.UV_NO_CONFIG, call.env?.PATH])).toEqual([
-      ['uv', '--version', '1', '/opt/homebrew/bin'],
-      ['uv', 'python', '1', '/opt/homebrew/bin'],
-      ['uv', 'venv', '1', '/opt/homebrew/bin'],
-      ['uv', 'pip', '1', '/opt/homebrew/bin'],
+      [uvPath, '--version', '1', '/opt/homebrew/bin'],
+      [uvPath, 'python', '1', '/opt/homebrew/bin'],
+      [uvPath, 'venv', '1', '/opt/homebrew/bin'],
+      [uvPath, 'pip', '1', '/opt/homebrew/bin'],
     ]);
   });
 
   it('installs the local-embeddings extra when requested', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'embedding-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const commands: Array<{ command: string; args: string[] }> = [];
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => {
       commands.push({ command, args });
-      return { stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.9.5\n' : '', stderr: '' };
+      return { stdout: command === uvPath && args[0] === '--version' ? 'uv 0.9.5\n' : '', stderr: '' };
     });
 
     const result = await installManagedPythonRuntime({
@@ -323,38 +368,72 @@ describe('installManagedPythonRuntime', () => {
     });
 
     expect(commands.at(-1)).toEqual({
-      command: 'uv',
+      command: uvPath,
       args: ['pip', 'install', '--python', result.layout.pythonPath, `${result.asset.wheelPath}[local-embeddings]`],
     });
     const manifest = JSON.parse(await readFile(result.layout.manifestPath, 'utf8')) as { features: string[] };
     expect(manifest.features).toEqual(['core', 'local-embeddings']);
   });
 
-  it('fails with the hard-prerequisite message when uv is missing', async () => {
+  it('attempts the pinned uv download from github.com and rejects checksum mismatches', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
-    const commands: Array<{ command: string; args: string[] }> = [];
-    const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => {
-      commands.push({ command, args });
-      throw new Error('spawn uv ENOENT');
+    const runtimeRoot = join(tempDir, 'runtime');
+    const archive = gzipSync(tarball({ 'uv-test/uv': strToU8('#!/bin/sh\necho uv\n') }));
+    const fetchUvArtifact = vi.fn(async () => archive);
+    const exec: ManagedPythonRuntimeExec = vi.fn(async () => ({ stdout: 'uv 9.9.9\n', stderr: '' }));
+
+    const error = await installManagedPythonRuntime({
+      cliVersion: '0.2.0',
+      runtimeRoot,
+      assetDir,
+      features: ['core'],
+      exec,
+      fetchUvArtifact,
+    }).catch((caught: unknown) => caught);
+
+    expect(fetchUvArtifact).toHaveBeenCalledTimes(1);
+    expect(fetchUvArtifact).toHaveBeenCalledWith(
+      expect.stringMatching(/^https:\/\/github\.com\/astral-sh\/uv\/releases\/download\//),
+    );
+    expect(error).toBeInstanceOf(KtxExpectedError);
+    expect((error as Error).message).toContain('failed checksum verification');
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('fails with download guidance and preserves the existing runtime when uv cannot be fetched', async () => {
+    const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const runtimeRoot = join(tempDir, 'runtime');
+    const exec: ManagedPythonRuntimeExec = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    const fetchUvArtifact = vi.fn(async () => {
+      throw new Error('getaddrinfo ENOTFOUND github.com');
     });
+    const survivingRuntimeFile = join(runtimeRoot, '0.2.0', 'install.log');
+    await mkdir(dirname(survivingRuntimeFile), { recursive: true });
+    await writeFile(survivingRuntimeFile, 'stale runtime contents\n');
 
-    await expect(
-      installManagedPythonRuntime({
-        cliVersion: '0.2.0',
-        runtimeRoot: join(tempDir, 'runtime'),
-        assetDir,
-        features: ['core'],
-        exec,
-      }),
-    ).rejects.toThrow(MISSING_UV_RUNTIME_INSTALL_MESSAGE);
+    const error = await installManagedPythonRuntime({
+      cliVersion: '0.2.0',
+      runtimeRoot,
+      assetDir,
+      features: ['core'],
+      exec,
+      fetchUvArtifact,
+    }).catch((caught: unknown) => caught);
 
-    expect(commands).toEqual([{ command: 'uv', args: ['--version'] }]);
+    // KtxExpectedError keeps this user-environment outcome out of Error Tracking.
+    expect(error).toBeInstanceOf(KtxExpectedError);
+    expect((error as Error).message).toContain('could not download uv');
+    expect((error as Error).message).toContain('ktx admin runtime install --yes');
+    expect(exec).not.toHaveBeenCalled();
+    // A failed uv acquisition must not wipe whatever runtime is already on disk.
+    await expect(readFile(survivingRuntimeFile, 'utf8')).resolves.toContain('stale');
   });
 
   it('reuses an existing compatible runtime when force is false', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => ({
-      stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.9.5\n' : '',
+      stdout: command === uvPath && args[0] === '--version' ? 'uv 0.9.5\n' : '',
       stderr: '',
     }));
 
@@ -383,14 +462,15 @@ describe('installManagedPythonRuntime', () => {
 
   it('keeps failed install logs in the versioned runtime directory', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => {
-      if (command === 'uv' && args[0] === 'venv') {
+      if (command === uvPath && args[0] === 'venv') {
         throw Object.assign(new Error('uv venv failed'), {
           stdout: 'creating\n',
           stderr: '× No solution found\n╰─▶ current Python version (3.12.3) does not satisfy Python>=3.13\n',
         });
       }
-      return { stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.9.5\n' : '', stderr: '' };
+      return { stdout: command === uvPath && args[0] === '--version' ? 'uv 0.9.5\n' : '', stderr: '' };
     });
 
     await expect(
@@ -404,8 +484,95 @@ describe('installManagedPythonRuntime', () => {
     ).rejects.toThrow(/current Python version \(3\.12\.3\) does not satisfy Python>=3\.13/);
 
     const log = await readFile(join(tempDir, 'runtime', '0.2.0', 'install.log'), 'utf8');
-    expect(log).toContain('$ uv venv --python 3.13');
+    expect(log).toContain(`$ ${uvPath} venv --python 3.13`);
     expect(log).toContain('current Python version (3.12.3) does not satisfy Python>=3.13');
+  });
+});
+
+describe('ensureManagedUv', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ktx-managed-uv-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('downloads, verifies, and extracts uv from a tar.gz artifact, then reuses the cached binary', async () => {
+    const binary = strToU8('#!/bin/sh\necho uv\n');
+    const archive = gzipSync(tarball({ 'uv-test/': new Uint8Array(0), 'uv-test/uvx': strToU8('x'), 'uv-test/uv': binary }));
+    const release = releaseFor('uv-test.tar.gz', archive, 'linux-x64');
+    const fetchArtifact = vi.fn(async () => archive);
+
+    const uvPath = await ensureManagedUv({
+      platform: 'linux',
+      arch: 'x64',
+      runtimeRoot: join(tempDir, 'runtime'),
+      fetchArtifact,
+      release,
+    });
+
+    expect(uvPath).toBe(join(tempDir, 'runtime', 'uv', '9.9.9-test', 'uv'));
+    await expect(readFile(uvPath, 'utf8')).resolves.toBe('#!/bin/sh\necho uv\n');
+
+    const again = await ensureManagedUv({
+      platform: 'linux',
+      arch: 'x64',
+      runtimeRoot: join(tempDir, 'runtime'),
+      fetchArtifact,
+      release,
+    });
+    expect(again).toBe(uvPath);
+    expect(fetchArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it('extracts uv.exe from a zip artifact on Windows', async () => {
+    const archive = zipSync({ 'uv.exe': strToU8('MZ-uv'), 'uvx.exe': strToU8('MZ-uvx') });
+    const release = releaseFor('uv-test.zip', archive, 'win32-x64');
+
+    const uvPath = await ensureManagedUv({
+      platform: 'win32',
+      arch: 'x64',
+      runtimeRoot: join(tempDir, 'runtime'),
+      fetchArtifact: vi.fn(async () => archive),
+      release,
+    });
+
+    expect(uvPath).toBe(join(tempDir, 'runtime', 'uv', '9.9.9-test', 'uv.exe'));
+    await expect(readFile(uvPath, 'utf8')).resolves.toBe('MZ-uv');
+  });
+
+  it('rejects an artifact whose checksum does not match the pin', async () => {
+    const archive = gzipSync(tarball({ 'uv-test/uv': strToU8('uv') }));
+    const release = releaseFor('uv-test.tar.gz', archive, 'linux-x64');
+    release.artifacts['linux-x64']!.sha256 = 'b'.repeat(64);
+
+    const error = await ensureManagedUv({
+      platform: 'linux',
+      arch: 'x64',
+      runtimeRoot: join(tempDir, 'runtime'),
+      fetchArtifact: vi.fn(async () => archive),
+      release,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(KtxExpectedError);
+    expect((error as Error).message).toContain('failed checksum verification');
+  });
+
+  it('fails with manual-placement guidance on platforms without a pinned artifact', async () => {
+    const error = await ensureManagedUv({
+      platform: 'sunos',
+      arch: 'x64',
+      runtimeRoot: join(tempDir, 'runtime'),
+      fetchArtifact: vi.fn(),
+      release: { version: '9.9.9-test', artifacts: {} },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(KtxExpectedError);
+    expect((error as Error).message).toContain('does not bundle uv for sunos-x64');
+    expect((error as Error).message).toContain(join(tempDir, 'runtime', 'uv', '9.9.9-test', 'uv'));
   });
 });
 
@@ -433,8 +600,9 @@ describe('readManagedPythonRuntimeStatus', () => {
 
   it('reports ready when manifest and executables exist', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => ({
-      stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.9.5\n' : '',
+      stdout: command === uvPath && args[0] === '--version' ? 'uv 0.9.5\n' : '',
       stderr: '',
     }));
     const install = await installManagedPythonRuntime({
@@ -460,8 +628,9 @@ describe('readManagedPythonRuntimeStatus', () => {
 
   it('reports broken when an executable is missing', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => ({
-      stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.9.5\n' : '',
+      stdout: command === uvPath && args[0] === '--version' ? 'uv 0.9.5\n' : '',
       stderr: '',
     }));
     await installManagedPythonRuntime({
@@ -496,8 +665,9 @@ describe('doctorManagedPythonRuntime', () => {
 
   it('checks uv, bundled assets, and installed runtime status', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
+    const uvPath = await placeFakeUv(join(tempDir, 'runtime'));
     const exec: ManagedPythonRuntimeExec = vi.fn(async (command, args) => ({
-      stdout: command === 'uv' && args[0] === '--version' ? 'uv 0.9.5\n' : '',
+      stdout: command === uvPath && args[0] === '--version' ? 'uv 0.9.5\n' : '',
       stderr: '',
     }));
 
@@ -513,28 +683,27 @@ describe('doctorManagedPythonRuntime', () => {
       ['asset', 'pass'],
       ['runtime', 'fail'],
     ]);
+    expect(checks[0]?.detail).toBe(`uv 0.9.5 (managed: ${uvPath})`);
     expect(checks[2]?.fix).toBe('Run: ktx admin runtime install --yes');
   });
 
-  it('reports uv as a hard prerequisite when uv is missing', async () => {
+  it('fails the uv check with download guidance when uv cannot be acquired', async () => {
     const { assetDir } = await writeAsset(tempDir, { label: 'core-wheel' });
-    const exec: ManagedPythonRuntimeExec = vi.fn(async () => {
-      throw new Error('spawn uv ENOENT');
-    });
+    const exec: ManagedPythonRuntimeExec = vi.fn(async () => ({ stdout: '', stderr: '' }));
 
     const checks = await doctorManagedPythonRuntime({
       cliVersion: '0.2.0',
       runtimeRoot: join(tempDir, 'runtime'),
       assetDir,
       exec,
+      fetchUvArtifact: vi.fn(async () => {
+        throw new Error('getaddrinfo ENOTFOUND github.com');
+      }),
     });
 
-    expect(checks[0]).toEqual({
-      id: 'uv',
-      label: 'uv',
-      status: 'fail',
-      detail: MISSING_UV_RUNTIME_INSTALL_MESSAGE,
-      fix: 'Install uv, make sure it is on PATH, and run: ktx admin runtime install --yes',
-    });
+    expect(checks[0]?.id).toBe('uv');
+    expect(checks[0]?.status).toBe('fail');
+    expect(checks[0]?.detail).toContain('could not download uv');
+    expect(checks[0]?.fix).toBe('Check network access to github.com and run: ktx admin runtime install --yes');
   });
 });

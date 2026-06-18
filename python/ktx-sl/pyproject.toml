@@ -1,6 +1,6 @@
 [project]
 name = "ktx-sl"
-version = "0.11.0"
+version = "0.12.0"
 description = "Agent-first semantic layer engine with aggregate locality"
 readme = "README.md"
 requires-python = ">=3.13"

@@ -1,3 +1,5 @@
+import { KtxQueryError } from '../../errors.js';
+
 const MUTATING_SQL =
   /^\s*(insert|update|delete|merge|alter|drop|create|truncate|grant|revoke|copy|call|do|vacuum|analyze|refresh)\b/i;
 const READ_SQL = /^\s*(select|with)\b/i;
@@ -80,7 +82,7 @@ function assertSingleSqlStatement(sql: string): void {
     if (sql[index] === ';') {
       sawSemicolon = true;
     } else if (sawSemicolon && !/\s/.test(sql[index])) {
-      throw new Error('Only one SQL statement can be executed.');
+      throw new KtxQueryError('Only one SQL statement can be executed.');
     }
     index += 1;
   }
@@ -89,7 +91,7 @@ function assertSingleSqlStatement(sql: string): void {
 export function assertReadOnlySql(sql: string): string {
   const trimmed = stripLeadingSqlComments(sql).trim();
   if (!READ_SQL.test(trimmed) || MUTATING_SQL.test(trimmed)) {
-    throw new Error('Only read-only SELECT/WITH queries can be executed locally.');
+    throw new KtxQueryError('Only read-only SELECT/WITH queries can be executed locally.');
   }
   assertSingleSqlStatement(trimmed);
   return trimmed;
@@ -133,7 +135,7 @@ export function limitSqlForExecution(sql: string, maxRows: number | undefined): 
     return trimmed;
   }
   if (!Number.isInteger(maxRows) || maxRows <= 0) {
-    throw new Error('maxRows must be a positive integer.');
+    throw new KtxQueryError('maxRows must be a positive integer.');
   }
   return `select * from (${trimmed}) as ktx_query_result limit ${maxRows}`;
 }

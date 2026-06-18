@@ -383,6 +383,7 @@ describe('setup agents', () => {
     const prompts = {
       select: vi.fn(async ({ message }: { message: string }) => (message.startsWith('Where') ? 'project' : 'mcp')),
       multiselect: vi.fn(async () => ['claude-code']),
+      text: vi.fn(async () => undefined),
       cancel: vi.fn(),
     };
 
@@ -439,6 +440,7 @@ describe('setup agents', () => {
       multiselect: vi.fn(async () => {
         throw new Error('target selection should not run');
       }),
+      text: vi.fn(async () => undefined),
       cancel: vi.fn(),
     };
 
@@ -495,6 +497,7 @@ describe('setup agents', () => {
           message.startsWith('Where should') ? 'global' : 'mcp',
         ),
         multiselect: vi.fn(async () => ['claude-code']),
+        text: vi.fn(async () => undefined),
         cancel: vi.fn(),
       };
 
@@ -508,6 +511,7 @@ describe('setup agents', () => {
             scope: 'project',
             mode: 'mcp',
             skipAgents: false,
+            cwd: tempDir,
           },
           io.io,
           { prompts },
@@ -518,13 +522,10 @@ describe('setup agents', () => {
       });
 
       expect(prompts.select).toHaveBeenCalledWith({
-        message: `Where should ktx install supported agent config?\n\nktx project: ${tempDir}`,
+        message: `Where should ktx install agent config?\n\nktx project: ${tempDir}`,
         options: [
-          {
-            value: 'project',
-            label: 'Project scope (ktx project directory)',
-            hint: 'Only agents opened from this ktx project path load the project-scoped config.',
-          },
+          { value: 'project', label: 'ktx project directory', hint: tempDir },
+          { value: 'custom', label: 'Custom directory…', hint: 'Enter a path' },
           {
             value: 'global',
             label: 'Global scope (user config)',
@@ -978,6 +979,7 @@ describe('setup agents', () => {
     const prompts = {
       select: vi.fn(async () => 'back'),
       multiselect: vi.fn(async () => ['codex']),
+      text: vi.fn(async () => undefined),
       cancel: vi.fn(),
     };
 
@@ -1003,6 +1005,7 @@ describe('setup agents', () => {
     const prompts = {
       select: vi.fn(async () => 'mcp-cli'),
       multiselect: vi.fn(async () => ['back']),
+      text: vi.fn(async () => undefined),
       cancel: vi.fn(),
     };
 
@@ -1136,6 +1139,7 @@ describe('setup agents', () => {
           message.startsWith('Where should') ? 'project' : 'mcp',
         ),
         multiselect: vi.fn(async () => ['claude-code', 'claude-desktop']),
+        text: vi.fn(async () => undefined),
         cancel: vi.fn(),
       };
 
@@ -1228,8 +1232,11 @@ describe('setup agents', () => {
   it('explains next actions for Codex, Cursor, OpenCode, and universal MCP targets', async () => {
     const io = makeIo();
     const prompts = {
-      select: vi.fn(async () => 'mcp-cli'),
+      select: vi.fn(async ({ message }: { message: string }) =>
+        message.startsWith('Where') ? 'project' : 'mcp-cli',
+      ),
       multiselect: vi.fn(async () => ['codex', 'cursor', 'opencode', 'universal']),
+      text: vi.fn(async () => undefined),
       cancel: vi.fn(),
     };
 
@@ -1272,6 +1279,347 @@ describe('setup agents', () => {
     expect(output).toContain('Cursor rules installed');
     expect(output).toContain('OpenCode commands installed');
     expect(output).toContain('.agents guidance installed');
+  });
+
+  describe('install root', () => {
+    it('plans project-scoped files under installRoot, leaving projectDir as the default', () => {
+      const installRoot = join(tempDir, 'opened-here');
+      expect(
+        plannedKtxAgentFiles({
+          projectDir: tempDir,
+          installRoot,
+          target: 'claude-code',
+          scope: 'project',
+          mode: 'mcp-cli',
+        }),
+      ).toEqual([
+        { kind: 'file', path: join(installRoot, '.claude/skills/ktx-analytics/SKILL.md'), role: 'analytics-skill' },
+        { kind: 'file', path: join(installRoot, '.claude/skills/ktx/SKILL.md'), role: 'skill' },
+        { kind: 'file', path: join(installRoot, '.claude/rules/ktx.md'), role: 'rule' },
+      ]);
+
+      expect(
+        plannedKtxAgentFiles({ projectDir: tempDir, target: 'claude-code', scope: 'project', mode: 'mcp' }),
+      ).toEqual([
+        { kind: 'file', path: join(tempDir, '.claude/skills/ktx-analytics/SKILL.md'), role: 'analytics-skill' },
+      ]);
+    });
+
+    it('shows the install path in the summary title only when installRoot differs from projectDir', () => {
+      const installRoot = join(tempDir, 'app');
+      const custom = formatInstallSummaryLines(
+        [{ target: 'claude-code', scope: 'project', mode: 'mcp', installRoot }],
+        [
+          { kind: 'file', path: join(installRoot, '.claude/skills/ktx-analytics/SKILL.md'), role: 'analytics-skill' },
+          { kind: 'json-key', path: join(installRoot, '.mcp.json'), jsonPath: ['mcpServers', 'ktx'] },
+        ],
+        tempDir,
+      );
+      expect(custom[0].title).toBe(`Claude Code · ${installRoot}`);
+
+      const same = formatInstallSummaryLines(
+        [{ target: 'claude-code', scope: 'project', mode: 'mcp', installRoot: tempDir }],
+        [],
+        tempDir,
+      );
+      expect(same[0].title).toBe('Claude Code · Project scope');
+    });
+
+    it('installs project files and next actions under an explicit installRoot', async () => {
+      const io = makeIo();
+      const installRoot = join(tempDir, 'workspace');
+
+      const result = await runKtxSetupAgentsStep(
+        {
+          projectDir: tempDir,
+          inputMode: 'disabled',
+          yes: true,
+          agents: true,
+          target: 'claude-code',
+          scope: 'project',
+          mode: 'mcp-cli',
+          skipAgents: false,
+          installRoot,
+        },
+        io.io,
+      );
+
+      expect(result).toMatchObject({
+        status: 'ready',
+        installs: [{ target: 'claude-code', scope: 'project', mode: 'mcp-cli', installRoot }],
+      });
+      await expect(stat(join(installRoot, '.claude/skills/ktx/SKILL.md'))).resolves.toBeDefined();
+      const mcp = JSON.parse(await readFile(join(installRoot, '.mcp.json'), 'utf-8')) as {
+        mcpServers?: Record<string, unknown>;
+      };
+      expect(mcp.mcpServers).toHaveProperty('ktx');
+      await expect(stat(join(tempDir, '.claude/skills/ktx/SKILL.md'))).rejects.toThrow();
+
+      const output = io.stdout();
+      expect(output).toContain('Open Claude Code from the install directory:');
+      expect(output).toContain(`cd '${installRoot}'`);
+      expect(output).toContain(`ktx mcp start --project-dir ${tempDir}`);
+
+      expect(await readKtxAgentInstallManifest(tempDir)).toMatchObject({
+        projectDir: tempDir,
+        installs: [{ target: 'claude-code', scope: 'project', mode: 'mcp-cli', installRoot }],
+      });
+    });
+
+    it('fails when an explicit installRoot points at an existing file', async () => {
+      const io = makeIo();
+      const filePath = join(tempDir, 'not-a-dir');
+      await writeFile(filePath, 'x', 'utf-8');
+
+      await expect(
+        runKtxSetupAgentsStep(
+          {
+            projectDir: tempDir,
+            inputMode: 'disabled',
+            yes: true,
+            agents: true,
+            target: 'claude-code',
+            scope: 'project',
+            mode: 'mcp',
+            skipAgents: false,
+            installRoot: filePath,
+          },
+          io.io,
+        ),
+      ).resolves.toEqual({ status: 'failed', projectDir: tempDir });
+      expect(io.stderr()).toContain('is a file, not a directory');
+    });
+
+    it('installs into the current directory and records it in the manifest', async () => {
+      const io = makeIo();
+      const openedDir = join(tempDir, 'opened');
+      await mkdir(openedDir, { recursive: true });
+      const prompts = {
+        select: vi.fn(async ({ message }: { message: string }) =>
+          message.startsWith('Where') ? 'current' : 'mcp',
+        ),
+        multiselect: vi.fn(async () => ['claude-code', 'cursor']),
+        text: vi.fn(async () => undefined),
+        cancel: vi.fn(),
+      };
+
+      const result = await runKtxSetupAgentsStep(
+        {
+          projectDir: tempDir,
+          inputMode: 'auto',
+          yes: false,
+          agents: true,
+          scope: 'project',
+          mode: 'mcp',
+          skipAgents: false,
+          cwd: openedDir,
+        },
+        io.io,
+        { prompts },
+      );
+
+      expect(result).toMatchObject({
+        status: 'ready',
+        installs: [
+          { target: 'claude-code', scope: 'project', mode: 'mcp', installRoot: openedDir },
+          { target: 'cursor', scope: 'project', mode: 'mcp', installRoot: openedDir },
+        ],
+      });
+      await expect(stat(join(openedDir, '.claude/skills/ktx-analytics/SKILL.md'))).resolves.toBeDefined();
+      await expect(stat(join(openedDir, '.cursor/mcp.json'))).resolves.toBeDefined();
+
+      const output = io.stdout();
+      expect(output).toContain('Open Cursor from the install directory:');
+      expect(output).toContain(openedDir);
+
+      expect(await readKtxAgentInstallManifest(tempDir)).toMatchObject({
+        installs: [
+          { target: 'claude-code', scope: 'project', mode: 'mcp', installRoot: openedDir },
+          { target: 'cursor', scope: 'project', mode: 'mcp', installRoot: openedDir },
+        ],
+      });
+    });
+
+    it('creates and installs into a typed custom directory', async () => {
+      const io = makeIo();
+      const customDir = join(tempDir, 'custom-target');
+      const prompts = {
+        select: vi.fn(async ({ message }: { message: string }) =>
+          message.startsWith('Where') ? 'custom' : 'mcp',
+        ),
+        multiselect: vi.fn(async () => ['claude-code']),
+        text: vi.fn(async () => customDir),
+        cancel: vi.fn(),
+      };
+
+      const result = await runKtxSetupAgentsStep(
+        {
+          projectDir: tempDir,
+          inputMode: 'auto',
+          yes: false,
+          agents: true,
+          scope: 'project',
+          mode: 'mcp',
+          skipAgents: false,
+          cwd: tempDir,
+        },
+        io.io,
+        { prompts },
+      );
+
+      expect(result).toMatchObject({
+        status: 'ready',
+        installs: [{ target: 'claude-code', scope: 'project', mode: 'mcp', installRoot: customDir }],
+      });
+      await expect(stat(join(customDir, '.claude/skills/ktx-analytics/SKILL.md'))).resolves.toBeDefined();
+    });
+
+    it('hides the current directory row when cwd equals the ktx project directory', async () => {
+      const io = makeIo();
+      const prompts = {
+        select: vi.fn(async ({ message }: { message: string; options: Array<{ value: string }> }) =>
+          message.startsWith('Where') ? 'project' : 'mcp',
+        ),
+        multiselect: vi.fn(async () => ['claude-code']),
+        text: vi.fn(async () => undefined),
+        cancel: vi.fn(),
+      };
+
+      await runKtxSetupAgentsStep(
+        {
+          projectDir: tempDir,
+          inputMode: 'auto',
+          yes: false,
+          agents: true,
+          scope: 'project',
+          mode: 'mcp',
+          skipAgents: false,
+          cwd: tempDir,
+        },
+        io.io,
+        { prompts },
+      );
+
+      const directoryCall = prompts.select.mock.calls.find(([opts]) => opts.message.startsWith('Where'));
+      expect(directoryCall).toBeDefined();
+      expect(directoryCall?.[0].options.map((option) => option.value)).toEqual(['project', 'custom', 'global']);
+    });
+
+    it('re-prompts when a typed custom directory is an existing file', async () => {
+      const io = makeIo();
+      const filePath = join(tempDir, 'afile');
+      await writeFile(filePath, 'x', 'utf-8');
+      const validDir = join(tempDir, 'valid');
+      const prompts = {
+        select: vi.fn(async ({ message }: { message: string }) =>
+          message.startsWith('Where') ? 'custom' : 'mcp',
+        ),
+        multiselect: vi.fn(async () => ['claude-code']),
+        text: vi.fn<() => Promise<string | undefined>>().mockResolvedValueOnce(filePath).mockResolvedValueOnce(validDir),
+        cancel: vi.fn(),
+      };
+
+      const result = await runKtxSetupAgentsStep(
+        {
+          projectDir: tempDir,
+          inputMode: 'auto',
+          yes: false,
+          agents: true,
+          scope: 'project',
+          mode: 'mcp',
+          skipAgents: false,
+          cwd: tempDir,
+        },
+        io.io,
+        { prompts },
+      );
+
+      expect(result).toMatchObject({
+        status: 'ready',
+        installs: [{ target: 'claude-code', scope: 'project', mode: 'mcp', installRoot: validDir }],
+      });
+      expect(prompts.text).toHaveBeenCalledTimes(2);
+      expect(io.stderr()).toContain('is a file, not a directory');
+      await expect(stat(join(validDir, '.claude/skills/ktx-analytics/SKILL.md'))).resolves.toBeDefined();
+    });
+
+    it('expands a leading ~ in a typed custom directory', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'ktx-setup-agents-home-'));
+      const previousHome = process.env.HOME;
+      process.env.HOME = home;
+      try {
+        const io = makeIo();
+        const prompts = {
+          select: vi.fn(async ({ message }: { message: string }) =>
+            message.startsWith('Where') ? 'custom' : 'mcp',
+          ),
+          multiselect: vi.fn(async () => ['claude-code']),
+          text: vi.fn(async () => '~/opened-here'),
+          cancel: vi.fn(),
+        };
+
+        const expected = join(home, 'opened-here');
+        const result = await runKtxSetupAgentsStep(
+          {
+            projectDir: tempDir,
+            inputMode: 'auto',
+            yes: false,
+            agents: true,
+            scope: 'project',
+            mode: 'mcp',
+            skipAgents: false,
+            cwd: tempDir,
+          },
+          io.io,
+          { prompts },
+        );
+
+        expect(result).toMatchObject({
+          status: 'ready',
+          installs: [{ target: 'claude-code', scope: 'project', mode: 'mcp', installRoot: expected }],
+        });
+        await expect(stat(join(expected, '.claude/skills/ktx-analytics/SKILL.md'))).resolves.toBeDefined();
+        await expect(stat(join(tempDir, '~'))).rejects.toThrow();
+      } finally {
+        process.env.HOME = previousHome;
+        await rm(home, { recursive: true, force: true });
+      }
+    });
+
+    it('expands a leading ~ in an explicit installRoot', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'ktx-setup-agents-home-'));
+      const previousHome = process.env.HOME;
+      process.env.HOME = home;
+      try {
+        const io = makeIo();
+        const expected = join(home, 'flagged');
+
+        const result = await runKtxSetupAgentsStep(
+          {
+            projectDir: tempDir,
+            inputMode: 'disabled',
+            yes: true,
+            agents: true,
+            target: 'claude-code',
+            scope: 'project',
+            mode: 'mcp',
+            skipAgents: false,
+            installRoot: '~/flagged',
+            cwd: tempDir,
+          },
+          io.io,
+        );
+
+        expect(result).toMatchObject({
+          status: 'ready',
+          installs: [{ target: 'claude-code', scope: 'project', mode: 'mcp', installRoot: expected }],
+        });
+        await expect(stat(join(expected, '.claude/skills/ktx-analytics/SKILL.md'))).resolves.toBeDefined();
+      } finally {
+        process.env.HOME = previousHome;
+        await rm(home, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('createAgentNextActionsLineFormatter', () => {

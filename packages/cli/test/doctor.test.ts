@@ -457,6 +457,8 @@ describe('runKtxDoctor', () => {
         '    backend: openai',
         '    model: text-embedding-3-small',
         '    dimensions: 1536',
+        '    openai:',
+        '      api_key: env:OPENAI_API_KEY', // pragma: allowlist secret
         '',
       ].join('\n'),
       'utf-8',
@@ -592,6 +594,8 @@ describe('runKtxDoctor', () => {
         '    backend: openai',
         '    model: text-embedding-3-small',
         '    dimensions: 1536',
+        '    openai:',
+        '      api_key: env:OPENAI_API_KEY', // pragma: allowlist secret
         '',
       ].join('\n'),
       'utf-8',

@@ -4,6 +4,7 @@ import { createLocalProjectMcpContextPorts } from '../src/context/mcp/local-proj
 import { createLocalProjectMemoryIngest } from '../src/context/memory/local-memory.js';
 import { resolveProjectEmbeddingProvider } from '../src/embedding-resolution.js';
 import { createKtxCliScanConnector } from '../src/local-scan-connectors.js';
+import { createLazyManagedPythonSemanticLayerComputePort } from '../src/managed-python-command.js';
 import { createKtxMcpServerFactory } from '../src/mcp-server-factory.js';
 
 type FakeEmbeddingProvider = {
@@ -62,7 +63,7 @@ vi.mock('../src/local-scan-connectors.js', () => ({
 }));
 
 vi.mock('../src/managed-python-command.js', () => ({
-  createManagedPythonSemanticLayerComputePort: vi.fn(() => mocks.semanticLayerCompute),
+  createLazyManagedPythonSemanticLayerComputePort: vi.fn(() => mocks.semanticLayerCompute),
 }));
 
 vi.mock('../src/managed-python-http.js', () => ({
@@ -124,6 +125,13 @@ describe('createKtxMcpServerFactory', () => {
     expect(provider.embed).toHaveBeenCalledWith('gross revenue');
     expect(provider.embedMany).toHaveBeenCalledWith(['gross revenue']);
     expect(createKtxCliScanConnector).toHaveBeenCalledWith(project, 'warehouse');
+    // The server must wire the lazy compute port so startup never blocks on (or
+    // fails over) a missing managed Python runtime / uv.
+    expect(createLazyManagedPythonSemanticLayerComputePort).toHaveBeenCalledWith({
+      cliVersion: '0.5.0',
+      installPolicy: 'auto',
+      io,
+    });
     expect(contextOptions).toMatchObject({
       queryExecutor: mocks.queryExecutor,
       semanticLayerCompute: mocks.semanticLayerCompute,

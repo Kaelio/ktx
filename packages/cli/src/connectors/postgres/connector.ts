@@ -1,6 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolveStringReference } from '../shared/string-reference.js';
 import { getDialectForDriver } from '../../context/connections/dialects.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
@@ -281,17 +279,6 @@ function stringConfigValue(
   return typeof value === 'string' && value.trim().length > 0 ? resolveStringReference(value.trim(), env) : undefined;
 }
 
-function resolveStringReference(value: string, env: NodeJS.ProcessEnv): string {
-  if (value.startsWith('env:')) {
-    return env[value.slice('env:'.length)] ?? '';
-  }
-  if (value.startsWith('file:')) {
-    const rawPath = value.slice('file:'.length);
-    const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(1)) : rawPath;
-    return readFileSync(path, 'utf-8').trim();
-  }
-  return value;
-}
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;

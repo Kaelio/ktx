@@ -526,6 +526,7 @@ describe('runKtxCli', () => {
     expect(stdout).toContain('--target <target>');
     expect(stdout).toContain('--global');
     expect(stdout).toContain('--local');
+    expect(stdout).toContain('--install-dir <path>');
     expect(stdout).toContain('--yes');
     expect(stdout).toContain('--no-input');
     expect(stdout).toContain('Global Options:');
@@ -1483,6 +1484,94 @@ describe('runKtxCli', () => {
     ).resolves.toBe(1);
 
     expect(setupIo.stderr()).toContain('Choose only one agent scope: --local or --global.');
+    expect(setup).not.toHaveBeenCalled();
+  });
+
+  it('dispatches --install-dir as the agent install root', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        ['--project-dir', tempDir, 'setup', '--agents', '--target', 'claude-code', '--install-dir', '.', '--no-input'],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(0);
+
+    expect(setup).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: true, target: 'claude-code', agentScope: 'project', installRoot: '.' }),
+      setupIo.io,
+    );
+  });
+
+  it('rejects --install-dir together with --global', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        ['--project-dir', tempDir, 'setup', '--agents', '--target', 'claude-code', '--install-dir', '.', '--global', '--no-input'],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(1);
+
+    expect(setupIo.stderr()).toContain('Choose either --install-dir or a scope flag (--global / --local), not both.');
+    expect(setup).not.toHaveBeenCalled();
+  });
+
+  it('rejects --install-dir together with --local', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        ['--project-dir', tempDir, 'setup', '--agents', '--target', 'claude-code', '--install-dir', '.', '--local', '--no-input'],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(1);
+
+    expect(setupIo.stderr()).toContain('Choose either --install-dir or a scope flag (--global / --local), not both.');
+    expect(setup).not.toHaveBeenCalled();
+  });
+
+  it('treats an empty --install-dir as not provided', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        ['--project-dir', tempDir, 'setup', '--agents', '--target', 'claude-code', '--install-dir', '', '--global', '--no-input'],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(0);
+
+    expect(setup).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: true, target: 'claude-code', agentScope: 'global' }),
+      setupIo.io,
+    );
+    expect(setup).toHaveBeenCalledWith(
+      expect.not.objectContaining({ installRoot: expect.anything() }),
+      setupIo.io,
+    );
+  });
+
+  it('rejects --install-dir with --target claude-desktop', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        ['--project-dir', tempDir, 'setup', '--agents', '--target', 'claude-desktop', '--install-dir', '.', '--no-input'],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(1);
+
+    expect(setupIo.stderr()).toContain('--install-dir does not apply to --target claude-desktop, which is always global.');
     expect(setup).not.toHaveBeenCalled();
   });
 

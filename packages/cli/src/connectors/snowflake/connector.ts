@@ -1,8 +1,6 @@
 import { createPrivateKey } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
 import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveStringReference } from '../shared/string-reference.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
@@ -134,18 +132,6 @@ export interface KtxSnowflakeColumnDistinctValuesResult {
 }
 
 const DATE_TYPES = ['DATE', 'TIMESTAMP', 'TIMESTAMP_LTZ', 'TIMESTAMP_NTZ', 'TIMESTAMP_TZ', 'TIME'];
-
-function resolveStringReference(value: string, env: NodeJS.ProcessEnv): string {
-  if (value.startsWith('env:')) {
-    return env[value.slice('env:'.length)] ?? '';
-  }
-  if (value.startsWith('file:')) {
-    const rawPath = value.slice('file:'.length);
-    const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(1)) : rawPath;
-    return readFileSync(path, 'utf-8').trim();
-  }
-  return value;
-}
 
 function stringConfigValue(
   connection: KtxSnowflakeConnectionConfig | undefined,

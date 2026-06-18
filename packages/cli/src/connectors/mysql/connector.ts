@@ -1,8 +1,6 @@
 import mysql, { type FieldPacket, type Pool, type RowDataPacket } from 'mysql2/promise';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
 import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveStringReference } from '../shared/string-reference.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import {
   constraintDiscoveryWarning,
@@ -181,19 +179,6 @@ function stringConfigValue(
 ): string | undefined {
   const value = connection?.[key];
   return typeof value === 'string' && value.trim().length > 0 ? resolveStringReference(value.trim(), env) : undefined;
-}
-
-function resolveStringReference(value: string, env: NodeJS.ProcessEnv): string {
-  if (value.startsWith('env:')) {
-    const envName = value.slice('env:'.length);
-    return env[envName] ?? '';
-  }
-  if (value.startsWith('file:')) {
-    const rawPath = value.slice('file:'.length);
-    const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(1)) : rawPath;
-    return readFileSync(path, 'utf-8').trim();
-  }
-  return value;
 }
 
 function maybeNumber(value: unknown): number | undefined {

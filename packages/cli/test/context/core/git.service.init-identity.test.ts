@@ -94,4 +94,23 @@ describe('GitService.initialize without a configured git identity', () => {
     }).trim();
     expect(localName).toBe('');
   });
+
+  // Regression for KLO-735: a machine with commit.gpgsign=true makes git try to GPG-sign every
+  // commit, but ktx commits under a synthetic identity that can never own a secret key, so signing
+  // fails with "No secret key". ktx commits must succeed regardless of the user's signing config.
+  it('commits even when the global git config forces gpg signing', async () => {
+    // Force signing and point gpg at a program that always fails, mirroring a machine whose
+    // configured signing key does not match ktx's synthetic identity.
+    await writeFile(
+      join(homeDir, '.gitconfig'),
+      '[user]\n\tuseConfigOnly = true\n[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n',
+      'utf-8',
+    );
+
+    const service = new GitService(coreConfig(repoDir));
+    await expect(service.onModuleInit()).resolves.toBeUndefined();
+
+    const head = await service.revParseHead();
+    expect(head).toMatch(/^[0-9a-f]{40}$/);
+  });
 });

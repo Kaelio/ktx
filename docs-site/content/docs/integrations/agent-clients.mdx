@@ -68,18 +68,29 @@ If you choose an install mode, it then asks which targets to install:
 └
 ```
 
-When every selected target supports both project and global setup, the command
-also asks where to install supported agent config:
+When at least one selected target supports project-scoped setup, the command
+asks where to install agent config:
 
 ```txt
-◆  Where should ktx install supported agent config?
+◆  Where should ktx install agent config?
 │
 │  ktx project: /path/to/your/ktx-project
 │
-│  ○ Project scope (ktx project directory)
+│  ○ ktx project directory      /path/to/your/ktx-project
+│  ○ Current directory          /path/to/where/you/ran/ktx
+│  ○ Custom directory…          (enter a path)
 │  ○ Global scope (user config)
 └
 ```
+
+The first three choices write project-scoped files (`.claude/`, `.mcp.json`,
+`.cursor/`, skills, and rules) into the chosen directory while still pointing
+them at this ktx project. Use **Current directory** or **Custom directory…**
+when you open your coding agent from somewhere other than the ktx project
+directory. **Current directory** is hidden when it is already the ktx project
+directory, and **Global scope** appears only when every selected target
+supports global setup. Non-interactive runs pass `--install-dir <path>` (for
+example `--install-dir .`) for the same result.
 
 ## Generated files
 

@@ -80,7 +80,7 @@ interface KtxSlDeps {
     installPolicy: KtxManagedPythonInstallPolicy;
     io: KtxSlIo;
     projectDir?: string;
-  }) => KtxSemanticLayerComputePort;
+  }) => Promise<KtxSemanticLayerComputePort>;
   createQueryExecutor?: (project: KtxLocalProject) => KtxSqlQueryExecutorPort;
 }
 
@@ -315,7 +315,7 @@ export async function runKtxSl(args: KtxSlArgs, io: KtxSlIo = process, deps: Ktx
       queryForTelemetry = query;
       const compute = deps.createSemanticLayerCompute
         ? deps.createSemanticLayerCompute()
-        : (deps.createManagedSemanticLayerCompute ?? createManagedPythonSemanticLayerComputePort)({
+        : await (deps.createManagedSemanticLayerCompute ?? createManagedPythonSemanticLayerComputePort)({
             cliVersion: args.cliVersion,
             installPolicy: args.runtimeInstallPolicy,
             io,

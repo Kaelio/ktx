@@ -2025,7 +2025,7 @@ describe('setup status', () => {
             return {
               status: 'ready',
               projectDir: tempDir,
-              installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli' }],
+              installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli', installRoot: tempDir }],
             };
           },
         },
@@ -2078,7 +2078,7 @@ describe('setup status', () => {
           agents: async () => ({
             status: 'ready',
             projectDir: tempDir,
-            installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli' }],
+            installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli', installRoot: tempDir }],
           }),
         },
       ),
@@ -2133,7 +2133,7 @@ describe('setup status', () => {
             return {
               status: 'ready',
               projectDir: tempDir,
-              installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli' }],
+              installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli', installRoot: tempDir }],
             };
           },
         },
@@ -2150,7 +2150,7 @@ describe('setup status', () => {
     const agents = vi.fn(async () => ({
       status: 'ready' as const,
       projectDir: tempDir,
-      installs: [{ target: 'codex' as const, scope: 'project' as const, mode: 'mcp-cli' as const }],
+      installs: [{ target: 'codex' as const, scope: 'project' as const, mode: 'mcp-cli' as const, installRoot: tempDir }],
     }));
     await writeFile(join(tempDir, 'ktx.yaml'), ['connections: {}', ''].join('\n'), 'utf-8');
 
@@ -2193,7 +2193,7 @@ describe('setup status', () => {
     const agents = vi.fn(async () => ({
       status: 'ready' as const,
       projectDir: tempDir,
-      installs: [{ target: 'claude-code' as const, scope: 'project' as const, mode: 'mcp' as const }],
+      installs: [{ target: 'claude-code' as const, scope: 'project' as const, mode: 'mcp' as const, installRoot: tempDir }],
     }));
     await writeFile(join(tempDir, 'ktx.yaml'), ['connections: {}', ''].join('\n'), 'utf-8');
 
@@ -2272,7 +2272,7 @@ describe('setup status', () => {
           version: 1,
           projectDir: tempDir,
           installedAt: '2026-05-07T00:00:00.000Z',
-          installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli' }],
+          installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli', installRoot: tempDir }],
           entries: [],
         },
         null,
@@ -2347,7 +2347,7 @@ describe('setup status', () => {
               return {
                 status: 'ready',
                 projectDir: tempDir,
-                installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli' }],
+                installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli', installRoot: tempDir }],
               };
             },
           },
@@ -2453,7 +2453,7 @@ describe('setup status', () => {
             return {
               status: 'ready',
               projectDir: tempDir,
-              installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli' }],
+              installs: [{ target: 'codex', scope: 'project', mode: 'mcp-cli', installRoot: tempDir }],
             };
           },
         },
@@ -2636,7 +2636,7 @@ describe('setup status', () => {
     const agents = vi.fn(async () => ({
       status: 'ready' as const,
       projectDir: tempDir,
-      installs: [{ target: 'universal' as const, scope: 'project' as const, mode: 'mcp-cli' as const }],
+      installs: [{ target: 'universal' as const, scope: 'project' as const, mode: 'mcp-cli' as const, installRoot: tempDir }],
     }));
 
     await expect(

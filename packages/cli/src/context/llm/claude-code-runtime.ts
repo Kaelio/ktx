@@ -151,7 +151,26 @@ function expectedMcpServerNames(tools: KtxRuntimeToolSet | undefined): Set<strin
   return tools && Object.keys(tools).length > 0 ? new Set([KTX_MCP_SERVER_NAME]) : new Set();
 }
 
-const CLAUDE_RATE_LIMIT_ERROR_MARKERS = /\b429\b|rate limit|too many requests|quota exceeded|overloaded|max_retries/i;
+// "session limit" is the Claude Code subscription cap ("You've hit your session
+// limit · resets …"); the rest are transient 429-style throttling. All mean
+// Claude Code authenticated successfully, so they must not be read as auth
+// failures by the governor classifier or the auth probe.
+const CLAUDE_RATE_LIMIT_ERROR_MARKERS =
+  /\b429\b|rate limit|session limit|usage limit|too many requests|quota exceeded|overloaded|max_retries/i;
+
+// The subscription cap is its own case: re-authenticating and retrying both fail
+// until reset, so it gets a distinct message from transient rate limiting.
+const CLAUDE_SESSION_LIMIT_MARKERS = /session limit|usage limit/i;
+
+function describeClaudeProbeFailure(message: string): string {
+  if (CLAUDE_SESSION_LIMIT_MARKERS.test(message)) {
+    return `Claude Code session limit reached. Wait for the reset shown, then rerun setup or the command. Details: ${message}`;
+  }
+  if (CLAUDE_RATE_LIMIT_ERROR_MARKERS.test(message)) {
+    return `Claude Code is rate limited. Retry shortly, then rerun setup or the command. Details: ${message}`;
+  }
+  return `Claude Code authentication is not usable. Authenticate Claude Code locally with the Claude Code CLI, then rerun setup or the command. ${message}`;
+}
 
 function normalizeClaudeResetAtMs(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
@@ -497,7 +516,7 @@ export async function runClaudeCodeAuthProbe(input: {
     const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      message: `Claude Code authentication is not usable. Authenticate Claude Code locally with the Claude Code CLI, then rerun setup or the command. ${message}`,
+      message: describeClaudeProbeFailure(message),
     };
   }
 }

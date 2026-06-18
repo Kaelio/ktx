@@ -62,7 +62,7 @@ export function managedRuntimeInstallCommand(feature: KtxRuntimeFeature): string
 
 function installPrompt(feature: KtxRuntimeFeature): string {
   const label = feature === 'local-embeddings' ? 'local embeddings Python runtime' : 'core Python runtime';
-  return `ktx needs to install the ${label}. This downloads Python dependencies with uv. Continue?`;
+  return `ktx needs to install the ${label}. This downloads a pinned, checksum-verified uv build, Python, and dependencies. Continue?`;
 }
 
 function runtimeRequiredMessage(feature: KtxRuntimeFeature): string {
@@ -121,43 +121,55 @@ export async function ensureManagedPythonCommandRuntime(
   }
 }
 
-export function createManagedPythonSemanticLayerComputePort(
+export async function createManagedPythonSemanticLayerComputePort(
+  options: ManagedPythonSemanticLayerComputeOptions,
+): Promise<KtxSemanticLayerComputePort> {
+  const runtime = await ensureManagedPythonCommandRuntime({
+    cliVersion: options.cliVersion,
+    installPolicy: options.installPolicy,
+    io: options.io,
+    feature: 'core',
+    ...(options.readStatus ? { readStatus: options.readStatus } : {}),
+    ...(options.installRuntime ? { installRuntime: options.installRuntime } : {}),
+    ...(options.confirmInstall ? { confirmInstall: options.confirmInstall } : {}),
+    ...(options.spinner ? { spinner: options.spinner } : {}),
+  });
+  const createPythonCompute = options.createPythonCompute ?? createPythonSemanticLayerComputePort;
+  const projectId = options.projectDir
+    ? await readExistingTelemetryProjectId({ projectDir: options.projectDir })
+    : undefined;
+  return createPythonCompute({
+    command: runtime.manifest.python.daemonExecutable,
+    args: [],
+    ...(projectId ? { projectId } : {}),
+  });
+}
+
+/**
+ * Defers the managed-runtime install to the first semantic-layer call so a
+ * long-lived server (the MCP server) can start and serve context tools that
+ * need no Python even when uv is absent. Caches on success only, so a runtime
+ * installed mid-session is picked up on the next call.
+ */
+export function createLazyManagedPythonSemanticLayerComputePort(
   options: ManagedPythonSemanticLayerComputeOptions,
 ): KtxSemanticLayerComputePort {
-  const createPythonCompute = options.createPythonCompute ?? createPythonSemanticLayerComputePort;
-  let cachedPort: KtxSemanticLayerComputePort | undefined;
-
-  // Runtime install is deferred to the first compute call so an MCP session
-  // that only searches never installs the Python runtime at boot. Cached on
-  // success, so a failed install retries on the next call.
-  const resolvePort = async (): Promise<KtxSemanticLayerComputePort> => {
-    if (cachedPort) {
-      return cachedPort;
+  let cached: KtxSemanticLayerComputePort | undefined;
+  const resolve = async (): Promise<KtxSemanticLayerComputePort> => {
+    if (!cached) {
+      cached = await createManagedPythonSemanticLayerComputePort(options);
     }
-    const runtime = await ensureManagedPythonCommandRuntime({
-      cliVersion: options.cliVersion,
-      installPolicy: options.installPolicy,
-      io: options.io,
-      feature: 'core',
-      ...(options.readStatus ? { readStatus: options.readStatus } : {}),
-      ...(options.installRuntime ? { installRuntime: options.installRuntime } : {}),
-      ...(options.confirmInstall ? { confirmInstall: options.confirmInstall } : {}),
-      ...(options.spinner ? { spinner: options.spinner } : {}),
-    });
-    const projectId = options.projectDir
-      ? await readExistingTelemetryProjectId({ projectDir: options.projectDir })
-      : undefined;
-    cachedPort = createPythonCompute({
-      command: runtime.manifest.python.daemonExecutable,
-      args: [],
-      ...(projectId ? { projectId } : {}),
-    });
-    return cachedPort;
+    return cached;
   };
-
   return {
-    query: async (input) => (await resolvePort()).query(input),
-    validateSources: async (input) => (await resolvePort()).validateSources(input),
-    generateSources: async (input) => (await resolvePort()).generateSources(input),
+    async query(input) {
+      return (await resolve()).query(input);
+    },
+    async validateSources(input) {
+      return (await resolve()).validateSources(input);
+    },
+    async generateSources(input) {
+      return (await resolve()).generateSources(input);
+    },
   };
 }

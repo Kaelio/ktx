@@ -1,12 +1,19 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { strFromU8, unzipSync } from 'fflate';
+import { gunzipSync, strFromU8, unzipSync } from 'fflate';
 import { z } from 'zod';
+import { KtxExpectedError } from './errors.js';
+import {
+  MANAGED_UV_ARTIFACTS,
+  MANAGED_UV_VERSION,
+  type ManagedUvArtifact,
+  type ManagedUvPlatformKey,
+} from './managed-uv-release.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -96,6 +103,7 @@ export interface ManagedPythonRuntimeInstallOptions extends ManagedPythonRuntime
   features: KtxRuntimeFeature[];
   force?: boolean;
   exec?: ManagedPythonRuntimeExec;
+  fetchUvArtifact?: ManagedUvFetchArtifact;
 }
 
 export interface ManagedPythonRuntimeInstallResult {
@@ -122,9 +130,29 @@ export interface ManagedPythonRuntimeDoctorCheck {
   fix?: string;
 }
 
+export type ManagedUvFetchArtifact = (url: string) => Promise<Uint8Array>;
+
 /** @internal */
-export const MISSING_UV_RUNTIME_INSTALL_MESSAGE =
-  'uv is required to install the ktx Python runtime. ktx does not download uv automatically. Install uv, make sure it is on PATH, and retry: ktx admin runtime install --yes';
+export interface ManagedUvRelease {
+  version: string;
+  artifacts: Partial<Record<ManagedUvPlatformKey, ManagedUvArtifact>>;
+}
+
+const PINNED_UV_RELEASE: ManagedUvRelease = {
+  version: MANAGED_UV_VERSION,
+  artifacts: MANAGED_UV_ARTIFACTS,
+};
+
+/** @internal */
+export interface EnsureManagedUvOptions {
+  platform?: NodeJS.Platform;
+  arch?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  runtimeRoot?: string;
+  fetchArtifact?: ManagedUvFetchArtifact;
+  release?: ManagedUvRelease;
+}
 
 function defaultAssetDir(): string {
   return fileURLToPath(new URL('../assets/python/', import.meta.url));
@@ -347,12 +375,145 @@ function managedRuntimeUvEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...baseEnv, UV_NO_CONFIG: '1' };
 }
 
-async function ensureUv(exec: ManagedPythonRuntimeExec, env?: NodeJS.ProcessEnv): Promise<string> {
+function managedUvBinaryName(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? 'uv.exe' : 'uv';
+}
+
+/** @internal */
+export function managedUvPath(options: EnsureManagedUvOptions = {}): string {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? homedir();
+  const runtimeRoot = options.runtimeRoot ?? runtimeRootFor({ env, homeDir });
+  const version = (options.release ?? PINNED_UV_RELEASE).version;
+  return join(runtimeRoot, 'uv', version, managedUvBinaryName(platform));
+}
+
+async function defaultFetchUvArtifact(url: string): Promise<Uint8Array> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function readTarField(block: Uint8Array, start: number, length: number): string {
+  const field = block.subarray(start, start + length);
+  const end = field.indexOf(0);
+  return strFromU8(end < 0 ? field : field.subarray(0, end));
+}
+
+function findTarEntry(archive: Uint8Array, matches: (name: string) => boolean): Uint8Array | undefined {
+  let offset = 0;
+  while (offset + 512 <= archive.length) {
+    const block = archive.subarray(offset, offset + 512);
+    const name = readTarField(block, 0, 100);
+    if (!name) {
+      return undefined;
+    }
+    const size = Number.parseInt(readTarField(block, 124, 12).trim() || '0', 8);
+    if (matches(name)) {
+      return archive.subarray(offset + 512, offset + 512 + size);
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return undefined;
+}
+
+function extractUvFromArchive(input: { file: string; contents: Uint8Array; binaryName: string }): Uint8Array {
+  const entry = input.file.endsWith('.zip')
+    ? unzipSync(input.contents)[input.binaryName]
+    : findTarEntry(gunzipSync(input.contents), (name) => name === input.binaryName || name.endsWith(`/${input.binaryName}`));
+  if (!entry) {
+    throw new Error(`uv archive ${input.file} is missing the ${input.binaryName} binary`);
+  }
+  return entry;
+}
+
+/**
+ * ktx provisions its own pinned uv under the runtime root; uv on PATH is never
+ * consulted, so runtime installs behave identically on every machine. All
+ * failures here are environment outcomes (offline host, intercepting proxy,
+ * unsupported platform) and stay out of Error Tracking via KtxExpectedError —
+ * except a pin/layout mismatch inside a checksum-verified archive, which is a
+ * ktx release fault and must reach Error Tracking.
+ * @internal
+ */
+export async function ensureManagedUv(options: EnsureManagedUvOptions = {}): Promise<string> {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const release = options.release ?? PINNED_UV_RELEASE;
+  const binaryName = managedUvBinaryName(platform);
+  const uvPath = managedUvPath(options);
+  if (await pathExists(uvPath)) {
+    return uvPath;
+  }
+
+  const artifact = release.artifacts[`${platform}-${arch}` as ManagedUvPlatformKey];
+  if (!artifact) {
+    throw new KtxExpectedError(
+      `ktx does not bundle uv for ${platform}-${arch}. Place a uv ${release.version} binary at ${uvPath} and retry: ktx admin runtime install --yes`,
+    );
+  }
+
+  const url = `https://github.com/astral-sh/uv/releases/download/${release.version}/${artifact.file}`;
+  let contents: Uint8Array;
   try {
-    const result = await exec('uv', ['--version'], { env });
-    return result.stdout.trim() || 'uv available';
-  } catch {
-    throw new Error(MISSING_UV_RUNTIME_INSTALL_MESSAGE);
+    contents = await (options.fetchArtifact ?? defaultFetchUvArtifact)(url);
+  } catch (error) {
+    throw new KtxExpectedError(
+      `ktx could not download uv ${release.version} (required to install the ktx Python runtime). ` +
+        'Check network access to github.com and retry: ktx admin runtime install --yes. ' +
+        `Air-gapped hosts: place the uv binary at ${uvPath}.`,
+      { cause: error },
+    );
+  }
+
+  const sha256 = createHash('sha256').update(contents).digest('hex');
+  if (sha256 !== artifact.sha256) {
+    throw new KtxExpectedError(
+      `Downloaded uv ${release.version} failed checksum verification (a proxy or captive portal may have altered the download). Retry: ktx admin runtime install --yes`,
+    );
+  }
+
+  const binary = extractUvFromArchive({ file: artifact.file, contents, binaryName });
+  await mkdir(dirname(uvPath), { recursive: true });
+  const stagedPath = `${uvPath}.${process.pid}.download`;
+  await writeFile(stagedPath, binary);
+  await chmod(stagedPath, 0o755);
+  try {
+    await rename(stagedPath, uvPath);
+  } catch (error) {
+    // On Windows a concurrent install may have won the rename; the binary at
+    // uvPath is checksum-pinned identical, so reuse it.
+    await rm(stagedPath, { force: true });
+    if (!(await pathExists(uvPath))) {
+      throw error;
+    }
+  }
+  return uvPath;
+}
+
+async function ensureUv(input: {
+  exec: ManagedPythonRuntimeExec;
+  uvEnv: NodeJS.ProcessEnv;
+  options: ManagedPythonRuntimeLayoutOptions & { fetchUvArtifact?: ManagedUvFetchArtifact };
+}): Promise<{ uvPath: string; version: string }> {
+  const uvPath = await ensureManagedUv({
+    platform: input.options.platform,
+    env: input.options.env,
+    homeDir: input.options.homeDir,
+    runtimeRoot: input.options.runtimeRoot,
+    fetchArtifact: input.options.fetchUvArtifact,
+  });
+  try {
+    const result = await input.exec(uvPath, ['--version'], { env: input.uvEnv });
+    return { uvPath, version: result.stdout.trim() || `uv ${MANAGED_UV_VERSION}` };
+  } catch (error) {
+    throw new KtxExpectedError(
+      `Managed uv at ${uvPath} failed to run. Delete it and retry: ktx admin runtime install --yes`,
+      { cause: error },
+    );
   }
 }
 
@@ -377,21 +538,23 @@ export async function installManagedPythonRuntime(
     return { status: 'ready', layout, asset, manifest: existing };
   }
 
+  // uv is acquired before the version dir is wiped, so a failed acquisition
+  // never destroys a previously installed runtime.
+  const { uvPath } = await ensureUv({ exec, uvEnv, options });
   await rm(layout.versionDir, { recursive: true, force: true });
   await mkdir(layout.versionDir, { recursive: true });
   await writeFile(layout.installLogPath, '');
-  await ensureUv(exec, uvEnv);
   await runLogged({
     exec,
     logPath: layout.installLogPath,
-    command: 'uv',
+    command: uvPath,
     args: ['python', 'install', asset.requiresPython.minimumVersion],
     env: uvEnv,
   });
   await runLogged({
     exec,
     logPath: layout.installLogPath,
-    command: 'uv',
+    command: uvPath,
     args: ['venv', '--python', asset.requiresPython.minimumVersion, layout.venvDir],
     env: uvEnv,
   });
@@ -399,7 +562,7 @@ export async function installManagedPythonRuntime(
   await runLogged({
     exec,
     logPath: layout.installLogPath,
-    command: 'uv',
+    command: uvPath,
     args: ['pip', 'install', '--python', layout.pythonPath, wheelSpec],
     env: uvEnv,
   });
@@ -462,20 +625,20 @@ function check(
 }
 
 export async function doctorManagedPythonRuntime(
-  options: ManagedPythonRuntimeLayoutOptions & { exec?: ManagedPythonRuntimeExec },
+  options: ManagedPythonRuntimeLayoutOptions & { exec?: ManagedPythonRuntimeExec; fetchUvArtifact?: ManagedUvFetchArtifact },
 ): Promise<ManagedPythonRuntimeDoctorCheck[]> {
   const exec = options.exec ?? defaultExec;
   const checks: ManagedPythonRuntimeDoctorCheck[] = [];
   try {
-    const version = await ensureUv(exec, managedRuntimeUvEnv(options.env ?? process.env));
-    checks.push(check('pass', { id: 'uv', label: 'uv', detail: version }));
+    const uv = await ensureUv({ exec, uvEnv: managedRuntimeUvEnv(options.env ?? process.env), options });
+    checks.push(check('pass', { id: 'uv', label: 'uv', detail: `${uv.version} (managed: ${uv.uvPath})` }));
   } catch (error) {
     checks.push(
       check('fail', {
         id: 'uv',
         label: 'uv',
         detail: error instanceof Error ? error.message : String(error),
-        fix: 'Install uv, make sure it is on PATH, and run: ktx admin runtime install --yes',
+        fix: 'Check network access to github.com and run: ktx admin runtime install --yes',
       }),
     );
   }

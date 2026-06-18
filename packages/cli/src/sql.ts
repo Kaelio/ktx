@@ -1,5 +1,10 @@
+import { executeFederatedQuery } from './connectors/duckdb/federated-executor.js';
+import { FEDERATED_CONNECTION_ID } from './context/connections/federation.js';
+import { executeProjectReadOnlySql } from './context/connections/project-sql-executor.js';
+import type { KtxSqlQueryExecutionResult } from './context/connections/query-executor.js';
+import { resolveConfiguredConnection } from './context/connections/resolve-connection.js';
 import { loadKtxProject, type KtxLocalProject } from './context/project/project.js';
-import type { KtxQueryResult, KtxScanConnector } from './context/scan/types.js';
+import { sqlAnalysisDialectForDriver } from './context/sql-analysis/dialect.js';
 import type { SqlAnalysisDialect, SqlAnalysisPort } from './context/sql-analysis/ports.js';
 import type { KtxCliIo } from './cli-runtime.js';
 import { type KtxOutputMode, resolveOutputMode } from './io/mode.js';
@@ -30,6 +35,7 @@ export interface KtxSqlDeps {
   loadProject?: typeof loadKtxProject;
   createSqlAnalysis?: () => SqlAnalysisPort;
   createScanConnector?: typeof createKtxCliScanConnector;
+  executeFederated?: typeof executeFederatedQuery;
 }
 
 interface SqlExecutionOutput {
@@ -38,20 +44,6 @@ interface SqlExecutionOutput {
   headerTypes?: string[];
   rows: unknown[][];
   rowCount: number;
-}
-
-function sqlAnalysisDialectForDriver(driver: string | undefined): SqlAnalysisDialect {
-  const normalized = String(driver ?? '').trim().toLowerCase();
-  const map: Record<string, SqlAnalysisDialect> = {
-    postgres: 'postgres',
-    bigquery: 'bigquery',
-    snowflake: 'snowflake',
-    mysql: 'mysql',
-    sqlserver: 'tsql',
-    sqlite: 'sqlite',
-    clickhouse: 'clickhouse',
-  };
-  return map[normalized] ?? 'postgres';
 }
 
 function queryVerb(sql: string): 'select' | 'explain' | 'show' | 'with' | 'other' {
@@ -123,13 +115,7 @@ function printSqlResult(output: SqlExecutionOutput, mode: KtxSqlOutputMode, io: 
   printPretty(output, io);
 }
 
-async function cleanupConnector(connector: KtxScanConnector | null): Promise<void> {
-  if (connector?.cleanup) {
-    await connector.cleanup();
-  }
-}
-
-function resultOutput(connectionId: string, result: KtxQueryResult): SqlExecutionOutput {
+function resultOutput(connectionId: string, result: KtxSqlQueryExecutionResult): SqlExecutionOutput {
   return {
     connectionId,
     headers: result.headers,
@@ -146,12 +132,10 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
   let project: KtxLocalProject | undefined;
   try {
     project = await (deps.loadProject ?? loadKtxProject)({ projectDir: args.projectDir });
-    const connection = project.config.connections[args.connectionId];
-    if (!connection) {
-      throw new Error(`Connection "${args.connectionId}" is not configured in ktx.yaml`);
-    }
-    driver = String(connection.driver ?? 'unknown').toLowerCase();
-    demoConnection = isDemoConnection(args.connectionId, connection);
+    const isFederated = args.connectionId === FEDERATED_CONNECTION_ID;
+    const connection = isFederated ? undefined : resolveConfiguredConnection(project.config, args.connectionId);
+    driver = isFederated ? 'duckdb' : String(connection?.driver ?? 'unknown').toLowerCase();
+    demoConnection = isFederated ? false : isDemoConnection(args.connectionId, connection);
 
     const createSqlAnalysis =
       deps.createSqlAnalysis ??
@@ -163,7 +147,7 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
           io,
         }));
     const analysisPort = createSqlAnalysis();
-    const dialect = sqlAnalysisDialectForDriver(connection.driver);
+    const dialect: SqlAnalysisDialect = isFederated ? 'duckdb' : sqlAnalysisDialectForDriver(connection?.driver);
     const validation = await analysisPort.validateReadOnly(args.sql, dialect);
     if (!validation.ok) {
       throw new Error(validation.error ?? 'SQL is not read-only.');
@@ -171,39 +155,35 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
     const referencedTableCount = await safeReferencedTableCount(analysisPort, args.sql, dialect);
 
     const createScanConnector = deps.createScanConnector ?? createKtxCliScanConnector;
-    let connector: KtxScanConnector | null = null;
-    try {
-      connector = await createScanConnector(project, args.connectionId);
-      if (!connector.capabilities.readOnlySql || !connector.executeReadOnly) {
-        throw new Error(`Connection "${args.connectionId}" does not support read-only SQL execution.`);
-      }
-      const result = await connector.executeReadOnly(
-        {
-          connectionId: args.connectionId,
-          sql: args.sql,
-          maxRows: args.maxRows,
-        },
-        { runId: 'cli-sql' },
-      );
-      const mode = resolveOutputMode({ explicit: args.output, json: args.json, io });
-      printSqlResult(resultOutput(args.connectionId, result), mode, io);
-      await emitTelemetryEvent({
-        name: 'sql_completed',
+    const result = await executeProjectReadOnlySql({
+      project,
+      input: {
+        connectionId: args.connectionId,
         projectDir: args.projectDir,
-        io,
-        fields: {
-          driver,
-          isDemoConnection: demoConnection,
-          queryVerb: queryVerb(args.sql),
-          referencedTableCount,
-          durationMs: Math.max(0, performance.now() - startedAt),
-          outcome: 'ok',
-        },
-      });
-      return 0;
-    } finally {
-      await cleanupConnector(connector);
-    }
+        connection,
+        sql: args.sql,
+        maxRows: args.maxRows,
+      },
+      createConnector: (connectionId) => createScanConnector(project!, connectionId),
+      executeFederated: deps.executeFederated,
+      runId: 'cli-sql',
+    });
+    const mode = resolveOutputMode({ explicit: args.output, json: args.json, io });
+    printSqlResult(resultOutput(args.connectionId, result), mode, io);
+    await emitTelemetryEvent({
+      name: 'sql_completed',
+      projectDir: args.projectDir,
+      io,
+      fields: {
+        driver,
+        isDemoConnection: demoConnection,
+        queryVerb: queryVerb(args.sql),
+        referencedTableCount,
+        durationMs: Math.max(0, performance.now() - startedAt),
+        outcome: 'ok',
+      },
+    });
+    return 0;
   } catch (error) {
     const errorClass = scrubErrorClass(error);
     await emitTelemetryEvent({

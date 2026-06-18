@@ -306,7 +306,9 @@ describe('runKtxSql', () => {
       ),
     ).resolves.toBe(1);
 
-    expect(io.stderr()).toContain('Connection "warehouse" is not configured in ktx.yaml');
+    expect(io.stderr()).toContain(
+      'Connection "warehouse" is not configured in ktx.yaml. No connections are configured in ktx.yaml.',
+    );
   });
 
   it('rejects connectors without read-only SQL support and still cleans up', async () => {
@@ -343,6 +345,58 @@ describe('runKtxSql', () => {
 
     expect(connector.executeReadOnly).not.toHaveBeenCalled();
     expect(connector.cleanup).toHaveBeenCalledTimes(1);
-    expect(io.stderr()).toContain('Connection "warehouse" does not support read-only SQL execution.');
+    expect(io.stderr()).toContain('does not support read-only SQL execution.');
+  });
+
+  it('routes _ktx_federated through the shared federated executor', async () => {
+    const projectDir = join(tempDir, 'project');
+    await initKtxProject({ projectDir });
+    await writeConnections(projectDir, {
+      books_db: { driver: 'sqlite', path: 'books.db' },
+      reviews_db: { driver: 'sqlite', path: 'reviews.db' },
+    });
+    const executeFederated = vi.fn(async () => ({
+      headers: ['title', 'rating'],
+      rows: [['Clean Code', 5]],
+      totalRows: 1,
+      command: 'SELECT',
+      rowCount: 1,
+    }));
+    const memberConnector = makeConnector({
+      executeReadOnly: vi.fn(async () => {
+        throw new Error('member connector must not be used for federated id');
+      }),
+    });
+    const io = makeIo();
+
+    await expect(
+      runKtxSql(
+        {
+          command: 'execute',
+          projectDir,
+          connectionId: '_ktx_federated',
+          sql: 'select 1',
+          maxRows: 100,
+          output: 'json',
+          json: true,
+          cliVersion: '0.0.0-test',
+        },
+        io.io,
+        {
+          createSqlAnalysis: () => makeSqlAnalysis({ ok: true, error: null }),
+          createScanConnector: vi.fn(async () => memberConnector),
+          executeFederated,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(executeFederated).toHaveBeenCalledTimes(1);
+    expect(memberConnector.executeReadOnly).not.toHaveBeenCalled();
+    expect(JSON.parse(io.stdout())).toEqual({
+      connectionId: '_ktx_federated',
+      headers: ['title', 'rating'],
+      rows: [['Clean Code', 5]],
+      rowCount: 1,
+    });
   });
 });
