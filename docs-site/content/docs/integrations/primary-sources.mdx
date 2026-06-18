@@ -33,7 +33,7 @@ Agents should prefer environment or file references over literal secrets.
 | `context.queryHistory` | No | PostgreSQL, Snowflake, BigQuery | Enables query-history ingestion when the warehouse supports it |
 | `path` | Yes for path-style SQLite | SQLite | Local SQLite database path or `env:NAME` reference |
 | `max_bytes_billed` | No | BigQuery | Maximum bytes billed per query job |
-| `job_timeout_ms` | No | BigQuery | BigQuery query job timeout in milliseconds |
+| `query_timeout_ms` | No | all warehouses | Maximum execution time for a single read-only query, in milliseconds (default 30000). A query exceeding it is cancelled server-side (or, for SQLite, by terminating the off-process executor) and returns a `query exceeded Ns` error so the agent can revise. |
 | `project_id` | No | BigQuery | Optional local descriptor and mapping metadata; not used for BigQuery authentication |
 
 ## PostgreSQL
@@ -267,7 +267,7 @@ staged artifact shape as Postgres and Snowflake.
 - Parameter binding uses named `@param` syntax
 - Arrays flattened to comma-separated strings in results
 - Location specified at query execution time
-- Supports `max_bytes_billed` and `job_timeout_ms` limits from `ktx.yaml`
+- Supports the `max_bytes_billed` limit from `ktx.yaml`; the shared `query_timeout_ms` field maps to the query job's `jobTimeoutMs`
 
 ---
 

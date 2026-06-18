@@ -17,7 +17,8 @@
         "test/**/*.test-utils.ts",
         "test/**/acceptance-fixtures.ts",
         "src/context/scan/relationship-benchmarks.ts!",
-        "src/context/scan/relationship-benchmark-report.ts!"
+        "src/context/scan/relationship-benchmark-report.ts!",
+        "src/connectors/sqlite/read-query-child.ts!"
       ]
     },
     "docs-site": {

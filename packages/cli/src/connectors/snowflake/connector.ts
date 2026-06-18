@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
@@ -62,6 +63,7 @@ export interface KtxSnowflakeResolvedConnectionConfig {
   passphrase?: string;
   role?: string;
   maxConnections: number;
+  deadlineMs: number;
 }
 
 export interface KtxSnowflakeRawColumnMetadata {
@@ -195,6 +197,22 @@ function isDeniedError(error: unknown): boolean {
   return false;
 }
 
+// Snowflake cancels with code 604 and a "reached its statement ... timeout"
+// message once STATEMENT_TIMEOUT_IN_SECONDS elapses.
+function isSnowflakeTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  const message = (error as { message?: unknown }).message;
+  return (
+    code === 604 ||
+    code === '604' ||
+    code === '000604' ||
+    (typeof message === 'string' && /reached its (statement|warehouse) .*timeout/i.test(message))
+  );
+}
+
 function normalizeSnowflakeValue(value: unknown, columnType?: string): unknown {
   if (columnType && DATE_TYPES.some((type) => columnType.toUpperCase().includes(type))) {
     if (typeof value === 'number') {
@@ -296,6 +314,7 @@ export function snowflakeConnectionConfigFromConfig(input: {
       connectionId: input.connectionId,
       defaultValue: 4,
     }),
+    deadlineMs: resolveQueryDeadlineMs(input.connection),
   };
   const role = stringConfigValue(input.connection, 'role', env);
   if (role) {
@@ -353,13 +372,23 @@ class SnowflakeSdkDriver implements KtxSnowflakeDriver {
 
   async query(sql: string, params?: unknown): Promise<KtxQueryResult> {
     const binds = Array.isArray(params) ? toSnowflakeBinds(params) : undefined;
+    const statementTimeoutSeconds = Math.ceil(this.resolved.deadlineMs / 1000);
     try {
       const pool = await this.getPool();
-      const result = await pool.use(async (connection: snowflake.Connection) =>
-        this.executeSnowflakeQuery(connection, sql, binds),
-      );
+      const result = await pool.use(async (connection: snowflake.Connection) => {
+        // Bound the statement server-side; Snowflake cancels and frees the
+        // warehouse slot when STATEMENT_TIMEOUT_IN_SECONDS is reached.
+        await this.executeSnowflakeQuery(
+          connection,
+          `ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = ${statementTimeoutSeconds}`,
+        );
+        return this.executeSnowflakeQuery(connection, sql, binds);
+      });
       return { ...result, totalRows: result.rows.length, rowCount: result.rows.length };
     } catch (error) {
+      if (isSnowflakeTimeoutError(error)) {
+        throw queryDeadlineExceededError(this.resolved.deadlineMs, { cause: error });
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (/timeout/i.test(message) && /pool|acquire/i.test(message)) {
         throw new Error(

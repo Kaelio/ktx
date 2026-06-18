@@ -69,7 +69,7 @@ describe('createKtxCliScanConnector', () => {
         '    driver: bigquery',
         '    dataset_id: analytics',
         '    max_bytes_billed: "987654321"',
-        '    job_timeout_ms: 30000',
+        '    query_timeout_ms: 30000',
         '',
       ].join('\n'),
       'utf-8',
@@ -85,7 +85,7 @@ describe('createKtxCliScanConnector', () => {
         connectionId: 'warehouse',
         connection: expect.objectContaining({
           max_bytes_billed: '987654321',
-          job_timeout_ms: 30000,
+          query_timeout_ms: 30000,
         }),
       }),
     ]);

@@ -1,6 +1,7 @@
 import { BigQuery, type TableField } from '@google-cloud/bigquery';
 import { normalizeBigQueryProjectId, normalizeBigQueryRegion } from '../../context/connections/bigquery-identifiers.js';
 import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { tryIntrospectObject } from '../../context/scan/object-introspection.js';
@@ -38,7 +39,7 @@ export interface KtxBigQueryConnectionConfig {
   credentials_json?: string;
   location?: string;
   max_bytes_billed?: number | string;
-  job_timeout_ms?: number;
+  query_timeout_ms?: number;
   [key: string]: unknown;
 }
 
@@ -119,7 +120,6 @@ export interface KtxBigQueryScanConnectorOptions {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   maxBytesBilled?: number | string;
-  queryTimeoutMs?: number;
 }
 
 class DefaultBigQueryClientFactory implements KtxBigQueryClientFactory {
@@ -184,12 +184,25 @@ function bigQueryMaxBytesBilledFromConnection(
   return undefined;
 }
 
-function bigQueryJobTimeoutMsFromConnection(connection: KtxBigQueryConnectionConfig | undefined): number | undefined {
-  const value = connection?.job_timeout_ms;
-  if (typeof value !== 'number') {
-    return undefined;
+// jobTimeoutMs cancels the job with a "Job timed out" message (or a timeout
+// reason in the errors array) once the deadline elapses.
+function isBigQueryTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
   }
-  return Number.isInteger(value) && value > 0 ? value : undefined;
+  const topMessage = (error as { message?: unknown }).message;
+  if (typeof topMessage === 'string' && /timed out|timeout/i.test(topMessage)) {
+    return true;
+  }
+  const errors = (error as { errors?: unknown }).errors;
+  return (
+    Array.isArray(errors) &&
+    errors.some((entry) => {
+      const reason = (entry as { reason?: unknown })?.reason;
+      const message = (entry as { message?: unknown })?.message;
+      return reason === 'timeout' || (typeof message === 'string' && /timed out|timeout/i.test(message));
+    })
+  );
 }
 
 function tableKind(metadataType: string | undefined): KtxSchemaTable['kind'] {
@@ -305,7 +318,7 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
   private readonly clientFactory: KtxBigQueryClientFactory;
   private readonly now: () => Date;
   private readonly maxBytesBilled?: number | string;
-  private readonly queryTimeoutMs?: number;
+  private readonly deadlineMs: number;
   private readonly dialect = getDialectForDriver('bigquery');
   private client: KtxBigQueryClient | null = null;
 
@@ -319,7 +332,7 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     this.clientFactory = options.clientFactory ?? new DefaultBigQueryClientFactory();
     this.now = options.now ?? (() => new Date());
     this.maxBytesBilled = options.maxBytesBilled ?? bigQueryMaxBytesBilledFromConnection(options.connection);
-    this.queryTimeoutMs = options.queryTimeoutMs ?? bigQueryJobTimeoutMsFromConnection(options.connection);
+    this.deadlineMs = resolveQueryDeadlineMs(options.connection);
     this.id = `bigquery:${options.connectionId}`;
   }
 
@@ -489,26 +502,33 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
   }
 
   private async query(sql: string, params?: Record<string, unknown>): Promise<KtxQueryResult> {
-    const [job] = await this.getClient().createQueryJob({
-      query: sql,
-      ...(this.resolved.location ? { location: this.resolved.location } : {}),
-      ...(params && Object.keys(params).length > 0 ? { params } : {}),
-      ...(this.maxBytesBilled ? { maximumBytesBilled: String(this.maxBytesBilled) } : {}),
-      ...(this.queryTimeoutMs ? { jobTimeoutMs: this.queryTimeoutMs } : {}),
-    });
-    const [rows, , response] = await job.getQueryResults();
-    let headers = response?.schema?.fields?.map((field) => field.name || '') ?? [];
-    const headerTypes = response?.schema?.fields?.map((field) => String(field.type || 'STRING')) ?? [];
-    if (headers.length === 0 && rows.length > 0) {
-      headers = Object.keys(rows[0]!);
+    try {
+      const [job] = await this.getClient().createQueryJob({
+        query: sql,
+        ...(this.resolved.location ? { location: this.resolved.location } : {}),
+        ...(params && Object.keys(params).length > 0 ? { params } : {}),
+        ...(this.maxBytesBilled ? { maximumBytesBilled: String(this.maxBytesBilled) } : {}),
+        jobTimeoutMs: this.deadlineMs,
+      });
+      const [rows, , response] = await job.getQueryResults();
+      let headers = response?.schema?.fields?.map((field) => field.name || '') ?? [];
+      const headerTypes = response?.schema?.fields?.map((field) => String(field.type || 'STRING')) ?? [];
+      if (headers.length === 0 && rows.length > 0) {
+        headers = Object.keys(rows[0]!);
+      }
+      return {
+        headers,
+        headerTypes: headerTypes.length > 0 ? headerTypes : undefined,
+        rows: rows.map((row) => headers.map((header) => normalizeValue(row[header]))),
+        totalRows: rows.length,
+        rowCount: rows.length,
+      };
+    } catch (error) {
+      if (isBigQueryTimeoutError(error)) {
+        throw queryDeadlineExceededError(this.deadlineMs, { cause: error });
+      }
+      throw error;
     }
-    return {
-      headers,
-      headerTypes: headerTypes.length > 0 ? headerTypes : undefined,
-      rows: rows.map((row) => headers.map((header) => normalizeValue(row[header]))),
-      totalRows: rows.length,
-      rowCount: rows.length,
-    };
   }
 
   private async queryRaw<T extends Record<string, unknown>>(sql: string, params?: Record<string, unknown>): Promise<T[]> {

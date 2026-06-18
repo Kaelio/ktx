@@ -1,3 +1,4 @@
+import { KtxQueryError } from '../../errors.js';
 import type { KtxDialect } from '../connections/dialects.js';
 import type { KtxRelationshipEndpoint } from './enrichment-types.js';
 import { applyKtxRelationshipValidationBudget, type KtxRelationshipValidationBudget } from './relationship-budget.js';
@@ -206,7 +207,7 @@ export async function mapWithConcurrency<TInput, TOutput>(
 function reviewWithoutValidation(
   candidate: KtxRelationshipDiscoveryCandidate,
   profiles: KtxRelationshipProfileArtifact,
-  reason: 'validation_unavailable' | 'profile_unavailable' | 'validation_unattempted',
+  reason: 'validation_unavailable' | 'profile_unavailable' | 'validation_unattempted' | 'validation_query_failed',
 ): KtxValidatedRelationshipDiscoveryCandidate {
   const sourceColumn = singleRelationshipColumn(candidate.from);
   const targetColumn = singleRelationshipColumn(candidate.to);
@@ -256,21 +257,35 @@ export async function validateKtxRelationshipDiscoveryCandidates(
       return reviewWithoutValidation(candidate, input.profiles, 'profile_unavailable');
     }
 
-    const result = await executor.executeReadOnly(
-      {
-        connectionId: input.connectionId,
-        sql: buildCoverageSql({
-          dialect: input.dialect,
-          childTable: candidate.from.table,
-          childColumn: sourceColumn,
-          parentTable: candidate.to.table,
-          parentColumn: targetColumn,
-          maxDistinctSourceValues: settings.maxDistinctSourceValues,
-        }),
-        maxRows: 1,
-      },
-      input.ctx,
-    );
+    let result: KtxQueryResult;
+    try {
+      result = await executor.executeReadOnly(
+        {
+          connectionId: input.connectionId,
+          sql: buildCoverageSql({
+            dialect: input.dialect,
+            childTable: candidate.from.table,
+            childColumn: sourceColumn,
+            parentTable: candidate.to.table,
+            parentColumn: targetColumn,
+            maxDistinctSourceValues: settings.maxDistinctSourceValues,
+          }),
+          maxRows: 1,
+        },
+        input.ctx,
+      );
+    } catch (error) {
+      // A bounded-query timeout (or other query rejection) on this one coverage
+      // probe is best-effort: skip the candidate to review rather than aborting
+      // the whole validation pass.
+      if (error instanceof KtxQueryError) {
+        input.ctx.logger?.warn(
+          `relationship validation query skipped for ${candidate.from.table.name}.${sourceColumn} -> ${candidate.to.table.name}.${targetColumn}: ${error.message}`,
+        );
+        return reviewWithoutValidation(candidate, input.profiles, 'validation_query_failed');
+      }
+      throw error;
+    }
     const childDistinct = numberAt(result, 'child_distinct');
     const parentDistinct = numberAt(result, 'parent_distinct');
     const overlap = numberAt(result, 'overlap');

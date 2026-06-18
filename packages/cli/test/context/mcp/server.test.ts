@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { KtxQueryError } from '../../../src/errors.js';
 import { createLocalProjectMemoryIngest } from '../../../src/context/memory/local-memory.js';
 import { detectCaptureSignals } from '../../../src/context/memory/capture-signals.js';
 import type { MemoryAgentInput } from '../../../src/context/memory/types.js';
@@ -1431,6 +1432,36 @@ describe('MCP tool-call logging', () => {
 
     const end = cap.lines().find((line) => line.msg === 'tool.end');
     expect(end).toMatchObject({ outcome: 'ok', level: 40 });
+  });
+
+  it('logs a matched tool.start/tool.end(error) pair carrying the deadline message when a query times out', async () => {
+    const cap = loggerCapture();
+    const fake = makeFakeServer();
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local' },
+      logger: cap.logger,
+      contextTools: {
+        sqlExecution: {
+          execute: vi.fn<KtxSqlExecutionMcpPort['execute']>().mockRejectedValue(new KtxQueryError('query exceeded 30s')),
+        },
+      },
+    });
+
+    await getTool(fake.tools, 'sql_execution').handler({
+      connectionId: 'warehouse',
+      sql: 'select min(time_id), max(time_id), count(*) from profits',
+    });
+
+    const lines = cap.lines();
+    const start = lines.find((line) => line.msg === 'tool.start');
+    const end = lines.find((line) => line.msg === 'tool.end');
+    expect(typeof start?.callId).toBe('string');
+    expect(end).toMatchObject({ tool: 'sql_execution', callId: start?.callId, outcome: 'error', level: 50 });
+    expect((end?.err as { message?: string }).message).toBe('query exceeded 30s');
+    // No unmatched tool.start remains — the matched pair closes spec 15's hang gap for this case.
+    expect(lines.filter((line) => line.msg === 'tool.start')).toHaveLength(1);
+    expect(lines.filter((line) => line.msg === 'tool.end' && line.callId === start?.callId)).toHaveLength(1);
     expect(end?.durationMs as number).toBeGreaterThan(0);
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { KtxQueryError } from '../../../src/errors.js';
 import { bigQueryConnectionConfigFromConfig, isKtxBigQueryConnectionConfig, type KtxBigQueryClient, KtxBigQueryScanConnector, type KtxBigQueryClientFactory, type KtxBigQueryDataset, type KtxBigQueryQueryJob, type KtxBigQueryTableRef, prepareBigQueryReadOnlyQuery } from '../../../src/connectors/bigquery/connector.js';
 import { createBigQueryLiveDatabaseIntrospection } from '../../../src/connectors/bigquery/live-database-introspection.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
@@ -485,7 +486,7 @@ describe('KtxBigQueryScanConnector', () => {
     const clientFactory = fakeClientFactory();
     const connector = new KtxBigQueryScanConnector({
       connectionId: 'warehouse',
-      connection: { ...connection, max_bytes_billed: '987654321', job_timeout_ms: 30_000 },
+      connection: { ...connection, max_bytes_billed: '987654321', query_timeout_ms: 30_000 },
       clientFactory,
     });
 
@@ -534,5 +535,36 @@ describe('KtxBigQueryScanConnector', () => {
         }),
       ]),
     });
+  });
+
+  it('maps a BigQuery job timeout to KtxQueryError', async () => {
+    const timeoutError = new Error('Job execution was cancelled: Job timed out after 5000ms');
+    const clientFactory: KtxBigQueryClientFactory = {
+      createClient: vi.fn(() => ({
+        getDatasets: vi.fn(async (): ReturnType<KtxBigQueryClient['getDatasets']> => [[{ id: 'analytics' }]]),
+        dataset: vi.fn(
+          (datasetId: string): KtxBigQueryDataset => ({
+            get: vi.fn(async () => [{ id: datasetId }]),
+            getTables: vi.fn(async (): ReturnType<KtxBigQueryDataset['getTables']> => [[]]),
+          }),
+        ),
+        createQueryJob: vi.fn(async (): ReturnType<KtxBigQueryClient['createQueryJob']> => {
+          throw timeoutError;
+        }),
+      })),
+    };
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: { ...connection, query_timeout_ms: 5_000 },
+      clientFactory,
+    });
+
+    const execution = connector.executeReadOnly(
+      { connectionId: 'warehouse', sql: 'select count(*) from `project-1`.`analytics`.`orders`' },
+      { runId: 'scan-run-1' },
+    );
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('query exceeded 5s');
+    await expect(execution).rejects.toMatchObject({ cause: timeoutError });
   });
 });
