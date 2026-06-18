@@ -1,3 +1,4 @@
+import { resolveKtxConfigReference } from '../../../core/config-reference.js';
 import type { KtxLocalProject } from '../../../../context/project/project.js';
 import type { KtxProjectConnectionConfig } from '../../../../context/project/config.js';
 import {
@@ -6,13 +7,6 @@ import {
 
 function stringField(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-}
-
-function resolveEnvReference(ref: string, env: NodeJS.ProcessEnv): string | null {
-  if (!ref.startsWith('env:')) {
-    return null;
-  }
-  return stringField(env[ref.slice('env:'.length)]);
 }
 
 export function lookerCredentialsFromLocalConnection(
@@ -27,7 +21,8 @@ export function lookerCredentialsFromLocalConnection(
   const clientId = stringField(connection.client_id);
   const clientSecret =
     stringField(connection.client_secret) ??
-    (stringField(connection.client_secret_ref) ? resolveEnvReference(String(connection.client_secret_ref), env) : null);
+    resolveKtxConfigReference(stringField(connection.client_secret_ref) ?? undefined, env) ??
+    null;
 
   if (!baseUrl) {
     throw new Error(`Connection "${connectionId}" is missing Looker base_url`);
