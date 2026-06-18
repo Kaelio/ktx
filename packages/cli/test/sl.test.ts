@@ -751,7 +751,7 @@ joins: []
       validateSources: vi.fn(),
       generateSources: vi.fn(),
     };
-    const createManagedSemanticLayerCompute = vi.fn(async () => compute);
+    const createManagedSemanticLayerCompute = vi.fn(() => compute);
 
     await expect(
       runKtxSl(

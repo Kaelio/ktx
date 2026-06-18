@@ -186,64 +186,111 @@ describe('createManagedPythonSemanticLayerComputePort', () => {
     ]);
   });
 
-  it('uses the managed ktx-daemon executable when the runtime is ready', async () => {
+  it('does not touch the runtime when the port is only constructed', () => {
+    const io = makeIo();
+    const readStatus = vi.fn(async () => readyStatus());
+    const installRuntime = vi.fn(async () => installResult());
+    const createPythonCompute = vi.fn(() => ({ query: vi.fn(), validateSources: vi.fn(), generateSources: vi.fn() }));
+
+    createManagedPythonSemanticLayerComputePort({
+      cliVersion: '0.2.0',
+      installPolicy: 'auto',
+      io: io.io,
+      readStatus,
+      installRuntime,
+      createPythonCompute,
+    });
+
+    expect(readStatus).not.toHaveBeenCalled();
+    expect(installRuntime).not.toHaveBeenCalled();
+    expect(createPythonCompute).not.toHaveBeenCalled();
+    expect(io.stderr()).toBe('');
+  });
+
+  it('uses the managed ktx-daemon executable on the first compute call', async () => {
     const io = makeIo();
     const compute = { query: vi.fn(), validateSources: vi.fn(), generateSources: vi.fn() };
     const createPythonCompute = vi.fn(() => compute);
 
-    await expect(
-      createManagedPythonSemanticLayerComputePort({
-        cliVersion: '0.2.0',
-        installPolicy: 'never',
-        io: io.io,
-        readStatus: vi.fn(async () => readyStatus()),
-        installRuntime: vi.fn(),
-        createPythonCompute,
-      }),
-    ).resolves.toBe(compute);
+    const port = createManagedPythonSemanticLayerComputePort({
+      cliVersion: '0.2.0',
+      installPolicy: 'never',
+      io: io.io,
+      readStatus: vi.fn(async () => readyStatus()),
+      installRuntime: vi.fn(),
+      createPythonCompute,
+    });
+
+    await port.validateSources({ sources: [], dialect: 'postgres' });
 
     expect(createPythonCompute).toHaveBeenCalledWith({
       command: '/runtime/0.2.0/.venv/bin/ktx-daemon',
       args: [],
     });
+    expect(compute.validateSources).toHaveBeenCalledWith({ sources: [], dialect: 'postgres' });
     expect(io.stderr()).toBe('');
   });
 
-  it('fails with a preparation command when input is disabled and the runtime is missing', async () => {
+  it('resolves the runtime once across multiple compute calls', async () => {
+    const io = makeIo();
+    const readStatus = vi.fn(async () => readyStatus());
+    const createPythonCompute = vi.fn(() => ({ query: vi.fn(), validateSources: vi.fn(), generateSources: vi.fn() }));
+
+    const port = createManagedPythonSemanticLayerComputePort({
+      cliVersion: '0.2.0',
+      installPolicy: 'never',
+      io: io.io,
+      readStatus,
+      installRuntime: vi.fn(),
+      createPythonCompute,
+    });
+
+    await port.validateSources({ sources: [], dialect: 'postgres' });
+    await port.validateSources({ sources: [], dialect: 'postgres' });
+
+    expect(readStatus).toHaveBeenCalledTimes(1);
+    expect(createPythonCompute).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails with a preparation command on first use when input is disabled and the runtime is missing', async () => {
     const io = makeIo();
     const installRuntime = vi.fn();
 
-    await expect(
-      createManagedPythonSemanticLayerComputePort({
-        cliVersion: '0.2.0',
-        installPolicy: 'never',
-        io: io.io,
-        readStatus: vi.fn(async () => missingStatus()),
-        installRuntime,
-      }),
-    ).rejects.toThrow('ktx Python runtime is required for this command. Run: ktx admin runtime install --yes');
+    const port = createManagedPythonSemanticLayerComputePort({
+      cliVersion: '0.2.0',
+      installPolicy: 'never',
+      io: io.io,
+      readStatus: vi.fn(async () => missingStatus()),
+      installRuntime,
+    });
+
+    await expect(port.validateSources({ sources: [], dialect: 'postgres' })).rejects.toThrow(
+      'ktx Python runtime is required for this command. Run: ktx admin runtime install --yes',
+    );
 
     expect(installRuntime).not.toHaveBeenCalled();
   });
 
-  it('installs the core runtime without prompting when policy is auto', async () => {
+  it('installs the core runtime without prompting on first use when policy is auto', async () => {
     const io = makeIo();
     const { events, spinner } = makeSpinnerEvents();
     const compute = { query: vi.fn(), validateSources: vi.fn(), generateSources: vi.fn() };
     const createPythonCompute = vi.fn(() => compute);
     const installRuntime = vi.fn(async () => installResult());
 
-    await expect(
-      createManagedPythonSemanticLayerComputePort({
-        cliVersion: '0.2.0',
-        installPolicy: 'auto',
-        io: io.io,
-        readStatus: vi.fn(async () => missingStatus()),
-        installRuntime,
-        createPythonCompute,
-        spinner,
-      }),
-    ).resolves.toBe(compute);
+    const port = createManagedPythonSemanticLayerComputePort({
+      cliVersion: '0.2.0',
+      installPolicy: 'auto',
+      io: io.io,
+      readStatus: vi.fn(async () => missingStatus()),
+      installRuntime,
+      createPythonCompute,
+      spinner,
+    });
+
+    expect(installRuntime).not.toHaveBeenCalled();
+
+    await port.validateSources({ sources: [], dialect: 'postgres' });
 
     expect(installRuntime).toHaveBeenCalledWith({
       cliVersion: '0.2.0',
@@ -256,13 +303,13 @@ describe('createManagedPythonSemanticLayerComputePort', () => {
     ]);
   });
 
-  it('prompts before installing when policy is prompt', async () => {
+  it('prompts before installing on first use when policy is prompt', async () => {
     const io = makeIo();
     const { events, spinner } = makeSpinnerEvents();
     const confirmInstall = vi.fn(async () => true);
     const installRuntime = vi.fn(async () => installResult());
 
-    await createManagedPythonSemanticLayerComputePort({
+    const port = createManagedPythonSemanticLayerComputePort({
       cliVersion: '0.2.0',
       installPolicy: 'prompt',
       io: io.io,
@@ -272,6 +319,8 @@ describe('createManagedPythonSemanticLayerComputePort', () => {
       confirmInstall,
       spinner,
     });
+
+    await port.validateSources({ sources: [], dialect: 'postgres' });
 
     expect(confirmInstall).toHaveBeenCalledWith(
       'ktx needs to install the core Python runtime. This downloads Python dependencies with uv. Continue?',
@@ -292,18 +341,18 @@ describe('createManagedPythonSemanticLayerComputePort', () => {
     const installRuntime = vi.fn(async (): Promise<ManagedPythonRuntimeInstallResult> => installResult());
     const confirmInstall = vi.fn(async () => true);
 
-    await expect(
-      createManagedPythonSemanticLayerComputePort({
-        cliVersion: '0.2.0',
-        installPolicy: 'prompt',
-        io: io.io,
-        readStatus: async () => missingStatus(),
-        installRuntime,
-        confirmInstall,
-        createPythonCompute: () => compute,
-        spinner,
-      }),
-    ).resolves.toBe(compute);
+    const port = createManagedPythonSemanticLayerComputePort({
+      cliVersion: '0.2.0',
+      installPolicy: 'prompt',
+      io: io.io,
+      readStatus: async () => missingStatus(),
+      installRuntime,
+      confirmInstall,
+      createPythonCompute: () => compute,
+      spinner,
+    });
+
+    await port.validateSources({ sources: [], dialect: 'postgres' });
 
     expect(confirmInstall).toHaveBeenCalledWith(
       'ktx needs to install the core Python runtime. This downloads Python dependencies with uv. Continue?',
@@ -316,15 +365,17 @@ describe('createManagedPythonSemanticLayerComputePort', () => {
     const io = makeIo();
     Object.assign(io.io.stdout, { isTTY: false });
 
-    await expect(
-      createManagedPythonSemanticLayerComputePort({
-        cliVersion: '0.2.0',
-        installPolicy: 'prompt',
-        io: io.io,
-        readStatus: async () => missingStatus(),
-        installRuntime: vi.fn(),
-        createPythonCompute: () => ({ query: vi.fn(), validateSources: vi.fn(), generateSources: vi.fn() }),
-      }),
-    ).rejects.toThrow('ktx Python runtime installation was cancelled');
+    const port = createManagedPythonSemanticLayerComputePort({
+      cliVersion: '0.2.0',
+      installPolicy: 'prompt',
+      io: io.io,
+      readStatus: async () => missingStatus(),
+      installRuntime: vi.fn(),
+      createPythonCompute: () => ({ query: vi.fn(), validateSources: vi.fn(), generateSources: vi.fn() }),
+    });
+
+    await expect(port.validateSources({ sources: [], dialect: 'postgres' })).rejects.toThrow(
+      'ktx Python runtime installation was cancelled',
+    );
   });
 });

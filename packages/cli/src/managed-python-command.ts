@@ -121,26 +121,43 @@ export async function ensureManagedPythonCommandRuntime(
   }
 }
 
-export async function createManagedPythonSemanticLayerComputePort(
+export function createManagedPythonSemanticLayerComputePort(
   options: ManagedPythonSemanticLayerComputeOptions,
-): Promise<KtxSemanticLayerComputePort> {
-  const runtime = await ensureManagedPythonCommandRuntime({
-    cliVersion: options.cliVersion,
-    installPolicy: options.installPolicy,
-    io: options.io,
-    feature: 'core',
-    ...(options.readStatus ? { readStatus: options.readStatus } : {}),
-    ...(options.installRuntime ? { installRuntime: options.installRuntime } : {}),
-    ...(options.confirmInstall ? { confirmInstall: options.confirmInstall } : {}),
-    ...(options.spinner ? { spinner: options.spinner } : {}),
-  });
+): KtxSemanticLayerComputePort {
   const createPythonCompute = options.createPythonCompute ?? createPythonSemanticLayerComputePort;
-  const projectId = options.projectDir
-    ? await readExistingTelemetryProjectId({ projectDir: options.projectDir })
-    : undefined;
-  return createPythonCompute({
-    command: runtime.manifest.python.daemonExecutable,
-    args: [],
-    ...(projectId ? { projectId } : {}),
-  });
+  let cachedPort: KtxSemanticLayerComputePort | undefined;
+
+  // Runtime install is deferred to the first compute call so an MCP session
+  // that only searches never installs the Python runtime at boot. Cached on
+  // success, so a failed install retries on the next call.
+  const resolvePort = async (): Promise<KtxSemanticLayerComputePort> => {
+    if (cachedPort) {
+      return cachedPort;
+    }
+    const runtime = await ensureManagedPythonCommandRuntime({
+      cliVersion: options.cliVersion,
+      installPolicy: options.installPolicy,
+      io: options.io,
+      feature: 'core',
+      ...(options.readStatus ? { readStatus: options.readStatus } : {}),
+      ...(options.installRuntime ? { installRuntime: options.installRuntime } : {}),
+      ...(options.confirmInstall ? { confirmInstall: options.confirmInstall } : {}),
+      ...(options.spinner ? { spinner: options.spinner } : {}),
+    });
+    const projectId = options.projectDir
+      ? await readExistingTelemetryProjectId({ projectDir: options.projectDir })
+      : undefined;
+    cachedPort = createPythonCompute({
+      command: runtime.manifest.python.daemonExecutable,
+      args: [],
+      ...(projectId ? { projectId } : {}),
+    });
+    return cachedPort;
+  };
+
+  return {
+    query: async (input) => (await resolvePort()).query(input),
+    validateSources: async (input) => (await resolvePort()).validateSources(input),
+    generateSources: async (input) => (await resolvePort()).generateSources(input),
+  };
 }

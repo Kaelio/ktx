@@ -26,7 +26,7 @@ export async function createKtxMcpServerFactory(input: {
 }): Promise<() => McpServer> {
   const io = input.io ?? noopMcpIo();
   const queryExecutor = createKtxCliIngestQueryExecutor(input.project);
-  const semanticLayerCompute = await createManagedPythonSemanticLayerComputePort({
+  const semanticLayerCompute = createManagedPythonSemanticLayerComputePort({
     cliVersion: input.cliVersion,
     installPolicy: 'auto',
     io,

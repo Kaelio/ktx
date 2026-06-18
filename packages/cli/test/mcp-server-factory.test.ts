@@ -62,7 +62,7 @@ vi.mock('../src/local-scan-connectors.js', () => ({
 }));
 
 vi.mock('../src/managed-python-command.js', () => ({
-  createManagedPythonSemanticLayerComputePort: vi.fn(async () => mocks.semanticLayerCompute),
+  createManagedPythonSemanticLayerComputePort: vi.fn(() => mocks.semanticLayerCompute),
 }));
 
 vi.mock('../src/managed-python-http.js', () => ({
