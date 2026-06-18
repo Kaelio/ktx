@@ -234,11 +234,14 @@ describe('runKtxMcpHttpServer', () => {
       const port = (handle.server.address() as AddressInfo).port;
       const response = await get(port, '/health');
       expect(response.status).toBe(200);
-      expect(JSON.parse(response.body)).toEqual({
+      const body = JSON.parse(response.body);
+      expect(body).toMatchObject({
         status: 'ok',
         projectDir: '/tmp/ktx-project',
         port,
       });
+      expect(typeof body.uptimeMs).toBe('number');
+      expect(body.uptimeMs).toBeGreaterThanOrEqual(0);
     } finally {
       await handle.close();
     }

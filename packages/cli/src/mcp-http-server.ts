@@ -221,6 +221,7 @@ export async function runKtxMcpHttpServer(options: RunKtxMcpHttpServerOptions): 
     return transport;
   }
 
+  const startedAt = performance.now();
   const server = createServer(async (req, res) => {
     const path = requestPath(req);
     const auth = isMcpRequestAuthorized({ path, headers: req.headers }, config);
@@ -231,7 +232,8 @@ export async function runKtxMcpHttpServer(options: RunKtxMcpHttpServerOptions): 
 
     if (path === '/health' && req.method === 'GET') {
       const port = listenerPort(server, config.port);
-      writeJson(res, 200, { status: 'ok', projectDir: options.projectDir, port });
+      const uptimeMs = Math.round(performance.now() - startedAt);
+      writeJson(res, 200, { status: 'ok', projectDir: options.projectDir, port, uptimeMs });
       return;
     }
 
