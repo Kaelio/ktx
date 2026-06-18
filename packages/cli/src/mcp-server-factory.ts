@@ -9,7 +9,7 @@ import { resolveProjectEmbeddingProvider } from './embedding-resolution.js';
 import { createKtxCliIngestQueryExecutor } from './ingest-query-executor.js';
 import { createKtxCliScanConnector } from './local-scan-connectors.js';
 import { createManagedPythonSemanticLayerComputePort } from './managed-python-command.js';
-import { createManagedDaemonSqlAnalysisPort } from './managed-python-http.js';
+import { resolveSqlAnalysisPort } from './managed-python-http.js';
 
 function noopMcpIo(): KtxCliIo {
   return {
@@ -31,7 +31,7 @@ export async function createKtxMcpServerFactory(input: {
     installPolicy: 'auto',
     io,
   });
-  const sqlAnalysis = createManagedDaemonSqlAnalysisPort({
+  const sqlAnalysis = resolveSqlAnalysisPort({
     cliVersion: input.cliVersion,
     projectDir: input.projectDir,
     installPolicy: 'auto',

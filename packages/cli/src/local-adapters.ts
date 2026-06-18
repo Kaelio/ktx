@@ -29,8 +29,9 @@ import { createHttpSqlAnalysisPort } from './context/sql-analysis/http-sql-analy
 import type { SqlAnalysisPort } from './context/sql-analysis/ports.js';
 import {
   createManagedDaemonLookerTableIdentifierParser,
-  createManagedDaemonSqlAnalysisPort,
+  externalDaemonSqlAnalysisBaseUrl,
   managedDaemonDatabaseIntrospectionOptions,
+  resolveSqlAnalysisPort,
   type ManagedPythonDaemonHttpOptions,
 } from './managed-python-http.js';
 import type { KtxOperationalLogger } from './io/logger.js';
@@ -78,16 +79,12 @@ export function resolveKtxCliSqlAnalysis(options: KtxCliLocalIngestAdaptersOptio
   if (options.sqlAnalysisUrl) {
     return createHttpSqlAnalysisPort({ baseUrl: options.sqlAnalysisUrl });
   }
-  if (process.env.KTX_SQL_ANALYSIS_URL) {
-    return createHttpSqlAnalysisPort({ baseUrl: process.env.KTX_SQL_ANALYSIS_URL });
-  }
-  if (process.env.KTX_DAEMON_URL) {
-    return createHttpSqlAnalysisPort({ baseUrl: process.env.KTX_DAEMON_URL });
-  }
   if (options.managedDaemon) {
-    return createManagedDaemonSqlAnalysisPort(options.managedDaemon);
+    return resolveSqlAnalysisPort(options.managedDaemon);
   }
-  return createHttpSqlAnalysisPort({ baseUrl: 'http://127.0.0.1:8765' });
+  return createHttpSqlAnalysisPort({
+    baseUrl: externalDaemonSqlAnalysisBaseUrl(process.env) ?? 'http://127.0.0.1:8765',
+  });
 }
 
 function createKtxCliLiveDatabaseIntrospection(

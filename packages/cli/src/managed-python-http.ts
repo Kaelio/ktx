@@ -178,11 +178,37 @@ export function createManagedDaemonLookerTableIdentifierParser(
   });
 }
 
+/** @internal */
 export function createManagedDaemonSqlAnalysisPort(options: ManagedPythonDaemonHttpOptions): SqlAnalysisPort {
   return createHttpSqlAnalysisPort({
     baseUrl: 'http://127.0.0.1:0',
     requestJson: createManagedDaemonHttpJsonRunner(options) as KtxSqlAnalysisHttpJsonRunner,
   });
+}
+
+export function externalDaemonSqlAnalysisBaseUrl(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): string | undefined {
+  const sqlAnalysisUrl = env.KTX_SQL_ANALYSIS_URL?.trim();
+  if (sqlAnalysisUrl) {
+    return sqlAnalysisUrl;
+  }
+  const daemonUrl = env.KTX_DAEMON_URL?.trim();
+  if (daemonUrl) {
+    return daemonUrl;
+  }
+  return undefined;
+}
+
+export function resolveSqlAnalysisPort(
+  managedDaemon: ManagedPythonDaemonHttpOptions,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): SqlAnalysisPort {
+  const externalBaseUrl = externalDaemonSqlAnalysisBaseUrl(env);
+  if (externalBaseUrl) {
+    return createHttpSqlAnalysisPort({ baseUrl: externalBaseUrl });
+  }
+  return createManagedDaemonSqlAnalysisPort(managedDaemon);
 }
 
 export function managedDaemonDatabaseIntrospectionOptions(

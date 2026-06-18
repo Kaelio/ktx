@@ -66,7 +66,7 @@ vi.mock('../src/managed-python-command.js', () => ({
 }));
 
 vi.mock('../src/managed-python-http.js', () => ({
-  createManagedDaemonSqlAnalysisPort: vi.fn(() => mocks.sqlAnalysis),
+  resolveSqlAnalysisPort: vi.fn(() => mocks.sqlAnalysis),
 }));
 
 const project = {
