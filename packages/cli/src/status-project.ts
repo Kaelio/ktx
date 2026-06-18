@@ -6,8 +6,10 @@ import {
   CODEX_ISOLATION_WARNING_FIX,
 } from './context/llm/codex-isolation.js';
 import { runCodexAuthProbe } from './context/llm/codex-runtime.js';
+import { resolveKtxConfigReference } from './context/core/config-reference.js';
 import type { KtxConfigIssue, KtxProjectConfig, KtxProjectConnectionConfig, KtxProjectEmbeddingConfig, KtxProjectLlmConfig } from './context/project/config.js';
 import type { KtxLocalProject } from './context/project/project.js';
+import { readGitRepoConnectionFields } from './context/project/git-connection-fields.js';
 import { ktxLocalStateDbPath } from './context/project/local-state-db.js';
 import {
   isQueryHistoryEnabled,
@@ -167,19 +169,21 @@ export interface ProjectStatus {
   };
 }
 
+// Delegates to the canonical resolver so status reports what the runtime resolves;
+// it reads file: refs and throws on a missing/empty file, so the catch maps that
+// to "missing" rather than letting status crash.
 function resolveRef(value: unknown, env: NodeJS.ProcessEnv): { resolved: string; via: 'literal' | 'env' | 'file' | 'missing' } {
   if (typeof value !== 'string') return { resolved: '', via: 'missing' };
   const trimmed = value.trim();
   if (trimmed.length === 0) return { resolved: '', via: 'missing' };
-  if (trimmed.startsWith('env:')) {
-    const name = trimmed.slice(4).trim();
-    const v = env[name];
-    return v && v.trim().length > 0 ? { resolved: v, via: 'env' } : { resolved: '', via: 'missing' };
+  const via = trimmed.startsWith('env:') ? 'env' : trimmed.startsWith('file:') ? 'file' : 'literal';
+  let resolved: string | undefined;
+  try {
+    resolved = resolveKtxConfigReference(trimmed, env);
+  } catch {
+    resolved = undefined;
   }
-  if (trimmed.startsWith('file:')) {
-    return { resolved: trimmed.slice(5), via: 'file' };
-  }
-  return { resolved: trimmed, via: 'literal' };
+  return resolved && resolved.length > 0 ? { resolved, via } : { resolved: '', via: 'missing' };
 }
 
 function failureDetail(error: unknown): string {
@@ -350,7 +354,9 @@ function buildEmbeddingsStatus(config: KtxProjectEmbeddingConfig, env: NodeJS.Pr
   if (backend === 'openai') {
     const ref = config.openai?.api_key;
     const resolved = resolveRef(ref, env);
-    if (resolved.resolved.length > 0 || (env.OPENAI_API_KEY && env.OPENAI_API_KEY.trim().length > 0)) {
+    // resolveLocalKtxEmbeddingConfig requires a resolved openai.api_key and never
+    // falls back to a bare OPENAI_API_KEY env var, so status must not either.
+    if (resolved.resolved.length > 0) {
       return { backend, model, dimensions, status: 'ok', detail: 'key set' };
     }
     const hint = envHint(ref);
@@ -427,26 +433,25 @@ function buildConnectionStatus(
     case 'dbt':
     case 'dbt-core':
     case 'dbt-cloud': {
-      const repoUrl =
-        (conn as Record<string, unknown>).repoUrl ??
-        (conn as Record<string, unknown>).repo_url;
-      if (typeof repoUrl === 'string' && repoUrl.length > 0) return ok(`repo: ${repoUrl}`);
-      return warn('repoUrl not set', 'Rerun `ktx setup`');
+      const { repoUrl, sourceDir } = readGitRepoConnectionFields(conn, 'dbt');
+      const source = repoUrl ?? sourceDir;
+      if (source) return ok(`repo: ${source}`);
+      return warn('repo_url not set', 'Rerun `ktx setup`');
     }
     case 'metabase': {
       const url = (conn as Record<string, unknown>).api_url;
       if (typeof url === 'string' && url.length > 0) return ok(`url: ${url}`);
       return warn('api_url not set', 'Rerun `ktx setup`');
     }
-    case 'looker':
-    case 'lookml': {
+    case 'looker': {
       const url = (conn as Record<string, unknown>).base_url ?? (conn as Record<string, unknown>).url;
       if (typeof url === 'string' && url.length > 0) return ok(`url: ${url}`);
       return warn('base_url not set', 'Rerun `ktx setup`');
     }
+    case 'lookml':
     case 'metricflow': {
-      const repoUrl = (conn as Record<string, unknown>).repoUrl ?? (conn as Record<string, unknown>).repo_url;
-      if (typeof repoUrl === 'string' && repoUrl.length > 0) return ok(`repo: ${repoUrl}`);
+      const { repoUrl } = readGitRepoConnectionFields(conn, driver);
+      if (repoUrl) return ok(`repo: ${repoUrl}`);
       return warn('repoUrl not set', 'Rerun `ktx setup`');
     }
     default:
