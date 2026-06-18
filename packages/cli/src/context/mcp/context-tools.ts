@@ -11,6 +11,7 @@ import {
 } from '../../telemetry/index.js';
 import { collectTelemetryRedactionSecrets } from '../../telemetry/redaction-secrets.js';
 import { scrubErrorClass } from '../../telemetry/scrubber.js';
+import { mcpSlowToolMs, serializeMcpError, type KtxMcpLogger } from './logger.js';
 import type {
   KtxMcpClientInfo,
   KtxMcpContextPorts,
@@ -29,6 +30,7 @@ export interface RegisterKtxContextToolsDeps {
   userContext: KtxMcpUserContext;
   projectDir?: string;
   io?: KtxCliIo;
+  logger?: KtxMcpLogger;
   getClientInfo?: () => KtxMcpClientInfo | undefined;
 }
 
@@ -582,64 +584,144 @@ function clientTelemetryFields(
   };
 }
 
-function instrumentMcpServer(
-  server: KtxMcpServerLike,
-  telemetry: { projectDir?: string; io?: KtxCliIo; getClientInfo?: () => KtxMcpClientInfo | undefined },
-): KtxMcpServerLike {
+function toolResultIsError(result: unknown): boolean {
+  return (
+    typeof result === 'object' && result !== null && 'isError' in result && (result as { isError?: unknown }).isError === true
+  );
+}
+
+/** Tool-agnostic size: byte length of the serialized text content the client reads. */
+function toolResultSize(result: unknown): number {
+  if (typeof result !== 'object' || result === null || !('content' in result)) {
+    return 0;
+  }
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let size = 0;
+  for (const item of content) {
+    if (item && typeof item === 'object' && (item as { type?: unknown }).type === 'text') {
+      const text = (item as { text?: unknown }).text;
+      if (typeof text === 'string') {
+        size += Buffer.byteLength(text, 'utf8');
+      }
+    }
+  }
+  return size;
+}
+
+function toolResultErrorText(result: unknown): string {
+  if (typeof result === 'object' && result !== null && 'content' in result) {
+    const content = (result as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      const text = content
+        .filter(
+          (item): item is { type: 'text'; text: string } =>
+            !!item &&
+            typeof item === 'object' &&
+            (item as { type?: unknown }).type === 'text' &&
+            typeof (item as { text?: unknown }).text === 'string',
+        )
+        .map((item) => item.text)
+        .join('\n');
+      if (text.length > 0) {
+        return text;
+      }
+    }
+  }
+  return 'Tool returned an error result.';
+}
+
+interface InstrumentMcpServerDeps {
+  projectDir?: string;
+  io?: KtxCliIo;
+  logger?: KtxMcpLogger;
+  slowToolMs: number;
+  getClientInfo?: () => KtxMcpClientInfo | undefined;
+}
+
+function instrumentMcpServer(server: KtxMcpServerLike, deps: InstrumentMcpServerDeps): KtxMcpServerLike {
   return {
     registerTool(name, config, handler) {
       server.registerTool(name, config, async (input, context) => {
+        const callId = randomUUID();
+        const callLogger = deps.logger?.child({
+          tool: name,
+          callId,
+          ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
+        });
         const startedAt = performance.now();
+        // Synchronous, before the (possibly blocking) handler: a runaway query that never
+        // returns still leaves this start line — with its exact params — on disk.
+        callLogger?.info({ params: input }, 'tool.start');
         try {
           const result = await handler(input, context);
-          if (telemetry.io && telemetry.projectDir && shouldEmitMcpTelemetry()) {
-            const isError =
-              typeof result === 'object' && result !== null && 'isError' in result && result.isError === true;
+          const durationMs = Math.max(0, performance.now() - startedAt);
+          const isError = toolResultIsError(result);
+          if (deps.io && deps.projectDir && shouldEmitMcpTelemetry()) {
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
-              projectDir: telemetry.projectDir,
-              io: telemetry.io,
+              projectDir: deps.projectDir,
+              io: deps.io,
               fields: {
                 toolName: name,
                 outcome: isError ? 'error' : 'ok',
-                durationMs: Math.max(0, performance.now() - startedAt),
+                durationMs,
                 sampleRate: mcpTelemetrySampleRate(),
-                ...clientTelemetryFields(telemetry.getClientInfo),
+                ...clientTelemetryFields(deps.getClientInfo),
               },
             });
           }
+          if (callLogger) {
+            if (isError) {
+              callLogger.error(
+                { durationMs, outcome: 'error', err: serializeMcpError(toolResultErrorText(result)) },
+                'tool.end',
+              );
+            } else {
+              const fields = { durationMs, outcome: 'ok' as const, resultSize: toolResultSize(result) };
+              if (durationMs > deps.slowToolMs) {
+                callLogger.warn(fields, 'tool.end');
+              } else {
+                callLogger.info(fields, 'tool.end');
+              }
+            }
+          }
           return result;
         } catch (error) {
-          if (telemetry.io) {
+          const durationMs = Math.max(0, performance.now() - startedAt);
+          if (deps.io) {
             await reportException({
               error,
               context: { source: `mcp:${name}`, handled: true, fatal: false },
-              projectDir: telemetry.projectDir,
-              io: telemetry.io,
+              projectDir: deps.projectDir,
+              io: deps.io,
               redactionSecrets: await collectTelemetryRedactionSecrets({
-                projectDir: telemetry.projectDir,
+                projectDir: deps.projectDir,
                 includeLlm: true,
                 includeEmbeddings: true,
                 env: process.env,
               }),
             });
           }
-          if (telemetry.io && telemetry.projectDir && shouldEmitMcpTelemetry()) {
+          if (deps.io && deps.projectDir && shouldEmitMcpTelemetry()) {
             const errorClass = scrubErrorClass(error);
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
-              projectDir: telemetry.projectDir,
-              io: telemetry.io,
+              projectDir: deps.projectDir,
+              io: deps.io,
               fields: {
                 toolName: name,
                 outcome: 'error',
                 ...(errorClass ? { errorClass } : {}),
-                durationMs: Math.max(0, performance.now() - startedAt),
+                durationMs,
                 sampleRate: mcpTelemetrySampleRate(),
-                ...clientTelemetryFields(telemetry.getClientInfo),
+                ...clientTelemetryFields(deps.getClientInfo),
               },
             });
           }
+          callLogger?.error({ durationMs, outcome: 'error', err: serializeMcpError(error) }, 'tool.end');
           throw error;
         }
       });
@@ -653,6 +735,8 @@ export function registerKtxContextTools(deps: RegisterKtxContextToolsDeps): void
   const server = instrumentMcpServer(deps.server, {
     projectDir: deps.projectDir,
     io: deps.io,
+    logger: deps.logger,
+    slowToolMs: mcpSlowToolMs(),
     getClientInfo: deps.getClientInfo,
   });
 

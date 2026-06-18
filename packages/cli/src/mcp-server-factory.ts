@@ -3,6 +3,7 @@ import { createDefaultKtxMcpServer } from './context/mcp/server.js';
 import { createLocalProjectMcpContextPorts } from './context/mcp/local-project-ports.js';
 import { createLocalProjectMemoryIngest } from './context/memory/local-memory.js';
 import { assertConfiguredConnectionId } from './context/connections/configured-connections.js';
+import type { KtxMcpLogger } from './context/mcp/logger.js';
 import type { MemoryIngestPort } from './context/mcp/types.js';
 import type { KtxLocalProject } from './context/project/project.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -25,6 +26,7 @@ export async function createKtxMcpServerFactory(input: {
   projectDir: string;
   cliVersion: string;
   io?: KtxCliIo;
+  logger?: KtxMcpLogger;
 }): Promise<() => McpServer> {
   const io = input.io ?? noopMcpIo();
   const queryExecutor = createKtxCliIngestQueryExecutor(input.project);
@@ -89,6 +91,7 @@ export async function createKtxMcpServerFactory(input: {
       userContext: { userId: 'local' },
       projectDir: input.projectDir,
       io,
+      ...(input.logger ? { logger: input.logger } : {}),
       contextTools: {
         ...contextTools,
         ...(memoryIngest ? { memoryIngest } : {}),

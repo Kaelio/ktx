@@ -10,6 +10,7 @@ import type { MemoryAgentInput } from '../../../src/context/memory/types.js';
 import { parseKtxProjectConfig, serializeKtxProjectConfig } from '../../../src/context/project/config.js';
 import { initKtxProject } from '../../../src/context/project/project.js';
 import { jsonToolResult } from '../../../src/context/mcp/context-tools.js';
+import { createMcpLogger } from '../../../src/context/mcp/logger.js';
 import { createDefaultKtxMcpServer, createKtxMcpServer } from '../../../src/context/mcp/server.js';
 import type {
   KtxDialectNotesMcpPort,
@@ -1332,5 +1333,151 @@ describe('createKtxMcpServer', () => {
       // @ts-expect-error bare arrays are not valid MCP structuredContent objects in ktx
       jsonToolResult([]);
     }
+  });
+});
+
+describe('MCP tool-call logging', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  function loggerCapture() {
+    let buf = '';
+    const io = { stdout: { write() {} }, stderr: { write(chunk: string) { buf += chunk; } } };
+    return {
+      io,
+      logger: createMcpLogger(io, { isTTY: false }),
+      text: () => buf,
+      lines: () =>
+        buf
+          .split('\n')
+          .filter((line) => line.trim().startsWith('{'))
+          .map((line) => JSON.parse(line) as Record<string, unknown>),
+    };
+  }
+
+  it('logs tool.start before the handler runs and a matching tool.end on completion', async () => {
+    const cap = loggerCapture();
+    const fake = makeFakeServer();
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local' },
+      logger: cap.logger,
+      contextTools: {
+        sqlExecution: {
+          execute: vi
+            .fn<KtxSqlExecutionMcpPort['execute']>()
+            .mockResolvedValue({ headers: ['count'], rows: [[1]], rowCount: 1 }),
+        },
+      },
+    });
+
+    await getTool(fake.tools, 'sql_execution').handler({ connectionId: 'warehouse', sql: 'select 1' });
+
+    const lines = cap.lines();
+    const start = lines.find((line) => line.msg === 'tool.start');
+    const end = lines.find((line) => line.msg === 'tool.end');
+    expect(start).toMatchObject({
+      tool: 'sql_execution',
+      params: { connectionId: 'warehouse', sql: 'select 1' },
+      level: 30,
+    });
+    expect(typeof start?.callId).toBe('string');
+    expect(end).toMatchObject({ tool: 'sql_execution', callId: start?.callId, outcome: 'ok', level: 30 });
+    expect(typeof end?.durationMs).toBe('number');
+    expect(end?.resultSize as number).toBeGreaterThan(0);
+  });
+
+  it('leaves a tool.start carrying the SQL with no matching tool.end when a handler never returns', () => {
+    const cap = loggerCapture();
+    const fake = makeFakeServer();
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local' },
+      logger: cap.logger,
+      contextTools: {
+        sqlExecution: { execute: () => new Promise(() => {}) },
+      },
+    });
+
+    void getTool(fake.tools, 'sql_execution').handler({ connectionId: 'warehouse', sql: 'select pg_sleep(99999)' });
+
+    const lines = cap.lines();
+    const start = lines.find((line) => line.msg === 'tool.start');
+    expect(start).toMatchObject({ tool: 'sql_execution', params: { sql: 'select pg_sleep(99999)' } });
+    expect(lines.some((line) => line.msg === 'tool.end' && line.callId === start?.callId)).toBe(false);
+  });
+
+  it('emits tool.end at warn when a completed call exceeds the slow threshold', async () => {
+    vi.stubEnv('KTX_MCP_SLOW_TOOL_MS', '0');
+    const cap = loggerCapture();
+    const fake = makeFakeServer();
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local' },
+      logger: cap.logger,
+      contextTools: {
+        sqlExecution: {
+          execute: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            return { headers: ['count'], rows: [[1]], rowCount: 1 };
+          },
+        },
+      },
+    });
+
+    await getTool(fake.tools, 'sql_execution').handler({ connectionId: 'warehouse', sql: 'select 1' });
+
+    const end = cap.lines().find((line) => line.msg === 'tool.end');
+    expect(end).toMatchObject({ outcome: 'ok', level: 40 });
+    expect(end?.durationMs as number).toBeGreaterThan(0);
+  });
+
+  it('suppresses routine tool traffic at warn level but keeps errored calls', async () => {
+    vi.stubEnv('KTX_MCP_LOG_LEVEL', 'warn');
+    const cap = loggerCapture();
+    const fake = makeFakeServer();
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local' },
+      logger: cap.logger,
+      contextTools: {
+        knowledge: {
+          search: vi.fn<KtxKnowledgeMcpPort['search']>().mockRejectedValue(new Error('wiki index unavailable')),
+          read: vi.fn<KtxKnowledgeMcpPort['read']>().mockResolvedValue(null),
+        },
+      },
+    });
+
+    await getTool(fake.tools, 'wiki_search').handler({ query: 'revenue', limit: 5 });
+
+    const lines = cap.lines();
+    expect(lines.some((line) => line.msg === 'tool.start')).toBe(false);
+    const end = lines.find((line) => line.msg === 'tool.end');
+    expect(end).toMatchObject({ outcome: 'error', level: 50 });
+    expect((end?.err as { message?: string }).message).toContain('wiki index unavailable');
+  });
+
+  it('does not log tool calls when no logger is provided', async () => {
+    const fake = makeFakeServer();
+    const io = makeIo(false);
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local' },
+      io,
+      contextTools: {
+        sqlExecution: {
+          execute: vi
+            .fn<KtxSqlExecutionMcpPort['execute']>()
+            .mockResolvedValue({ headers: ['count'], rows: [[1]], rowCount: 1 }),
+        },
+      },
+    });
+
+    await getTool(fake.tools, 'sql_execution').handler({ connectionId: 'warehouse', sql: 'select 1' });
+
+    expect(io.stderrText()).not.toContain('tool.start');
+    expect(io.stderrText()).not.toContain('tool.end');
   });
 });
