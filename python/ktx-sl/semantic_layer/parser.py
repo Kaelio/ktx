@@ -222,14 +222,10 @@ class ExpressionParser:
         return quote_reserved_identifiers(expr)
 
     def _parse_as_select(self, quoted_expr: str) -> exp.Expression:
-        """Parse a user fragment for read-only AST walks, using the parse cache.
+        """Parse a user fragment as a predicate for read-only AST walks, via the cache.
 
-        Wrapped in a WHERE clause rather than a bare projection: in T-SQL a
-        top-level `col = 'value'` projection is the `alias = expression`
-        aliasing syntax, so a filter parsed as `SELECT col = 'value'` becomes
-        `'value' AS col` and hides the comparison's column from the walk.
-        Wrapping as a predicate parses it as the comparison in every dialect;
-        for non-condition exprs the column set is identical either way.
+        WHERE, not a bare projection: a top-level `col = 'value'` is T-SQL's
+        `alias = expression` aliasing form, which would hide the column.
         """
         return _cached_parse_select(f"SELECT * WHERE {quoted_expr}", self.dialect)
 

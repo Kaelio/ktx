@@ -1,11 +1,7 @@
 """Regression tests for T-SQL `=` filters mis-parsed as column aliases.
 
-In T-SQL, `SELECT col = 'value'` is the `alias = expression` projection
-syntax, so a filter parsed in a projection context (`SELECT {filter}`) becomes
-`'value' AS col` instead of an equality comparison. User-authored filters and
-segments must therefore be parsed as predicates, not projections. These tests
-lock that behavior across dialects so the same source compiles correctly
-everywhere.
+A top-level `col = 'value'` is T-SQL's `alias = expression` projection form, so
+filters and segments must compile as predicates, not projections, on any dialect.
 """
 
 from __future__ import annotations
@@ -92,9 +88,6 @@ def test_where_equality_filter_compiles_as_comparison(dialect):
 
 @pytest.mark.parametrize("dialect", DIALECTS)
 def test_computed_column_expands_in_equality_where_filter(dialect):
-    """A top-level `=` WHERE filter on a computed column must still expand the
-    column's expression — the projection-context parse silently skipped it on
-    T-SQL."""
     engine = make_engine({"jobs": _jobs_source()}, dialect=dialect)
     sql = engine.query(
         {"measures": ["sum(jobs.amount)"], "filters": ["jobs.doubled = 10"]}
@@ -108,8 +101,7 @@ def test_computed_column_expands_in_equality_where_filter(dialect):
 
 
 def test_tsql_equality_and_in_filters_are_equivalent_shape():
-    """`= 'x'` and `IN ('x')` filters should both reach the warehouse as
-    predicates on T-SQL; `IN` was only ever a coincidental workaround."""
+    """On T-SQL, `= 'x'` and `IN ('x')` filters both compile to predicates."""
     eq_engine = make_engine({"jobs": _jobs_source()}, dialect="tsql")
     in_engine = make_engine(
         {
