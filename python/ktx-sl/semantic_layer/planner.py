@@ -910,9 +910,14 @@ class QueryPlanner:
         for c in source.columns:
             col_to_source[c.name] = source_name
 
+        # Parse as a predicate, not a projection: T-SQL reads a top-level
+        # `col = 'value'` projection (a measure filter / segment) as
+        # `alias = expression`, mangling it into `'value' AS col`. Identical to
+        # a projection parse for plain exprs.
         tree = sqlglot.parse_one(
-            f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
+            f"SELECT * WHERE {quote_reserved_identifiers(expr)}", read=self.dialect
         )
+        condition = tree.find(exp.Where).this
 
         def _qualify_column(node):
             if (
@@ -926,8 +931,8 @@ class QueryPlanner:
                 )
             return node
 
-        transformed = tree.transform(_qualify_column)
-        return transformed.expressions[0].sql(dialect=self.dialect)
+        transformed = condition.transform(_qualify_column)
+        return transformed.sql(dialect=self.dialect)
 
     def _detect_fan_out(
         self,

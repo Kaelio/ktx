@@ -673,9 +673,14 @@ class SqlGenerator:
             if isinstance(select_expr, exp.Alias):
                 select_expr = select_expr.this
 
-            filter_cond = sqlglot.parse_one(
-                f"SELECT {filter_sql}", read=self.dialect
-            ).expressions[0]
+            # Parse the filter as a predicate, not a projection: in T-SQL a
+            # top-level `col = 'value'` projection is `alias = expression`
+            # syntax, which would inject `'value' AS col` into the CASE WHEN.
+            filter_cond = (
+                sqlglot.parse_one(f"SELECT * WHERE {filter_sql}", read=self.dialect)
+                .find(exp.Where)
+                .this
+            )
 
             def _make_case(inner_node):
                 return exp.Case(
@@ -1292,9 +1297,15 @@ class SqlGenerator:
             return expr
 
         try:
+            # Parse as a predicate, not a projection: T-SQL reads a top-level
+            # `col = 'value'` projection (a WHERE filter) as `alias = expression`,
+            # hiding the column so expansion silently no-ops. Identical to a
+            # projection parse for plain exprs.
             tree = sqlglot.parse_one(
-                f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
+                f"SELECT * WHERE {quote_reserved_identifiers(expr)}",
+                read=self.dialect,
             )
+            condition = tree.find(exp.Where).this
 
             changed = False
 
@@ -1309,9 +1320,9 @@ class SqlGenerator:
                         ).expressions[0]
                 return node
 
-            transformed = tree.transform(_replace)
+            transformed = condition.transform(_replace)
             if changed:
-                return transformed.expressions[0].sql(dialect=self.dialect)
+                return transformed.sql(dialect=self.dialect)
         except Exception:
             logger.debug("AST-based computed column expansion failed for: %s", expr)
 
