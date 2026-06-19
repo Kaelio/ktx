@@ -39,6 +39,38 @@ def _jobs_source(**overrides):
     return base
 
 
+def _chasm_sources():
+    """Two facts fanning out from a shared hub — triggers aggregate locality, the
+    path that rewrites HAVING filters against measure references."""
+    fact = lambda name: {  # noqa: E731
+        "name": name,
+        "table": f"dbo.{name}",
+        "grain": ["id"],
+        "columns": [
+            {"name": "id", "type": "number"},
+            {"name": "hub_id", "type": "number"},
+            {"name": "val", "type": "number"},
+        ],
+        "joins": [
+            {"to": "hub", "on": "hub_id = hub.id", "relationship": "many_to_one"}
+        ],
+        "measures": [{"name": f"{name}_total", "expr": "sum(val)"}],
+    }
+    return {
+        "hub": {
+            "name": "hub",
+            "table": "dbo.hub",
+            "grain": ["id"],
+            "columns": [
+                {"name": "id", "type": "number"},
+                {"name": "segment", "type": "string"},
+            ],
+        },
+        "fact_a": fact("fact_a"),
+        "fact_b": fact("fact_b"),
+    }
+
+
 def _assert_valid(sql: str, dialect: str) -> None:
     parsed = sqlglot.parse(sql, read=dialect)
     assert parsed and all(stmt is not None for stmt in parsed), sql
@@ -98,6 +130,23 @@ def test_computed_column_expands_in_equality_where_filter(dialect):
     # expression, not the (non-existent) computed column name.
     assert "base" in sql
     assert "doubled" not in sql
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_locality_named_measure_equality_filter_compiles_as_comparison(dialect):
+    """Aggregate-locality HAVING filter on a named measure must compile to a
+    comparison, not the `0 AS measure` alias form T-SQL emits."""
+    engine = make_engine(_chasm_sources(), dialect=dialect)
+    sql = engine.query(
+        {
+            "measures": ["fact_a.fact_a_total", "fact_b.fact_b_total"],
+            "dimensions": ["hub.segment"],
+            "filters": ["fact_a.fact_a_total = 0"],
+        }
+    ).sql
+
+    _assert_valid(sql, dialect)
+    assert "0 AS fact_a_total" not in sql
 
 
 def test_tsql_equality_and_in_filters_are_equivalent_shape():

@@ -15,7 +15,11 @@ from semantic_layer.models import (
     ResolvedPlan,
     SourceDefinition,
 )
-from semantic_layer.parser import ExpressionParser, quote_reserved_identifiers
+from semantic_layer.parser import (
+    ExpressionParser,
+    parse_predicate,
+    quote_reserved_identifiers,
+)
 
 # DIALECT CONVENTION:
 #   User-authored SQL fragments (measure `expr`, segment `expr`, filter,
@@ -673,14 +677,7 @@ class SqlGenerator:
             if isinstance(select_expr, exp.Alias):
                 select_expr = select_expr.this
 
-            # Parse the filter as a predicate, not a projection: in T-SQL a
-            # top-level `col = 'value'` projection is `alias = expression`
-            # syntax, which would inject `'value' AS col` into the CASE WHEN.
-            filter_cond = (
-                sqlglot.parse_one(f"SELECT * WHERE {filter_sql}", read=self.dialect)
-                .find(exp.Where)
-                .this
-            )
+            filter_cond = parse_predicate(filter_sql, self.dialect)
 
             def _make_case(inner_node):
                 return exp.Case(
@@ -1078,10 +1075,7 @@ class SqlGenerator:
 
         # AST-based rewriting for robustness
         try:
-            tree = sqlglot.parse_one(
-                f"SELECT {quote_reserved_identifiers(filter_expr)}",
-                read=self.dialect,
-            )
+            condition = parse_predicate(filter_expr, self.dialect)
 
             def _rewrite(node):
                 if isinstance(node, (exp.AggFunc, exp.Anonymous)):
@@ -1104,8 +1098,8 @@ class SqlGenerator:
                         ).expressions[0]
                 return node
 
-            transformed = tree.transform(_rewrite)
-            return transformed.expressions[0].sql(dialect=self.dialect)
+            transformed = condition.transform(_rewrite)
+            return transformed.sql(dialect=self.dialect)
         except Exception:
             logger.debug(
                 "AST-based HAVING rewrite failed for locality filter, falling back to regex: %s",
@@ -1297,13 +1291,7 @@ class SqlGenerator:
             return expr
 
         try:
-            # Parse as a predicate so T-SQL equality filters are not read as
-            # `alias = expression` projections that hide computed columns.
-            tree = sqlglot.parse_one(
-                f"SELECT * WHERE {quote_reserved_identifiers(expr)}",
-                read=self.dialect,
-            )
-            condition = tree.find(exp.Where).this
+            condition = parse_predicate(expr, self.dialect)
 
             changed = False
 
@@ -1366,13 +1354,7 @@ class SqlGenerator:
 
         # Use AST to find and replace column references matching measure names
         try:
-            tree = sqlglot.parse_one(
-                f"SELECT * WHERE {quote_reserved_identifiers(f)}",
-                dialect=self.dialect,
-            )
-            where = tree.find(exp.Where)
-            if not where:
-                return f
+            condition = parse_predicate(f, self.dialect)
 
             changed = False
 
@@ -1397,7 +1379,7 @@ class SqlGenerator:
                         ).expressions[0]
                 return node
 
-            new_where = where.this.transform(_replace)
+            new_where = condition.transform(_replace)
             if changed:
                 return new_where.sql(dialect=self.dialect)
         except Exception:
