@@ -1297,10 +1297,8 @@ class SqlGenerator:
             return expr
 
         try:
-            # Parse as a predicate, not a projection: T-SQL reads a top-level
-            # `col = 'value'` projection (a WHERE filter) as `alias = expression`,
-            # hiding the column so expansion silently no-ops. Identical to a
-            # projection parse for plain exprs.
+            # Parse as a predicate so T-SQL equality filters are not read as
+            # `alias = expression` projections that hide computed columns.
             tree = sqlglot.parse_one(
                 f"SELECT * WHERE {quote_reserved_identifiers(expr)}",
                 read=self.dialect,

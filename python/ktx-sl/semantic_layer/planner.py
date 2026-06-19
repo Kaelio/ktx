@@ -910,10 +910,8 @@ class QueryPlanner:
         for c in source.columns:
             col_to_source[c.name] = source_name
 
-        # Parse as a predicate, not a projection: T-SQL reads a top-level
-        # `col = 'value'` projection (a measure filter / segment) as
-        # `alias = expression`, mangling it into `'value' AS col`. Identical to
-        # a projection parse for plain exprs.
+        # Parse as a predicate so T-SQL equality filters are not read as
+        # `alias = expression` projections before column qualification.
         tree = sqlglot.parse_one(
             f"SELECT * WHERE {quote_reserved_identifiers(expr)}", read=self.dialect
         )
