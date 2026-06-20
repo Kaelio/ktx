@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { KtxDuckDbDialect } from './dialect.js';
+import { getDialectForDriver } from '../../context/connections/dialects.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { normalizeQueryRows } from '../../context/connections/query-executor.js';
 import { toJsonSafeRows } from '../shared/duckdb-json-safe.js';
@@ -140,9 +140,7 @@ export class KtxDuckDbScanConnector implements KtxScanConnector {
   private readonly connectionId: string;
   private readonly dbPath: string;
   private readonly now: () => Date;
-  // Instantiate the dialect directly to avoid a construction-time factory dependency;
-  // getDialectForDriver is available but introduces coupling at instantiation time.
-  private readonly dialect = new KtxDuckDbDialect();
+  private readonly dialect = getDialectForDriver('duckdb');
   private instance: DuckDBInstance | null = null;
   private connection: DuckDBConnection | null = null;
 
