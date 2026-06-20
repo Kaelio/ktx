@@ -2,6 +2,7 @@ import type { KtxProjectConnectionConfig } from './context/project/config.js';
 
 const KTX_DATABASE_DRIVER_IDS = new Set([
   'sqlite',
+  'duckdb',
   'postgres',
   'mysql',
   'clickhouse',

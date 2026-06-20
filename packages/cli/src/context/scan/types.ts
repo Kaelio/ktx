@@ -2,6 +2,7 @@ import type { KtxTableRefKey } from './table-ref.js';
 
 export type KtxConnectionDriver =
   | 'sqlite'
+  | 'duckdb'
   | 'postgres'
   | 'sqlserver'
   | 'bigquery'

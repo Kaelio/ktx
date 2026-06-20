@@ -68,6 +68,27 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
       };
     },
   },
+  duckdb: {
+    driver: 'duckdb',
+    scopeConfigKey: null,
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/duckdb/connector.js');
+      return {
+        isConnectionConfig: (connection) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxDuckDbConnectionConfig>[0];
+          return m.isKtxDuckDbConnectionConfig(typedConnection);
+        },
+        createScanConnector: ({ connectionId, connection, projectDir }) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxDuckDbConnectionConfig>[0];
+          if (!m.isKtxDuckDbConnectionConfig(typedConnection)) {
+            throw invalidConnectionConfig('duckdb');
+          }
+          return new m.KtxDuckDbScanConnector({ connectionId, connection: typedConnection, projectDir });
+        },
+      };
+    },
+  },
   mysql: {
     driver: 'mysql',
     scopeConfigKey: 'schemas',

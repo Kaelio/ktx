@@ -43,6 +43,7 @@ export interface KtxConnectionDeps {
 
 const SUPPORTED_TEST_DRIVERS = [
   'sqlite',
+  'duckdb',
   'postgres',
   'mysql',
   'clickhouse',
