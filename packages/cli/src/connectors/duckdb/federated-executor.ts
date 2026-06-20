@@ -21,13 +21,12 @@ export function buildAttachStatements(members: FederatedMember[], env: NodeJS.Pr
     alias: member.connectionId,
   }));
 
-  const loadStatements = [...new Set(attachments.map((a) => a.type))].map(
-    (type) => `INSTALL ${type}; LOAD ${type};`,
-  );
-  const attachStatements = attachments.map(
-    ({ type, url, alias }) =>
-      `ATTACH '${url.replaceAll("'", "''")}' AS ${quoteDuckdbIdentifier(alias)} (TYPE ${type}, READ_ONLY);`,
-  );
+  const loadTypes = [...new Set(attachments.map((a) => a.type).filter((type): type is string => type !== null))];
+  const loadStatements = loadTypes.map((type) => `INSTALL ${type}; LOAD ${type};`);
+  const attachStatements = attachments.map(({ type, url, alias }) => {
+    const options = type === null ? 'READ_ONLY' : `TYPE ${type}, READ_ONLY`;
+    return `ATTACH '${url.replaceAll("'", "''")}' AS ${quoteDuckdbIdentifier(alias)} (${options});`;
+  });
   return [...loadStatements, ...attachStatements];
 }
 

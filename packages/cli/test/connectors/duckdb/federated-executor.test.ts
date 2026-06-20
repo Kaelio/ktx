@@ -67,4 +67,27 @@ describe('buildAttachStatements', () => {
     );
     expect(stmts.at(-1)).toBe('ATTACH \'postgresql://u:it\'\'s@h/db\' AS "pg" (TYPE postgres, READ_ONLY);');
   });
+
+  it('attaches a native duckdb member with no TYPE and no INSTALL/LOAD', () => {
+    const statements = buildAttachStatements(
+      [{ connectionId: 'dux', driver: 'duckdb', projectDir: '/p', connection: { driver: 'duckdb', path: '/p/a.duckdb' } }],
+      {},
+    );
+    expect(statements.some((s) => s.startsWith('INSTALL'))).toBe(false);
+    expect(statements.find((s) => s.startsWith('ATTACH'))).toContain('(READ_ONLY)');
+    expect(statements.find((s) => s.startsWith('ATTACH'))).not.toContain('TYPE');
+  });
+
+  it('mixes a duckdb member with a postgres member, loading only postgres', () => {
+    const statements = buildAttachStatements(
+      [
+        { connectionId: 'dux', driver: 'duckdb', projectDir: '/p', connection: { driver: 'duckdb', path: '/p/a.duckdb' } },
+        { connectionId: 'pg', driver: 'postgres', projectDir: '/p', connection: { driver: 'postgres', url: 'postgres://h/db' } },
+      ],
+      {},
+    );
+    expect(statements).toContain('INSTALL postgres; LOAD postgres;');
+    expect(statements.some((s) => s.includes('INSTALL duckdb'))).toBe(false);
+    expect(statements.filter((s) => s.startsWith('ATTACH')).length).toBe(2);
+  });
 });
