@@ -244,6 +244,7 @@ describe('setup databases step', () => {
         { value: 'clickhouse', label: 'ClickHouse' },
         { value: 'sqlserver', label: 'SQL Server' },
         { value: 'sqlite', label: 'SQLite' },
+        { value: 'duckdb', label: 'DuckDB' },
       ],
       required: true,
     });
@@ -3513,5 +3514,40 @@ describe('setup databases step', () => {
     expect(result.status).toBe('skipped');
     expect(io.stdout()).toContain('ktx cannot work until you add a database.');
     expect(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8')).not.toContain('completed_steps:');
+  });
+
+  it('adds one non-interactive DuckDB connection from --database-url without prompting', async () => {
+    const io = makeIo();
+    const prompts = makePromptAdapter({});
+    const testConnection = vi.fn(async () => 0);
+    const scanConnection = vi.fn(async () => 0);
+
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        databaseDrivers: ['duckdb'],
+        databaseConnectionId: 'duckdb-local',
+        databaseUrl: './warehouse.duckdb',
+        databaseSchemas: [],
+        skipDatabases: false,
+      },
+      io.io,
+      { prompts, testConnection, scanConnection },
+    );
+
+    expect(result.status).toBe('ready');
+    expect(prompts.text).not.toHaveBeenCalled();
+    expect(testConnection).toHaveBeenCalledWith(tempDir, 'duckdb-local', expect.anything());
+    expect(scanConnection).toHaveBeenCalledWith(tempDir, 'duckdb-local', expect.anything());
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections['duckdb-local']).toEqual({
+      driver: 'duckdb',
+      path: './warehouse.duckdb',
+    });
+    expect(config.setup).toEqual({
+      database_connection_ids: ['duckdb-local'],
+    });
+    expect((await readKtxSetupState(tempDir)).completed_steps).toContain('databases');
   });
 });

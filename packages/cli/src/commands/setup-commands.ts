@@ -38,6 +38,7 @@ function llmBackend(value: string): KtxSetupLlmBackend {
 function databaseDriver(value: string): KtxSetupDatabaseDriver {
   if (
     value === 'sqlite' ||
+    value === 'duckdb' ||
     value === 'postgres' ||
     value === 'mysql' ||
     value === 'clickhouse' ||
