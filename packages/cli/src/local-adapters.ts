@@ -9,6 +9,8 @@ import { isKtxPostgresConnectionConfig, type KtxPostgresConnectionConfig } from 
 import { KtxPostgresHistoricSqlQueryClient } from './connectors/postgres/historic-sql-query-client.js';
 import { createSqliteLiveDatabaseIntrospection } from './connectors/sqlite/live-database-introspection.js';
 import { isKtxSqliteConnectionConfig } from './connectors/sqlite/connector.js';
+import { createDuckDbLiveDatabaseIntrospection } from './connectors/duckdb/live-database-introspection.js';
+import { isKtxDuckDbConnectionConfig } from './connectors/duckdb/connector.js';
 import { createSqlServerLiveDatabaseIntrospection } from './connectors/sqlserver/live-database-introspection.js';
 import { isKtxSqlServerConnectionConfig } from './connectors/sqlserver/connector.js';
 import { BigQueryHistoricSqlQueryHistoryReader } from './context/ingest/adapters/historic-sql/bigquery-query-history-reader.js';
@@ -104,6 +106,10 @@ function createKtxCliLiveDatabaseIntrospection(
     projectDir: project.projectDir,
     connections: project.config.connections,
   });
+  const duckdb = createDuckDbLiveDatabaseIntrospection({
+    projectDir: project.projectDir,
+    connections: project.config.connections,
+  });
   const mysql = createMysqlLiveDatabaseIntrospection({
     connections: project.config.connections,
   });
@@ -127,6 +133,9 @@ function createKtxCliLiveDatabaseIntrospection(
       }
       if (isKtxSqliteConnectionConfig(connection)) {
         return sqlite.extractSchema(connectionId, options);
+      }
+      if (isKtxDuckDbConnectionConfig(connection)) {
+        return duckdb.extractSchema(connectionId, options);
       }
       if (isKtxMysqlConnectionConfig(connection)) {
         return mysql.extractSchema(connectionId, options);
