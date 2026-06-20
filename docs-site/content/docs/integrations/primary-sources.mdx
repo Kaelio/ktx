@@ -1,6 +1,6 @@
 ---
 title: Primary Sources
-description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, or SQLite.
+description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, or DuckDB.
 ---
 
 **ktx** connects to your data warehouse or database to build schema context,
@@ -509,6 +509,54 @@ No authentication required - SQLite is file-based. The file must be readable by 
 - SQLite type affinity system: `TEXT`, `NUMERIC`, `INTEGER`, `REAL`, `BLOB`
 - Foreign key enforcement requires explicit `PRAGMA foreign_keys = ON`
 - Database file must exist before `ktx connection test` or ingest runs
+
+---
+
+## DuckDB
+
+File-based connector using the DuckDB Node.js API. Ideal for local analytics, embedded warehouses, and cross-database federation.
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  warehouse:
+    driver: duckdb
+    path: data/warehouse.duckdb
+```
+
+`path` is resolved relative to the project directory. The `.duckdb` file must already exist — **ktx** never creates a missing database file.
+
+### Authentication
+
+No authentication required — DuckDB is file-based. The `.duckdb` file must be readable by the process running **ktx**.
+
+### Features
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Tables & views | Yes | Via `information_schema` on the `main` schema |
+| Primary keys | Yes | Via `information_schema.table_constraints` |
+| Foreign keys | Yes | Via DuckDB's `duckdb_constraints()` catalog function |
+| Row count estimates | Yes | Exact count via `SELECT COUNT(*)` |
+| Column statistics | No | - |
+| Query history | No | - |
+| Table sampling | Yes | - |
+| Nested analysis | No | - |
+
+### Dialect notes
+
+- Introspection scans the `main` schema only
+- Execution is read-only; **ktx** opens the file without write access
+- Parameter binding uses positional `?` placeholders
+- Uses `LIMIT X OFFSET Y` for pagination
+- Database file must exist before `ktx connection test` or ingest runs
+
+### Cross-database federation
+
+When a project declares two or more attach-compatible connections — any combination of `postgres`, `mysql`, `sqlite`, and `duckdb` — **ktx** derives a cross-database federation connection. That connection can ATTACH a native `.duckdb` file, allowing semantic queries to join across sources without manually copying data.
+
+---
 
 ## Common errors
 

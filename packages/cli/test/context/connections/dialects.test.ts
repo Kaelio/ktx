@@ -305,7 +305,7 @@ describe('getDialectForDriver', () => {
 
   it('throws with a supported-driver list for unknown drivers', () => {
     expect(() => getDialectForDriver('oracle')).toThrow(
-      'Unsupported warehouse driver "oracle". Supported drivers: bigquery, clickhouse, mysql, postgres, sqlite, snowflake, sqlserver',
+      'Unsupported warehouse driver "oracle". Supported drivers: bigquery, clickhouse, duckdb, mysql, postgres, sqlite, snowflake, sqlserver',
     );
   });
 
