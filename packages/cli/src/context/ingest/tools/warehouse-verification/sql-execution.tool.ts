@@ -6,7 +6,7 @@ import type { SqlAnalysisPort } from '../../../../context/sql-analysis/ports.js'
 import { BaseTool, type ToolContext, type ToolOutput } from '../../../../context/tools/base-tool.js';
 
 const sqlExecutionInputSchema = z.object({
-  connectionId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/),
+  connectionId: z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/),
   sql: z.string().min(1),
   rowLimit: z.number().int().positive().max(1000).optional().default(100),
 }).strict();

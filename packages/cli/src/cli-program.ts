@@ -133,7 +133,7 @@ export function parseBooleanStringOption(value: string): boolean {
 }
 
 export function parseSafeConnectionIdOption(value: string): string {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value)) {
+  if (!/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(value)) {
     throw new InvalidArgumentError(`Unsafe connection id: ${value}`);
   }
   return value;

@@ -31,7 +31,7 @@ export function assertSafeConnectionId(connectionId: string): string {
 }
 
 export function isSafeConnectionId(connectionId: string | undefined): connectionId is string {
-  return typeof connectionId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(connectionId);
+  return typeof connectionId === 'string' && /^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(connectionId);
 }
 
 export function sourceNameFromPath(path: string): string {

@@ -46,7 +46,7 @@ const NOTION_SCRIPTED_MODE_HINT =
   'Notion picker requires a TTY. Use --no-input --notion-root-page-id <UUID> for scripted mode.';
 
 function assertSafeNotionPickerConnectionId(connectionId: string): void {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(connectionId)) {
+  if (!/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(connectionId)) {
     throw new Error(`Unsafe connection id: ${connectionId}`);
   }
 }

@@ -14,7 +14,7 @@ const targetSchema = z.union([
 ]);
 
 const entityDetailsInputSchema = z.object({
-  connectionId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/),
+  connectionId: z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/),
   targets: z.array(targetSchema).min(1).max(50),
 }).strict();
 
