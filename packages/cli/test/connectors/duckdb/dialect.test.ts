@@ -25,4 +25,16 @@ describe('KtxDuckDbDialect', () => {
   it('generates a limited sample query', () => {
     expect(dialect.generateSampleQuery('"t"', 5)).toBe('SELECT * FROM "t" LIMIT 5');
   });
+
+  // Guards the single-namespace (db=null) display shape: v1 introspects only
+  // `main`, so a display ref must round-trip as a bare table name. An ANSI shape
+  // would emit a 1-part name it then refuses to parse, breaking column lookups.
+  it('round-trips a single-namespace display ref and reports a 1-part column shape', () => {
+    const table = { catalog: null, db: null, name: 'orders' };
+    const display = dialect.formatDisplayRef(table);
+    expect(display).toBe('orders');
+    expect(dialect.parseDisplayRef(display)).toMatchObject({ name: 'orders' });
+    expect(dialect.columnDisplayTablePartCount()).toBe(1);
+    expect(dialect.formatTableName(table)).toBe('"orders"');
+  });
 });

@@ -23,6 +23,12 @@ beforeAll(async () => {
   );
   await connection.run('CREATE TABLE orders (id BIGINT, customer_id BIGINT REFERENCES customers(id))');
   await connection.run('INSERT INTO orders VALUES (1, 1), (2, 2)');
+  // Composite primary key + composite foreign key, to exercise the parallel
+  // unnest() zip of constraint/referenced column names in readForeignKeys.
+  await connection.run('CREATE TABLE regions (country VARCHAR, code VARCHAR, PRIMARY KEY (country, code))');
+  await connection.run(
+    'CREATE TABLE stores (id BIGINT, country VARCHAR, code VARCHAR, FOREIGN KEY (country, code) REFERENCES regions(country, code))',
+  );
   connection.closeSync();
   instance.closeSync();
 });
@@ -71,16 +77,28 @@ describe('KtxDuckDbScanConnector', () => {
     const c = connector();
     const snapshot = await c.introspect({ connectionId: 'warehouse', driver: 'duckdb' }, { runId: 't' });
     const names = snapshot.tables.map((t) => t.name).sort();
-    expect(names).toEqual(['customers', 'orders']);
+    expect(names).toEqual(['customers', 'orders', 'regions', 'stores']);
     const orders = snapshot.tables.find((t) => t.name === 'orders');
     expect(orders?.foreignKeys[0]).toMatchObject({ fromColumn: 'customer_id', toTable: 'customers', toColumn: 'id' });
+    await c.cleanup();
+  });
+
+  it('maps a composite foreign key column-for-column to the referenced table', async () => {
+    const c = connector();
+    const snapshot = await c.introspect({ connectionId: 'warehouse', driver: 'duckdb' }, { runId: 't' });
+    const stores = snapshot.tables.find((t) => t.name === 'stores');
+    const fks = stores?.foreignKeys.map((fk) => ({ fromColumn: fk.fromColumn, toTable: fk.toTable, toColumn: fk.toColumn }));
+    expect(fks).toEqual([
+      { fromColumn: 'country', toTable: 'regions', toColumn: 'country' },
+      { fromColumn: 'code', toTable: 'regions', toColumn: 'code' },
+    ]);
     await c.cleanup();
   });
 
   it('lists tables', async () => {
     const c = connector();
     const tables = (await c.listTables()).map((t) => t.name).sort();
-    expect(tables).toEqual(['customers', 'orders']);
+    expect(tables).toEqual(['customers', 'orders', 'regions', 'stores']);
     await c.cleanup();
   });
 

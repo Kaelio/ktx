@@ -45,20 +45,22 @@ export class KtxDuckDbDialect implements KtxDialect {
     return `"${identifier.replace(/"/g, '""')}"`;
   }
 
+  // v1 introspects the `main` schema only and sets db=null on every table, so
+  // refs are single-namespace like SQLite — use the matching display shape.
   formatTableName(table: DuckDbTableNameRef): string {
-    return formatDialectTableName(table, this.quoteIdentifier.bind(this), 'ansi');
+    return formatDialectTableName(table, this.quoteIdentifier.bind(this), 'sqlite');
   }
 
   formatDisplayRef(table: DuckDbTableNameRef): string {
-    return formatDialectDisplayRef(table, 'ansi');
+    return formatDialectDisplayRef(table, 'sqlite');
   }
 
   parseDisplayRef(display: string): KtxTableRef | null {
-    return parseDialectDisplayRef(display, 'ansi');
+    return parseDialectDisplayRef(display, 'sqlite');
   }
 
   columnDisplayTablePartCount(): 1 | 2 | 3 {
-    return columnDisplayPartCount('ansi');
+    return columnDisplayPartCount('sqlite');
   }
 
   mapDataType(nativeType: string): string {
