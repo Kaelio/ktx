@@ -1379,11 +1379,11 @@ async function maybeConfigureDatabaseScope(input: {
   const project = await loadKtxProject({ projectDir: input.projectDir });
   const connection = project.config.connections[input.connectionId];
   const driver = normalizeDriver(connection?.driver);
-  // sqlite and duckdb are single-file, single-namespace ('main') databases: there
-  // is no schema to choose, so skip the scope picker and ingest every table.
-  if (!driver || driver === 'sqlite' || driver === 'duckdb') return okValidateResult();
+  const spec = driver ? SCOPE_DISCOVERY_SPECS[driver] : undefined;
+  // Drivers with no scope spec are single-namespace (sqlite, duckdb): there is no
+  // schema to choose, so skip the scope picker and ingest every table.
+  if (!driver || !spec) return okValidateResult();
 
-  const spec = SCOPE_DISCOVERY_SPECS[driver];
   const existingTables = connection?.enabled_tables;
   const hasExistingTables = Array.isArray(existingTables) && existingTables.length > 0;
   const existingScope = spec ? configuredScopeValues(connection, spec) : [];

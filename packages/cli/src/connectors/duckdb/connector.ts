@@ -1,8 +1,8 @@
 import { DuckDBInstance, type DuckDBConnection } from '@duckdb/node-api';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveStringReference } from '../shared/string-reference.js';
 import { getDialectForDriver } from '../../context/connections/dialects.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { normalizeQueryRows } from '../../context/connections/query-executor.js';
@@ -72,25 +72,21 @@ interface InfoSchemaColumnRow {
   is_nullable: string;
 }
 
+// `path` may be an env:/file: reference; `url` resolves env: only, since file:
+// on a url is a native URI form (handled by duckDbPathFromUrl), not a file read.
 function stringConfigValue(
   connection: KtxDuckDbConnectionConfig | undefined,
-  key: keyof KtxDuckDbConnectionConfig,
+  key: 'path' | 'url',
 ): string | undefined {
   const value = connection?.[key];
-  return typeof value === 'string' && value.trim().length > 0 ? resolveStringReference(key, value.trim()) : undefined;
-}
-
-function resolveStringReference(key: keyof KtxDuckDbConnectionConfig, value: string): string {
-  if (value.startsWith('env:')) {
-    return process.env[value.slice('env:'.length)] ?? '';
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return undefined;
   }
-  // `file:` on the `url` key is a native URI form — skip the read so the URI passes through verbatim.
-  if (key !== 'url' && value.startsWith('file:')) {
-    const rawPath = value.slice('file:'.length);
-    const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(1)) : rawPath;
-    return readFileSync(path, 'utf-8').trim();
+  const trimmed = value.trim();
+  if (key === 'url') {
+    return trimmed.startsWith('env:') ? (process.env[trimmed.slice('env:'.length)] ?? '') : trimmed;
   }
-  return value;
+  return resolveStringReference(trimmed, process.env);
 }
 
 function duckDbPathFromUrl(url: string): string {
