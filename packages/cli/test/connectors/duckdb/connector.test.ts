@@ -2,12 +2,14 @@ import { DuckDBInstance } from '@duckdb/node-api';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   KtxDuckDbScanConnector,
   duckDbDatabasePathFromConfig,
   isKtxDuckDbConnectionConfig,
 } from '../../../src/connectors/duckdb/connector.js';
+import { tableRefSet } from '../../../src/context/scan/table-ref.js';
 
 let dir: string;
 let dbPath: string;
@@ -29,6 +31,7 @@ beforeAll(async () => {
   await connection.run(
     'CREATE TABLE stores (id BIGINT, country VARCHAR, code VARCHAR, FOREIGN KEY (country, code) REFERENCES regions(country, code))',
   );
+  await connection.run('CREATE TABLE empty_table (id BIGINT)');
   connection.closeSync();
   instance.closeSync();
 });
@@ -57,6 +60,53 @@ describe('duckDbDatabasePathFromConfig', () => {
     });
     expect(resolved).toBe(dbPath);
   });
+
+  it('derives the path from a file: url', () => {
+    const resolved = duckDbDatabasePathFromConfig({
+      connectionId: 'warehouse',
+      connection: { driver: 'duckdb', url: pathToFileURL(dbPath).href },
+    });
+    expect(resolved).toBe(dbPath);
+  });
+
+  it('derives the path from a duckdb: url', () => {
+    const resolved = duckDbDatabasePathFromConfig({
+      connectionId: 'warehouse',
+      connection: { driver: 'duckdb', url: `duckdb://${dbPath}` },
+    });
+    expect(resolved).toBe(dbPath);
+  });
+
+  it('resolves an env: reference in path', () => {
+    process.env.KTX_TEST_DUCKDB_PATH = dbPath;
+    try {
+      const resolved = duckDbDatabasePathFromConfig({
+        connectionId: 'warehouse',
+        connection: { driver: 'duckdb', path: 'env:KTX_TEST_DUCKDB_PATH' },
+      });
+      expect(resolved).toBe(dbPath);
+    } finally {
+      delete process.env.KTX_TEST_DUCKDB_PATH;
+    }
+  });
+
+  it('rejects a non-duckdb driver', () => {
+    expect(() =>
+      duckDbDatabasePathFromConfig({
+        connectionId: 'warehouse',
+        connection: { driver: 'sqlite', path: dbPath },
+      }),
+    ).toThrow(/cannot run driver "sqlite"/);
+  });
+
+  it('requires a path or url', () => {
+    expect(() =>
+      duckDbDatabasePathFromConfig({
+        connectionId: 'warehouse',
+        connection: { driver: 'duckdb' },
+      }),
+    ).toThrow(/requires connections\.warehouse\.path or url/);
+  });
 });
 
 describe('KtxDuckDbScanConnector', () => {
@@ -77,7 +127,7 @@ describe('KtxDuckDbScanConnector', () => {
     const c = connector();
     const snapshot = await c.introspect({ connectionId: 'warehouse', driver: 'duckdb' }, { runId: 't' });
     const names = snapshot.tables.map((t) => t.name).sort();
-    expect(names).toEqual(['customers', 'orders', 'regions', 'stores']);
+    expect(names).toEqual(['customers', 'empty_table', 'orders', 'regions', 'stores']);
     const orders = snapshot.tables.find((t) => t.name === 'orders');
     expect(orders?.foreignKeys[0]).toMatchObject({ fromColumn: 'customer_id', toTable: 'customers', toColumn: 'id' });
     await c.cleanup();
@@ -98,7 +148,7 @@ describe('KtxDuckDbScanConnector', () => {
   it('lists tables', async () => {
     const c = connector();
     const tables = (await c.listTables()).map((t) => t.name).sort();
-    expect(tables).toEqual(['customers', 'orders', 'regions', 'stores']);
+    expect(tables).toEqual(['customers', 'empty_table', 'orders', 'regions', 'stores']);
     await c.cleanup();
   });
 
@@ -137,6 +187,94 @@ describe('KtxDuckDbScanConnector', () => {
       limit: 10,
     });
     expect(distinct?.values?.sort()).toEqual(['Ada', 'Lin']);
+    await c.cleanup();
+  });
+
+  it('withholds values but reports the count when cardinality exceeds the cap', async () => {
+    const c = connector();
+    const distinct = await c.getColumnDistinctValues({ name: 'customers', catalog: null, db: null }, 'name', {
+      maxCardinality: 1,
+      limit: 10,
+    });
+    expect(distinct).toEqual({ values: null, cardinality: 2 });
+    await c.cleanup();
+  });
+
+  it('samples a single column, dropping null rows', async () => {
+    const c = connector();
+    const sample = await c.sampleColumn(
+      { connectionId: 'warehouse', table: { name: 'customers', catalog: null, db: null }, column: 'name', limit: 10 },
+      { runId: 't' },
+    );
+    expect(sample.values.sort()).toEqual(['Ada', 'Lin']);
+    expect(sample.nullCount).toBeNull();
+    await c.cleanup();
+  });
+
+  it('counts table rows', async () => {
+    const c = connector();
+    expect(await c.getTableRowCount('customers')).toBe(2);
+    await c.cleanup();
+  });
+
+  it('lists only the main schema and reports no column stats', async () => {
+    const c = connector();
+    expect(await c.listSchemas()).toEqual(['main']);
+    expect(await c.columnStats({ connectionId: 'warehouse', table: { name: 'customers', catalog: null, db: null }, column: 'id' }, { runId: 't' })).toBeNull();
+    await c.cleanup();
+  });
+
+  it('rejects operations for a mismatched connection id', async () => {
+    const c = connector();
+    await expect(
+      c.executeReadOnly({ connectionId: 'other', sql: 'SELECT 1', maxRows: 1 }, { runId: 't' }),
+    ).rejects.toThrow(/cannot serve connection other/);
+    await c.cleanup();
+  });
+
+  it('exposes the dialect identifier quoting', () => {
+    expect(connector().quoteIdentifier('a"b')).toBe('"a""b"');
+  });
+
+  // Opening a connection must never create the file: the db() guard throws
+  // rather than letting DuckDBInstance.create() materialize a missing path.
+  it('refuses to open (never creating) a missing file when a query runs', async () => {
+    const c = connector({ driver: 'duckdb', path: join(dir, 'absent.duckdb') });
+    await expect(c.listTables()).rejects.toThrow(/File not found/);
+    await c.cleanup();
+  });
+
+  it('returns no tables for an empty table scope', async () => {
+    const c = connector();
+    const snapshot = await c.introspect(
+      { connectionId: 'warehouse', driver: 'duckdb', tableScope: new Set() },
+      { runId: 't' },
+    );
+    expect(snapshot.tables).toEqual([]);
+    await c.cleanup();
+  });
+
+  it('restricts introspection to the named tables in a non-empty scope', async () => {
+    const c = connector();
+    const snapshot = await c.introspect(
+      {
+        connectionId: 'warehouse',
+        driver: 'duckdb',
+        tableScope: tableRefSet([{ catalog: null, db: null, name: 'customers' }]),
+      },
+      { runId: 't' },
+    );
+    expect(snapshot.tables.map((t) => t.name)).toEqual(['customers']);
+    await c.cleanup();
+  });
+
+  it('reports zero cardinality and an empty value list for an empty column', async () => {
+    const c = connector();
+    const distinct = await c.getColumnDistinctValues({ name: 'empty_table', catalog: null, db: null }, 'id', {
+      maxCardinality: 10,
+      limit: 10,
+    });
+    expect(distinct).toEqual({ values: [], cardinality: 0 });
     await c.cleanup();
   });
 });
