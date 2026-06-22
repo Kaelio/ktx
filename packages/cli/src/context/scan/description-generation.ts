@@ -757,14 +757,19 @@ export class KtxDescriptionGenerator {
     let tableDescription: string | null = null;
     let structuredGenerationSucceeded = false;
 
-    // Bound the per-table enrichment LLM call. A very wide table can wedge the
-    // claude-code structured-output call (it never returns a result message),
-    // which otherwise hangs the entire ingest with no diagnostic. On timeout we
-    // abort, skip this table's descriptions, and continue. Tune via
-    // KTX_ENRICH_LLM_TIMEOUT_MS (default 120s).
+    // Bound + retry the per-table enrichment LLM call. A transient backend error
+    // (e.g. an "overloaded"/burst rejection when many tables enrich concurrently)
+    // otherwise nulls a whole table's descriptions on the FIRST failure — sampleTable
+    // already retries, this call did not, so transient errors silently dropped most
+    // tables of a db. retryAsync gives it the same 3-attempt backoff. A FRESH timeout
+    // per attempt still bounds a wedged wide table (it never returns a result message);
+    // a timeout is surfaced as KtxAbortedError so retryAsync does NOT retry it (one
+    // wedge stays one timeout, not 3×). Tune via KTX_ENRICH_LLM_TIMEOUT_MS (default
+    // 120s) and KTX_ENRICH_LLM_ATTEMPTS (default 3).
     const enrichTimeoutMs = Number(process.env.KTX_ENRICH_LLM_TIMEOUT_MS ?? 120_000);
-    const enrichTimeout = AbortSignal.timeout(enrichTimeoutMs);
+    const enrichAttempts = Math.max(1, Number(process.env.KTX_ENRICH_LLM_ATTEMPTS ?? 3) || 3);
     let llmStartedAt = 0;
+    let lastTimedOut = false;
 
     try {
       const prompt = batchedPrompt({
@@ -774,25 +779,52 @@ export class KtxDescriptionGenerator {
         tableMaxWords: this.settings.tableMaxWords,
         columnMaxWords: this.settings.columnMaxWords,
       });
-      const abortSignal = input.context.signal
-        ? AbortSignal.any([enrichTimeout, input.context.signal])
-        : enrichTimeout;
       llmStartedAt = Date.now();
       this.logger?.info(
-        `[enrich] llm:start table=${input.table.name} cols=${input.table.columns.length} promptChars=${prompt.user.length} timeoutMs=${enrichTimeoutMs}`,
+        `[enrich] llm:start table=${input.table.name} cols=${input.table.columns.length} promptChars=${prompt.user.length} timeoutMs=${enrichTimeoutMs} attempts=${enrichAttempts}`,
         { connectorId: input.connector.id, table: input.table.name, columns: input.table.columns.length },
       );
-      const generated = await this.llmRuntime.generateObject<
-        BatchedTableDescriptionOutput,
-        typeof batchedTableDescriptionSchema
-      >({
-        role: 'candidateExtraction',
-        system: prompt.system,
-        prompt: prompt.user,
-        schema: batchedTableDescriptionSchema,
-        temperature: this.settings.temperature,
-        abortSignal,
-      });
+      const generated = await retryAsync(
+        async () => {
+          const enrichTimeout = AbortSignal.timeout(enrichTimeoutMs);
+          const abortSignal = input.context.signal
+            ? AbortSignal.any([enrichTimeout, input.context.signal])
+            : enrichTimeout;
+          try {
+            return await this.llmRuntime.generateObject<
+              BatchedTableDescriptionOutput,
+              typeof batchedTableDescriptionSchema
+            >({
+              role: 'candidateExtraction',
+              system: prompt.system,
+              prompt: prompt.user,
+              schema: batchedTableDescriptionSchema,
+              temperature: this.settings.temperature,
+              abortSignal,
+            });
+          } catch (error) {
+            // A per-table timeout is not worth retrying (it would just time out
+            // again); surface it as KtxAbortedError so retryAsync stops immediately.
+            // A genuine context cancellation is handled by retryAsync's own signal check.
+            if (enrichTimeout.aborted && !input.context.signal?.aborted) {
+              lastTimedOut = true;
+              throw new KtxAbortedError();
+            }
+            throw error;
+          }
+        },
+        {
+          attempts: enrichAttempts,
+          baseDelayMs: 500,
+          ...(input.context.signal ? { signal: input.context.signal } : {}),
+          onAttemptFailure: (error, attempt) => {
+            this.logger?.warn(
+              `[enrich] llm:retry table=${input.table.name} attempt=${attempt}: ${errorMessage(error)}`,
+              { connectorId: input.connector.id, table: input.table.name, attempt },
+            );
+          },
+        },
+      );
       this.logger?.info(`[enrich] llm:done table=${input.table.name} ms=${Date.now() - llmStartedAt}`, {
         connectorId: input.connector.id,
         table: input.table.name,
@@ -817,7 +849,7 @@ export class KtxDescriptionGenerator {
       }
     } catch (error) {
       const elapsedMs = llmStartedAt ? Date.now() - llmStartedAt : 0;
-      const timedOut = enrichTimeout.aborted;
+      const timedOut = lastTimedOut;
       this.logger?.warn(
         `[enrich] llm:${timedOut ? 'TIMEOUT' : 'fail'} table=${input.table.name} cols=${input.table.columns.length} ms=${elapsedMs}: ${errorMessage(error)}`,
         { connectorId: input.connector.id, table: input.table.name, timedOut, elapsedMs },
