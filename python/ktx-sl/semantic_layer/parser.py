@@ -196,6 +196,15 @@ def quote_reserved_identifiers(expr: str) -> str:
     return result
 
 
+def _predicate_select(expr: str) -> str:
+    """Wrap a user expression as `SELECT * WHERE …`, quoting reserved identifiers.
+
+    Predicate, not projection: T-SQL reads a top-level `col = 'value'` projection
+    as the `alias = expression` form and would compile the filter to `'value' AS col`.
+    """
+    return f"SELECT * WHERE {quote_reserved_identifiers(expr)}"
+
+
 @functools.lru_cache(maxsize=256)
 def _cached_parse_select(sql: str, dialect: str) -> exp.Expression:
     """Cache parsed SELECT wrapper trees keyed by (sql, dialect).
@@ -204,6 +213,14 @@ def _cached_parse_select(sql: str, dialect: str) -> exp.Expression:
     dialects don't share AST cache collisions.
     """
     return sqlglot.parse_one(sql, read=dialect)
+
+
+def parse_predicate(expr: str, dialect: str) -> exp.Expression:
+    """Parse a user filter into a fresh, mutable WHERE-condition node.
+
+    Uncached, so the result is safe to `.transform()`; raises on unparseable input.
+    """
+    return sqlglot.parse_one(_predicate_select(expr), read=dialect).find(exp.Where).this
 
 
 class ExpressionParser:
@@ -218,12 +235,9 @@ class ExpressionParser:
     def __init__(self, dialect: str = "postgres") -> None:
         self.dialect = dialect
 
-    def _quote_reserved_identifiers(self, expr: str) -> str:
-        return quote_reserved_identifiers(expr)
-
-    def _parse_as_select(self, quoted_expr: str) -> exp.Expression:
-        """Parse expression wrapped in SELECT, using cache for repeated expressions."""
-        return _cached_parse_select(f"SELECT {quoted_expr}", self.dialect)
+    def _parse_as_select(self, expr: str) -> exp.Expression:
+        """Parse a user fragment for read-only AST walks, via the parse cache."""
+        return _cached_parse_select(_predicate_select(expr), self.dialect)
 
     def parse(
         self,
@@ -236,8 +250,7 @@ class ExpressionParser:
         if not expr or not expr.strip():
             return result
 
-        quoted_expr = self._quote_reserved_identifiers(expr)
-        tree = self._parse_as_select(quoted_expr)
+        tree = self._parse_as_select(expr)
 
         # Extract source.column references
         for col in tree.find_all(exp.Column):
@@ -296,8 +309,7 @@ class ExpressionParser:
         """Quick extraction of source names from an expression."""
         if not expr or not expr.strip():
             return set()
-        quoted_expr = self._quote_reserved_identifiers(expr)
-        tree = self._parse_as_select(quoted_expr)
+        tree = self._parse_as_select(expr)
         return {
             _strip_quotes(col.table) for col in tree.find_all(exp.Column) if col.table
         }

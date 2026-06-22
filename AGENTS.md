@@ -263,22 +263,31 @@ and route ingest, setup, memory, indexing, and docs through it. Do not add an
 `auto_commit`-style switch unless the user explicitly asks for staged-only runs
 and accepts the extra runtime path.
 
-## Code Comments
+## Code Comments and Docstrings
 
-Code must be self-explanatory. A comment exists only to state a constraint the
-code cannot show; everything else belongs in the PR description or nowhere.
+Code must be self-explanatory. Clear names, types, and signatures do the
+documenting; a comment or docstring exists only to state what the code cannot
+show. Everything else belongs in the PR description or nowhere.
 
 - **MUST**: Keep each comment to 1-3 lines stating only what the code cannot
   show: a cross-file invariant ("error-severity issues never reach here — the
   doctor exits on them first"), a required ordering ("ktx.yaml is written
   before git init, so a crash cannot leave a bare `.git`"), or a library quirk
   ("zod reports unknown record keys as `invalid_key`").
+- **MUST**: Hold docstrings (Python `"""..."""`, JSDoc/TSDoc) to the same bar.
+  A docstring states a function's purpose or contract in 1-3 lines; when a real
+  quirk or invariant motivates the code, note it once and briefly. Let
+  self-explanatory code carry the rest — a well-named, well-typed function
+  often needs no docstring at all.
 - **MUST**: State each invariant once, at the public entry point. Do not repeat
-  the same guarantee across a helper, its wrapper, and the call site.
-- **MUST NOT**: Write prose comment blocks — design rationale, alternatives
-  considered, change narration ("is now written before…"), caller enumerations
-  ("shared by X, Y, and Z"), or restatements of what the code already shows.
-  That is the author addressing the reviewer, and it rots once merged.
+  the same guarantee across a module docstring, a helper, its wrapper, and the
+  call site.
+- **MUST NOT**: Write multi-paragraph docstrings or prose comment blocks —
+  design rationale, alternatives considered, change narration ("is now written
+  before…"), caller enumerations ("shared by X, Y, and Z"), worked examples
+  that restate the code, or the same explanation repeated in a module docstring
+  and the function it describes. That is the author addressing the reviewer; it
+  belongs in the PR description and rots once merged.
 - **MAY**: Open a regression test with a 1-3 line comment stating the scenario
   it guards when the test name cannot carry it. Omit design history and
   references to removed designs.
