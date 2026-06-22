@@ -1,4 +1,4 @@
-import type { KtxDialect } from '../connections/dialects.js';
+import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxEnrichedColumn, KtxEnrichedSchema, KtxEnrichedTable, KtxRelationshipType } from './enrichment-types.js';
 import {
   type KtxRelationshipProfileArtifact,
@@ -56,7 +56,7 @@ export interface KtxCompositeRelationshipCandidate {
 
 export interface DiscoverKtxCompositeRelationshipsInput {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   schema: KtxEnrichedSchema;
   profiles: KtxRelationshipProfileArtifact;
   executor: KtxRelationshipReadOnlyExecutor | null;
@@ -227,11 +227,11 @@ function sqlSuffix(fragment: string): string {
   return fragment ? ` ${fragment}` : '';
 }
 
-function aliasedTupleSelect(dialect: KtxDialect, columns: readonly string[]): string {
+function aliasedTupleSelect(dialect: KtxSqlDialect, columns: readonly string[]): string {
   return columns.map((column, index) => `${dialect.quoteIdentifier(column)} AS c${index}`).join(', ');
 }
 
-function nonNullPredicate(dialect: KtxDialect, columns: readonly string[]): string {
+function nonNullPredicate(dialect: KtxSqlDialect, columns: readonly string[]): string {
   return columns.map((column) => `${dialect.quoteIdentifier(column)} IS NOT NULL`).join(' AND ');
 }
 
@@ -242,7 +242,7 @@ function tupleEquality(columns: number): string {
 }
 
 function buildTupleDistinctSql(input: {
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   table: KtxTableRef;
   columns: readonly string[];
 }): string {
@@ -257,7 +257,7 @@ function buildTupleDistinctSql(input: {
 }
 
 function buildCompositeCoverageSql(input: {
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   childTable: KtxTableRef;
   childColumns: readonly string[];
   parentTable: KtxTableRef;
@@ -322,7 +322,7 @@ function hasAcceptedSubset(
 
 async function detectCompositePrimaryKeys(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   table: KtxEnrichedTable;
   profiles: KtxRelationshipProfileArtifact;
   executor: KtxRelationshipReadOnlyExecutor;
@@ -426,7 +426,7 @@ function compatibleTuple(sourceColumns: readonly KtxEnrichedColumn[], targetColu
 
 async function validateCompositeRelationship(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   sourceTable: KtxEnrichedTable;
   sourceColumns: readonly KtxEnrichedColumn[];
   targetKey: KtxCompositePrimaryKeyCandidate;
