@@ -218,6 +218,37 @@ BigQuery dataset scope is stored in `connections.<id>.dataset_ids`. Interactive
 setup discovers datasets from credentials plus location, then writes the chosen
 dataset ids as the scan scope.
 
+### Cross-project datasets
+
+To introspect a dataset hosted in a **different project** than the one your
+credentials bill to — for example Google's `bigquery-public-data`, a partner's
+shared project, or an organization's central data project — qualify the entry
+as `project.dataset`:
+
+```yaml title="ktx.yaml"
+connections:
+  public-bq:
+    driver: bigquery
+    credentials_json: file:~/.config/gcloud/bq-service-account.json
+    location: US
+    dataset_ids:
+      - bigquery-public-data.austin_311
+      - bigquery-public-data.census_bureau_usa
+      - analytics
+```
+
+**ktx** introspects each dataset in its host project while every query job still
+bills to the `project_id` inside your `credentials_json`. A bare `dataset` entry
+(no prefix) is scanned in your own project, exactly as before. A single
+connection may mix datasets from several projects, and two projects may host
+datasets with the same name without colliding.
+
+Interactive setup does not enumerate datasets in projects your credentials don't
+own, so hand-write `project.dataset` entries for foreign datasets. The wizard's
+table picker also only lists datasets in your connection's `location` region;
+this affects table selection only — ingest and `discover_data` introspect a
+cross-project dataset regardless of region.
+
 ### Authentication
 
 | Method | Config |

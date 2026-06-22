@@ -115,9 +115,38 @@ describe('KtxBigQueryScanConnector', () => {
     expect(isKtxBigQueryConnectionConfig({ driver: 'mysql' })).toBe(false);
     expect(bigQueryConnectionConfigFromConfig({ connectionId: 'warehouse', connection })).toMatchObject({
       projectId: 'project-1',
-      datasetIds: ['analytics'],
+      datasetIds: [{ project: 'project-1', dataset: 'analytics' }],
       location: 'US',
     });
+  });
+
+  it('parses project.dataset entries to host-project pairs and rejects malformed entries', () => {
+    expect(
+      bigQueryConnectionConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'bigquery',
+          dataset_ids: ['bigquery-public-data.austin_311', 'analytics'],
+          credentials_json: JSON.stringify({ project_id: 'project-1' }),
+        },
+      }).datasetIds,
+    ).toEqual([
+      { project: 'bigquery-public-data', dataset: 'austin_311' },
+      { project: 'project-1', dataset: 'analytics' },
+    ]);
+
+    for (const badEntry of ['proj.ds.table', 'proj.', '.ds']) {
+      expect(() =>
+        bigQueryConnectionConfigFromConfig({
+          connectionId: 'warehouse',
+          connection: {
+            driver: 'bigquery',
+            dataset_ids: [badEntry],
+            credentials_json: JSON.stringify({ project_id: 'project-1' }),
+          },
+        }),
+      ).toThrow(/connections\.warehouse/);
+    }
   });
 
   it('introspects datasets, table metadata, primary keys, and normalized types', async () => {
@@ -182,6 +211,84 @@ describe('KtxBigQueryScanConnector', () => {
         primaryKey: false,
         comment: null,
       },
+    ]);
+  });
+
+  it('introspects a foreign-hosted dataset under its own project while billing stays local', async () => {
+    const clientFactory = fakeClientFactory();
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'bigquery',
+        dataset_ids: ['bigquery-public-data.austin_311'],
+        credentials_json: JSON.stringify({ project_id: 'project-1' }),
+        location: 'US',
+      },
+      clientFactory,
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'foreign' });
+
+    const client = vi.mocked(clientFactory.createClient).mock.results[0]?.value as KtxBigQueryClient;
+    expect(client.dataset).toHaveBeenCalledWith('austin_311', 'bigquery-public-data');
+    expect(clientFactory.createClient).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-1' }));
+    expect(snapshot.scope).toEqual({
+      catalogs: ['bigquery-public-data'],
+      datasets: ['bigquery-public-data.austin_311'],
+    });
+    expect(snapshot.metadata.project_id).toBe('project-1');
+    expect(snapshot.tables[0]).toMatchObject({
+      catalog: 'bigquery-public-data',
+      db: 'austin_311',
+      name: 'orders',
+    });
+  });
+
+  it('introspects datasets across multiple host projects, each under its own project', async () => {
+    const clientFactory = fakeClientFactory();
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'bigquery',
+        dataset_ids: ['bigquery-public-data.austin_311', 'analytics'],
+        credentials_json: JSON.stringify({ project_id: 'project-1' }),
+        location: 'US',
+      },
+      clientFactory,
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'multi' });
+
+    const client = vi.mocked(clientFactory.createClient).mock.results[0]?.value as KtxBigQueryClient;
+    expect(client.dataset).toHaveBeenCalledWith('austin_311', 'bigquery-public-data');
+    expect(client.dataset).toHaveBeenCalledWith('analytics', 'project-1');
+    expect(snapshot.scope.catalogs).toEqual(['bigquery-public-data', 'project-1']);
+    expect(snapshot.scope.datasets).toEqual(['bigquery-public-data.austin_311', 'analytics']);
+    expect(snapshot.tables.map((table) => ({ catalog: table.catalog, db: table.db, name: table.name }))).toEqual([
+      { catalog: 'bigquery-public-data', db: 'austin_311', name: 'orders' },
+      { catalog: 'project-1', db: 'analytics', name: 'orders' },
+    ]);
+  });
+
+  it('keeps same-named datasets in different projects distinct', async () => {
+    const clientFactory = fakeClientFactory();
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'bigquery',
+        dataset_ids: ['proj_a.shared', 'proj_b.shared'],
+        credentials_json: JSON.stringify({ project_id: 'project-1' }),
+      },
+      clientFactory,
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'same-name' });
+
+    expect(snapshot.scope.catalogs).toEqual(['proj_a', 'proj_b']);
+    expect(snapshot.scope.datasets).toEqual(['proj_a.shared', 'proj_b.shared']);
+    expect(snapshot.tables.map((table) => `${table.catalog}.${table.db}.${table.name}`)).toEqual([
+      'proj_a.shared.orders',
+      'proj_b.shared.orders',
     ]);
   });
 

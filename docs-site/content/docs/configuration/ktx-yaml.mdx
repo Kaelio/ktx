@@ -172,6 +172,12 @@ connections:
     dataset_ids: [analytics, mart]
 ```
 
+A BigQuery `dataset_ids` / `dataset_id` entry may be written `project.dataset`
+to introspect a dataset hosted in another project (for example
+`bigquery-public-data.austin_311`); jobs still bill to the `project_id` in
+`credentials_json`. A bare `dataset` keeps using your own project. See
+[Primary sources → BigQuery](/docs/integrations/primary-sources#cross-project-datasets).
+
 For Postgres, MySQL, SQL Server, and Snowflake connections, set
 `maxConnections` when scan or ingest work needs to stay below the target's
 connection cap. Postgres, MySQL, and SQL Server default to `10`; Snowflake
