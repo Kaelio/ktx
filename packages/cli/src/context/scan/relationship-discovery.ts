@@ -11,6 +11,11 @@ import {
   discoverKtxCompositeRelationships,
   type KtxCompositeRelationshipCandidate,
 } from './relationship-composite-candidates.js';
+import {
+  createKtxRelationshipDetectionBudget,
+  type KtxRelationshipDetectionBudget,
+  type KtxRelationshipDetectionStopReason,
+} from './relationship-detection-budget.js';
 import { collectKtxFormalMetadataRelationships } from './relationship-formal-metadata.js';
 import {
   type KtxResolvedRelationshipDiscoveryCandidate,
@@ -25,6 +30,7 @@ import {
 } from './relationship-profiling.js';
 import { validateKtxRelationshipDiscoveryCandidates } from './relationship-validation.js';
 import type {
+  KtxProgressPort,
   KtxScanConnector,
   KtxScanContext,
   KtxScanEnrichmentSummary,
@@ -40,6 +46,8 @@ export interface DiscoverKtxRelationshipsInput {
   context: KtxScanContext;
   settings: KtxScanRelationshipConfig;
   llmRuntime?: KtxLlmRuntimePort | null;
+  progress?: KtxProgressPort;
+  now?: () => number;
 }
 
 export interface DiscoverKtxRelationshipsResult {
@@ -51,6 +59,7 @@ export interface DiscoverKtxRelationshipsResult {
   statisticalValidation: KtxScanEnrichmentSummary['statisticalValidation'];
   llmRelationshipValidation: KtxScanEnrichmentSummary['llmRelationshipValidation'];
   warnings: KtxScanWarning[];
+  partial: { reason: KtxRelationshipDetectionStopReason } | null;
 }
 
 function relationshipFromResolved(candidate: KtxResolvedRelationshipDiscoveryCandidate): KtxEnrichedRelationship {
@@ -128,6 +137,8 @@ async function detectCompositeRelationships(input: {
   executor: KtxRelationshipReadOnlyExecutor | null;
   context: DiscoverKtxRelationshipsInput['context'];
   warnings: KtxScanWarning[];
+  budget: KtxRelationshipDetectionBudget;
+  progress?: KtxProgressPort;
 }): Promise<KtxCompositeRelationshipCandidate[]> {
   if (!input.executor || !input.profile.sqlAvailable) {
     return [];
@@ -140,6 +151,8 @@ async function detectCompositeRelationships(input: {
       profiles: input.profile,
       executor: input.executor,
       ctx: input.context,
+      budget: input.budget,
+      ...(input.progress ? { progress: input.progress } : {}),
     });
     for (const warning of compositeDetection.warnings) {
       input.warnings.push({
@@ -219,6 +232,11 @@ export async function discoverKtxRelationships(
   input: DiscoverKtxRelationshipsInput,
 ): Promise<DiscoverKtxRelationshipsResult> {
   const { executor, warnings } = sqlExecutor(input);
+  const budget = createKtxRelationshipDetectionBudget({
+    budgetMs: input.settings.detectionBudgetMs,
+    ...(input.context.signal ? { signal: input.context.signal } : {}),
+    ...(input.now ? { now: input.now } : {}),
+  });
   const formalMetadata = collectKtxFormalMetadataRelationships(input.schema);
   const profileCache = createKtxRelationshipProfileCache();
   const profile = await profileKtxRelationshipSchema({
@@ -230,6 +248,8 @@ export async function discoverKtxRelationships(
     profileSampleRows: input.settings.profileSampleRows,
     profileConcurrency: input.settings.profileConcurrency,
     cache: profileCache,
+    budget,
+    ...(input.progress ? { progress: input.progress } : {}),
   });
   const deterministicCandidates: KtxRelationshipDiscoveryCandidate[] = generateKtxRelationshipDiscoveryCandidates(
     input.schema,
@@ -269,6 +289,8 @@ export async function discoverKtxRelationships(
       concurrency: input.settings.validationConcurrency,
       validationBudget: input.settings.validationBudget,
     },
+    budget,
+    ...(input.progress ? { progress: input.progress } : {}),
   });
   const graph = resolveKtxRelationshipGraph({
     schema: input.schema,
@@ -288,6 +310,8 @@ export async function discoverKtxRelationships(
     executor,
     context: input.context,
     warnings,
+    budget,
+    ...(input.progress ? { progress: input.progress } : {}),
   });
   const inferredAccepted = nonFormalAcceptedRelationships({
     formalIds: formalMetadata.acceptedIds,
@@ -310,6 +334,7 @@ export async function discoverKtxRelationships(
     resolvedRelationships: graph.relationships,
   });
   const compositeCounts = compositeSummary(compositeRelationships);
+  const stopReason = budget.stopReason();
 
   return {
     relationshipUpdate: {
@@ -330,5 +355,6 @@ export async function discoverKtxRelationships(
     statisticalValidation: profile.sqlAvailable ? 'completed' : 'skipped',
     llmRelationshipValidation: llmProposalResult.summary,
     warnings,
+    partial: stopReason ? { reason: stopReason } : null,
   };
 }

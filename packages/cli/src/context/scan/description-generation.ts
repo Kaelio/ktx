@@ -757,6 +757,15 @@ export class KtxDescriptionGenerator {
     let tableDescription: string | null = null;
     let structuredGenerationSucceeded = false;
 
+    // Bound the per-table enrichment LLM call. A very wide table can wedge the
+    // claude-code structured-output call (it never returns a result message),
+    // which otherwise hangs the entire ingest with no diagnostic. On timeout we
+    // abort, skip this table's descriptions, and continue. Tune via
+    // KTX_ENRICH_LLM_TIMEOUT_MS (default 120s).
+    const enrichTimeoutMs = Number(process.env.KTX_ENRICH_LLM_TIMEOUT_MS ?? 120_000);
+    const enrichTimeout = AbortSignal.timeout(enrichTimeoutMs);
+    let llmStartedAt = 0;
+
     try {
       const prompt = batchedPrompt({
         table: input.table,
@@ -765,6 +774,14 @@ export class KtxDescriptionGenerator {
         tableMaxWords: this.settings.tableMaxWords,
         columnMaxWords: this.settings.columnMaxWords,
       });
+      const abortSignal = input.context.signal
+        ? AbortSignal.any([enrichTimeout, input.context.signal])
+        : enrichTimeout;
+      llmStartedAt = Date.now();
+      this.logger?.info(
+        `[enrich] llm:start table=${input.table.name} cols=${input.table.columns.length} promptChars=${prompt.user.length} timeoutMs=${enrichTimeoutMs}`,
+        { connectorId: input.connector.id, table: input.table.name, columns: input.table.columns.length },
+      );
       const generated = await this.llmRuntime.generateObject<
         BatchedTableDescriptionOutput,
         typeof batchedTableDescriptionSchema
@@ -774,6 +791,11 @@ export class KtxDescriptionGenerator {
         prompt: prompt.user,
         schema: batchedTableDescriptionSchema,
         temperature: this.settings.temperature,
+        abortSignal,
+      });
+      this.logger?.info(`[enrich] llm:done table=${input.table.name} ms=${Date.now() - llmStartedAt}`, {
+        connectorId: input.connector.id,
+        table: input.table.name,
       });
       structuredGenerationSucceeded = true;
       tableDescription = generated.tableDescription.trim() || null;
@@ -794,16 +816,20 @@ export class KtxDescriptionGenerator {
         });
       }
     } catch (error) {
-      this.logger?.warn(`Batched table description failed for ${input.table.name}: ${errorMessage(error)}`, {
-        connectorId: input.connector.id,
-        table: input.table.name,
-      });
+      const elapsedMs = llmStartedAt ? Date.now() - llmStartedAt : 0;
+      const timedOut = enrichTimeout.aborted;
+      this.logger?.warn(
+        `[enrich] llm:${timedOut ? 'TIMEOUT' : 'fail'} table=${input.table.name} cols=${input.table.columns.length} ms=${elapsedMs}: ${errorMessage(error)}`,
+        { connectorId: input.connector.id, table: input.table.name, timedOut, elapsedMs },
+      );
       this.onWarning?.({
-        code: 'enrichment_failed',
-        message: `Failed to generate batched description for table ${input.table.name}: ${errorMessage(error)}`,
+        code: timedOut ? 'enrichment_timeout' : 'enrichment_failed',
+        message: `${
+          timedOut ? `Timed out after ${elapsedMs}ms generating` : 'Failed to generate'
+        } batched description for table ${input.table.name}: ${errorMessage(error)}`,
         table: input.table.name,
         recoverable: true,
-        metadata: { connectorId: input.connector.id },
+        metadata: { connectorId: input.connector.id, ...(timedOut ? { timeoutMs: enrichTimeoutMs } : {}) },
       });
     }
 

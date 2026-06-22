@@ -61,6 +61,7 @@ describe('buildProjectStackSnapshotFields', () => {
             profileSampleRows: 10000,
             profileConcurrency: 4,
             validationConcurrency: 4,
+            detectionBudgetMs: 600000,
           },
         },
         storage: {

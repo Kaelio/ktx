@@ -8,7 +8,7 @@ const KTX_SCAN_ENRICHMENT_STAGES: readonly KtxScanEnrichmentStage[] = [
 ] as const;
 
 export interface KtxScanEnrichmentStageLookup {
-  runId: string;
+  connectionId: string;
   stage: KtxScanEnrichmentStage;
   inputHash: string;
 }

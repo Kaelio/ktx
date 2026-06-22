@@ -201,11 +201,12 @@ function noDeclaredRelationshipSnapshot(): KtxSchemaSnapshot {
 
 function memoryEnrichmentStateStore(): KtxScanEnrichmentStateStore {
   const records = new Map<string, KtxScanEnrichmentCompletedStage | KtxScanEnrichmentFailedStage>();
-  const key = (input: Pick<KtxScanEnrichmentStageLookup, 'runId' | 'stage'>) => `${input.runId}:${input.stage}`;
+  const key = (input: Pick<KtxScanEnrichmentStageLookup, 'connectionId' | 'stage' | 'inputHash'>) =>
+    `${input.connectionId}:${input.stage}:${input.inputHash}`;
   return {
     async findCompletedStage<TOutput>(input: KtxScanEnrichmentStageLookup) {
       const record = records.get(key(input));
-      if (!record || record.status !== 'completed' || record.inputHash !== input.inputHash) {
+      if (!record || record.status !== 'completed') {
         return null;
       }
       return record as KtxScanEnrichmentCompletedStage<TOutput>;
@@ -617,8 +618,8 @@ describe('local scan enrichment', () => {
 
     expect(events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ message: 'Generating descriptions 1/2 tables', transient: true }),
-        expect.objectContaining({ message: 'Generating descriptions 2/2 tables', transient: true }),
+        expect.objectContaining({ message: 'Generating descriptions 1/2 (customers, 1 cols)', transient: true }),
+        expect.objectContaining({ message: 'Generating descriptions 2/2 (orders, 2 cols)', transient: true }),
         expect.objectContaining({ message: 'Building embeddings 1/1 batches', transient: true }),
         expect.objectContaining({ message: 'Detecting relationships' }),
       ]),
@@ -711,7 +712,7 @@ describe('local scan enrichment', () => {
     expect(embedBatch.mock.calls.map(([texts]) => texts).map((texts) => texts.length)).toEqual([2, 2, 1]);
   });
 
-  it('reuses completed description and embedding stages for the same run id and snapshot hash', async () => {
+  it('reuses completed description and embedding stages across a fresh run id by content identity', async () => {
     const stateStore = memoryEnrichmentStateStore();
     const scanConnector = connector();
     const providers = {
@@ -733,15 +734,17 @@ describe('local scan enrichment', () => {
 
     const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
     const embedBatch = vi.spyOn(providers.embedding, 'embedBatch');
+    // A re-run mints a brand-new runId/syncId (as a real interrupted ingest
+    // would); resume must still hit the cache via (connectionId, stage, inputHash).
     const second = await runLocalScanEnrichment({
       connectionId: 'warehouse',
       mode: 'enriched',
       detectRelationships: true,
       connector: scanConnector,
-      context: { runId: 'scan-run-resume-1' },
+      context: { runId: 'scan-run-resume-2' },
       providers,
       stateStore,
-      syncId: 'sync-resume-1',
+      syncId: 'sync-resume-2',
       providerIdentity: { provider: 'fake', embeddingDimensions: 6 },
     });
 
@@ -754,6 +757,159 @@ describe('local scan enrichment', () => {
     expect(second.descriptionUpdates).toEqual(first.descriptionUpdates);
     expect(second.embeddingUpdates).toEqual(first.embeddingUpdates);
     expect(second.relationships).toEqual(first.relationships);
+  });
+
+  it('marks a budget-truncated relationship stage partial, persists it, and re-runs only when the budget is raised', async () => {
+    const executor = new InMemorySqliteExecutor();
+    try {
+      executor.db.exec(`
+        CREATE TABLE accounts (id INTEGER NOT NULL);
+        CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+        INSERT INTO accounts (id) VALUES (1), (2);
+        INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+      `);
+      const scanConnector = {
+        ...connector(),
+        driver: 'sqlite' as const,
+        capabilities: createKtxConnectorCapabilities({ readOnlySql: true, columnStats: true }),
+        introspect: vi.fn(async () => noDeclaredRelationshipSnapshot()),
+        executeReadOnly: executor.executeReadOnly.bind(executor),
+      };
+      const stateStore = memoryEnrichmentStateStore();
+      const base = Date.parse('2026-06-01T00:00:00.000Z');
+      let calls = 0;
+      // A clock that jumps a second per read against a 1ms budget trips at the
+      // first table-profile boundary.
+      const advancingNow = () => new Date(base + calls++ * 1000);
+      const tightSettings = {
+        ...buildDefaultKtxProjectConfig().scan.relationships,
+        detectionBudgetMs: 1,
+      };
+
+      const first = await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'relationships',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'budget-run-1' },
+        providers: null,
+        stateStore,
+        syncId: 'sync-budget-1',
+        relationshipSettings: tightSettings,
+        now: advancingNow,
+      });
+
+      expect(first.relationshipPartial).toEqual({ reason: 'budget' });
+      expect(first.warnings.map((warning) => warning.code)).toContain('relationship_detection_partial');
+      expect(first.state.completedStages).toContain('relationships');
+
+      // A re-run with a fresh runId resumes the saved partial from cache.
+      const second = await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'relationships',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'budget-run-2' },
+        providers: null,
+        stateStore,
+        syncId: 'sync-budget-2',
+        relationshipSettings: tightSettings,
+      });
+      expect(second.state.resumedStages).toContain('relationships');
+
+      // Raising the budget changes the content identity, forcing a fuller run.
+      const third = await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'relationships',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'budget-run-3' },
+        providers: null,
+        stateStore,
+        syncId: 'sync-budget-3',
+        relationshipSettings: { ...tightSettings, detectionBudgetMs: 600_000 },
+      });
+      expect(third.state.resumedStages).not.toContain('relationships');
+      expect(third.relationshipPartial).toBeNull();
+    } finally {
+      executor.close();
+    }
+  });
+
+  it('checkpoints descriptions and embeddings before the relationship stage queries the database', async () => {
+    const executor = new InMemorySqliteExecutor();
+    try {
+      executor.db.exec(`
+        CREATE TABLE accounts (id INTEGER NOT NULL);
+        CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+        INSERT INTO accounts (id) VALUES (1), (2);
+        INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+      `);
+      const checkpoints: Array<Awaited<ReturnType<typeof runLocalScanEnrichment>>> = [];
+      let sawRelationshipQuery = false;
+      let relationshipQueryRanAfterCheckpoint = true;
+      const scanConnector = {
+        ...connector(),
+        driver: 'sqlite' as const,
+        capabilities: createKtxConnectorCapabilities({ readOnlySql: true, columnStats: true }),
+        introspect: vi.fn(async () => noDeclaredRelationshipSnapshot()),
+        executeReadOnly: (input: KtxReadOnlyQueryInput, ctx: KtxScanContext) => {
+          sawRelationshipQuery = true;
+          if (checkpoints.length === 0) {
+            relationshipQueryRanAfterCheckpoint = false;
+          }
+          return executor.executeReadOnly(input, ctx);
+        },
+      };
+
+      const result = await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'enriched',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'checkpoint-order' },
+        providers: {
+          ...createDeterministicLocalScanEnrichmentProviders(),
+          embedding: fakeScanEmbedding({ dimensions: 6 }),
+        },
+        onCheckpoint: async (checkpoint) => {
+          checkpoints.push(checkpoint);
+        },
+      });
+
+      expect(checkpoints).toHaveLength(1);
+      const checkpoint = checkpoints[0];
+      if (!checkpoint) {
+        throw new Error('Expected a checkpoint');
+      }
+      expect(checkpoint.summary.tableDescriptions).toBe('completed');
+      expect(checkpoint.summary.embeddings).toBe('completed');
+      expect(checkpoint.descriptionUpdates.length).toBeGreaterThan(0);
+      expect(checkpoint.embeddingUpdates.length).toBeGreaterThan(0);
+      // The relationship-specific outputs are deliberately absent at checkpoint time.
+      expect(checkpoint.relationshipUpdate).toBeNull();
+      expect(checkpoint.relationshipProfile).toBeNull();
+      expect(sawRelationshipQuery).toBe(true);
+      expect(relationshipQueryRanAfterCheckpoint).toBe(true);
+      // The final result still carries the relationship outputs.
+      expect(result.relationshipProfile).not.toBeNull();
+    } finally {
+      executor.close();
+    }
+  });
+
+  it('does not checkpoint when relationship detection is skipped', async () => {
+    const onCheckpoint = vi.fn(async () => {});
+    await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      connector: connector(),
+      context: { runId: 'no-checkpoint' },
+      providers: createDeterministicLocalScanEnrichmentProviders(),
+      relationshipSettings: { ...buildDefaultKtxProjectConfig().scan.relationships, enabled: false },
+      onCheckpoint,
+    });
+    expect(onCheckpoint).not.toHaveBeenCalled();
   });
 
   it('does not reuse completed stages when the snapshot changes', async () => {

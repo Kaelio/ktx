@@ -18,7 +18,11 @@ import {
   type KtxLocalScanEnrichmentProviders,
   runLocalScanEnrichment,
 } from './local-enrichment.js';
-import { writeLocalScanEnrichmentArtifacts, writeLocalScanManifestShards } from './local-enrichment-artifacts.js';
+import {
+  writeLocalScanEnrichmentArtifacts,
+  writeLocalScanEnrichmentCheckpoint,
+  writeLocalScanManifestShards,
+} from './local-enrichment-artifacts.js';
 import { readLocalScanStructuralSnapshot } from './local-structural-artifacts.js';
 import { SqliteLocalScanEnrichmentStateStore } from './sqlite-local-enrichment-state-store.js';
 import type {
@@ -80,6 +84,7 @@ export interface RunLocalScanOptions {
   enrichmentStateStore?: SqliteLocalScanEnrichmentStateStore | null;
   progress?: KtxProgressPort;
   embeddingProvider?: KtxEmbeddingProvider | null;
+  signal?: AbortSignal;
 }
 
 export interface LocalScanRunResult {
@@ -495,7 +500,11 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
         detectRelationships: options.detectRelationships,
         connector,
         ...(enrichmentSnapshot ? { snapshot: enrichmentSnapshot } : {}),
-        context: { runId: record.runId, progress: options.progress?.startPhase(0.18) },
+        context: {
+          runId: record.runId,
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.progress ? { progress: options.progress.startPhase(0.18) } : {}),
+        },
         providers: enrichmentProviders,
         stateStore: enrichmentStateStore,
         syncId: record.syncId,
@@ -506,6 +515,16 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
         ),
         relationshipSettings: options.project.config.scan.relationships,
         now: options.now,
+        onCheckpoint: async (checkpoint) => {
+          await writeLocalScanEnrichmentCheckpoint({
+            project: options.project,
+            connectionId: options.connectionId,
+            syncId: record.syncId,
+            driver,
+            enrichment: checkpoint,
+            dryRun: options.dryRun ?? false,
+          });
+        },
       });
       const artifacts = await writeLocalScanEnrichmentArtifacts({
         project: options.project,

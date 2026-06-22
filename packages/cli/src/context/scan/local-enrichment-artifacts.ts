@@ -307,23 +307,14 @@ export async function writeLocalScanManifestShards(
   };
 }
 
-export async function writeLocalScanEnrichmentArtifacts(
-  input: WriteLocalScanEnrichmentArtifactsInput,
-): Promise<WriteLocalScanEnrichmentArtifactsResult> {
-  if (input.dryRun) {
-    return {
-      enrichmentArtifacts: [],
-      manifestShards: [],
-      manifestShardsWritten: 0,
-    };
-  }
-
-  const enrichmentRoot = artifactDir(input.connectionId, input.syncId);
-  const descriptionsArtifact = `${enrichmentRoot}/descriptions.json`;
-  const embeddingsArtifact = `${enrichmentRoot}/embeddings.json`;
-  const relationshipsArtifact = `${enrichmentRoot}/relationships.json`;
-  const relationshipProfileArtifact = `${enrichmentRoot}/relationship-profile.json`;
-  const relationshipDiagnosticsArtifact = `${enrichmentRoot}/relationship-diagnostics.json`;
+async function writeEnrichmentDescriptionArtifacts(input: {
+  project: KtxLocalProject;
+  enrichmentRoot: string;
+  syncId: string;
+  enrichment: KtxLocalScanEnrichmentResult;
+}): Promise<string[]> {
+  const descriptionsArtifact = `${input.enrichmentRoot}/descriptions.json`;
+  const embeddingsArtifact = `${input.enrichmentRoot}/embeddings.json`;
   const enrichmentArtifacts: string[] = [];
 
   if (
@@ -347,6 +338,67 @@ export async function writeLocalScanEnrichmentArtifacts(
       `scan(${LIVE_DATABASE_ADAPTER}): write enrichment embeddings syncId=${input.syncId}`,
     );
   }
+  return enrichmentArtifacts;
+}
+
+/**
+ * Promote the descriptions + embeddings into the queryable `_schema` manifest
+ * (and the raw enrichment artifacts) before relationship detection runs. The
+ * generated joins and the relationship diagnostics are deliberately left to the
+ * final write, so an interrupted relationship stage never loses the paid LLM
+ * enrichment and never emits empty relationship diagnostics.
+ */
+export async function writeLocalScanEnrichmentCheckpoint(
+  input: WriteLocalScanEnrichmentArtifactsInput,
+): Promise<WriteLocalScanEnrichmentArtifactsResult> {
+  if (input.dryRun) {
+    return { enrichmentArtifacts: [], manifestShards: [], manifestShardsWritten: 0 };
+  }
+
+  const enrichmentArtifacts = await writeEnrichmentDescriptionArtifacts({
+    project: input.project,
+    enrichmentRoot: artifactDir(input.connectionId, input.syncId),
+    syncId: input.syncId,
+    enrichment: input.enrichment,
+  });
+  const manifestResult = await writeLocalScanManifestShards({
+    project: input.project,
+    connectionId: input.connectionId,
+    syncId: input.syncId,
+    driver: input.driver,
+    snapshot: input.enrichment.snapshot,
+    descriptionUpdates: input.enrichment.descriptionUpdates,
+    dryRun: false,
+  });
+
+  return {
+    enrichmentArtifacts,
+    manifestShards: manifestResult.manifestShards,
+    manifestShardsWritten: manifestResult.manifestShardsWritten,
+  };
+}
+
+export async function writeLocalScanEnrichmentArtifacts(
+  input: WriteLocalScanEnrichmentArtifactsInput,
+): Promise<WriteLocalScanEnrichmentArtifactsResult> {
+  if (input.dryRun) {
+    return {
+      enrichmentArtifacts: [],
+      manifestShards: [],
+      manifestShardsWritten: 0,
+    };
+  }
+
+  const enrichmentRoot = artifactDir(input.connectionId, input.syncId);
+  const relationshipsArtifact = `${enrichmentRoot}/relationships.json`;
+  const relationshipProfileArtifact = `${enrichmentRoot}/relationship-profile.json`;
+  const relationshipDiagnosticsArtifact = `${enrichmentRoot}/relationship-diagnostics.json`;
+  const enrichmentArtifacts = await writeEnrichmentDescriptionArtifacts({
+    project: input.project,
+    enrichmentRoot,
+    syncId: input.syncId,
+    enrichment: input.enrichment,
+  });
   enrichmentArtifacts.push(relationshipsArtifact, relationshipProfileArtifact, relationshipDiagnosticsArtifact);
   const hasResolvedRelationships = input.enrichment.resolvedRelationships !== null;
   const relationshipArtifacts = buildKtxRelationshipArtifacts({
@@ -372,6 +424,7 @@ export async function writeLocalScanEnrichmentArtifacts(
     artifacts: relationshipArtifacts,
     profile: relationshipProfile,
     warnings: input.enrichment.warnings,
+    partial: input.enrichment.relationshipPartial,
     thresholds: input.relationshipSettings
       ? {
           acceptThreshold: input.relationshipSettings.acceptThreshold,

@@ -574,6 +574,7 @@ scan:
     profileConcurrency: 4
     validationConcurrency: 4
     validationBudget: all
+    detectionBudgetMs: 600000
 ```
 
 ### Enrichment
@@ -602,6 +603,7 @@ the manifest.
 | `relationships.profileConcurrency` | `int > 0` | `4` | Parallel relationship-profile queries against the database. For pooled connectors, effective database concurrency is also bounded by the connection's `maxConnections`. |
 | `relationships.validationConcurrency` | `int > 0` | `4` | Parallel relationship validation queries against the database. |
 | `relationships.validationBudget` | `all` \| `int ≥ 0` | runtime default | Cap on validation queries per scan. `all` means unlimited. |
+| `relationships.detectionBudgetMs` | `int > 0` | `600000` | Wall-clock budget (ms) for the whole relationship-detection stage, checked at table-profile, candidate-validation, and composite-probe boundaries. On exhaustion the stage stops scheduling new work and writes the joins found so far, marked partial; descriptions and embeddings are already durable. Sits above the per-query deadline. Raise it to trigger a fresher, fuller run. |
 
 ## `agent`
 

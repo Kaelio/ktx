@@ -3,11 +3,12 @@ import type { KtxDialect } from '../connections/dialects.js';
 import type { KtxRelationshipEndpoint } from './enrichment-types.js';
 import { applyKtxRelationshipValidationBudget, type KtxRelationshipValidationBudget } from './relationship-budget.js';
 import type { KtxRelationshipDiscoveryCandidate } from './relationship-candidates.js';
+import { type KtxRelationshipDetectionBudget, mapWithBudget } from './relationship-detection-budget.js';
 import {
   type KtxRelationshipProfileArtifact,
   type KtxRelationshipReadOnlyExecutor,
 } from './relationship-profiling.js';
-import type { KtxQueryResult, KtxScanContext, KtxTableRef } from './types.js';
+import type { KtxProgressPort, KtxQueryResult, KtxScanContext, KtxTableRef } from './types.js';
 
 type KtxValidatedRelationshipStatus = 'accepted' | 'review' | 'rejected';
 
@@ -52,6 +53,8 @@ export interface ValidateKtxRelationshipDiscoveryCandidatesInput {
   ctx: KtxScanContext;
   tableCount?: number;
   settings?: Partial<KtxRelationshipValidationSettings>;
+  budget?: KtxRelationshipDetectionBudget;
+  progress?: KtxProgressPort;
 }
 
 const DEFAULT_SETTINGS: KtxRelationshipValidationSettings = {
@@ -181,27 +184,6 @@ function statusFor(input: {
     return 'review';
   }
   return 'rejected';
-}
-
-export async function mapWithConcurrency<TInput, TOutput>(
-  inputs: readonly TInput[],
-  concurrency: number,
-  mapOne: (input: TInput) => Promise<TOutput>,
-): Promise<TOutput[]> {
-  const safeConcurrency = Math.max(1, Math.floor(concurrency));
-  const outputs: TOutput[] = new Array(inputs.length);
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (nextIndex < inputs.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      outputs[index] = await mapOne(inputs[index] as TInput);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(safeConcurrency, inputs.length) }, () => worker()));
-  return outputs;
 }
 
 function reviewWithoutValidation(
@@ -344,18 +326,29 @@ export async function validateKtxRelationshipDiscoveryCandidates(
     budget: settings.validationBudget,
     score: (candidate) => candidate.confidence,
   });
-  const validated = await mapWithConcurrency(
-    budgeted.toValidate.map((entry) => entry.candidate),
-    settings.concurrency,
-    validateCandidate,
-  );
+  const { results: validated } = await mapWithBudget({
+    inputs: budgeted.toValidate,
+    concurrency: settings.concurrency,
+    budget: input.budget,
+    onStart: async (index, total) => {
+      await input.progress?.update((index + 1) / total, `Validating candidate ${index + 1}/${total}`, {
+        transient: true,
+      });
+    },
+    mapOne: (entry) => validateCandidate(entry.candidate),
+  });
   const byOriginalIndex = new Map<number, KtxValidatedRelationshipDiscoveryCandidate>();
   for (let index = 0; index < budgeted.toValidate.length; index += 1) {
-    const originalIndex = budgeted.toValidate[index]?.originalIndex;
-    const candidate = validated[index];
-    if (originalIndex !== undefined && candidate) {
-      byOriginalIndex.set(originalIndex, candidate);
+    const entry = budgeted.toValidate[index];
+    if (!entry) {
+      continue;
     }
+    // A candidate left unvalidated by the wall-clock budget degrades to the
+    // same review status as one deferred by the validation count budget.
+    byOriginalIndex.set(
+      entry.originalIndex,
+      validated[index] ?? reviewWithoutValidation(entry.candidate, input.profiles, 'validation_unattempted'),
+    );
   }
   for (const entry of budgeted.deferred) {
     byOriginalIndex.set(

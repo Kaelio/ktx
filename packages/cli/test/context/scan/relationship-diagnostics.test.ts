@@ -315,6 +315,26 @@ describe('relationship diagnostics artifacts', () => {
     expect(diagnostics.summary).toEqual({ accepted: 0, review: 0, rejected: 0, skipped: 0 });
     expect(diagnostics.noAcceptedReason).toBe('no candidate pairs passed type compatibility');
     expect(diagnostics.candidateCountsBySource).toEqual({});
+    expect(diagnostics.partial).toBe(false);
+    expect(diagnostics.partialReason).toBeNull();
+  });
+
+  it('marks the diagnostics partial with its stop reason when relationship detection was truncated', () => {
+    const artifacts = buildKtxRelationshipArtifacts({ connectionId: 'warehouse' });
+    const diagnostics = buildKtxRelationshipDiagnostics({
+      connectionId: 'warehouse',
+      generatedAt: '2026-05-07T12:00:00.000Z',
+      artifacts,
+      profile: emptyKtxRelationshipProfileArtifact({
+        connectionId: 'warehouse',
+        driver: 'sqlite',
+        reason: 'relationship_profiling_not_run',
+      }),
+      partial: { reason: 'budget' },
+    });
+
+    expect(diagnostics.partial).toBe(true);
+    expect(diagnostics.partialReason).toBe('budget');
   });
 
   it('records composite relationship endpoints in relationship artifacts', () => {

@@ -21,6 +21,7 @@ import type {
   KtxRelationshipUpdate,
 } from './enrichment-types.js';
 import type { KtxCompositeRelationshipCandidate } from './relationship-composite-candidates.js';
+import type { KtxRelationshipDetectionStopReason } from './relationship-detection-budget.js';
 import type { KtxResolvedRelationshipDiscoveryCandidate } from './relationship-graph-resolver.js';
 import { discoverKtxRelationships } from './relationship-discovery.js';
 import type { KtxRelationshipProfileArtifact } from './relationship-profiling.js';
@@ -42,7 +43,13 @@ import type {
   KtxTableRef,
 } from './types.js';
 
-const DESCRIPTION_TABLE_CONCURRENCY = 4;
+// Parallel per-table description generations. Default 4; raise via
+// KTX_ENRICH_TABLE_CONCURRENCY for large schemas (the rate-limit governor still
+// throttles if the provider pushes back, so a higher cap is safe headroom).
+const DESCRIPTION_TABLE_CONCURRENCY = (() => {
+  const raw = Number(process.env.KTX_ENRICH_TABLE_CONCURRENCY);
+  return Number.isInteger(raw) && raw >= 1 && raw <= 64 ? raw : 4;
+})();
 
 export interface KtxLocalScanEnrichmentProviders {
   llmRuntime: KtxLlmRuntimePort;
@@ -62,6 +69,12 @@ export interface KtxLocalScanEnrichmentInput {
   providerIdentity?: Record<string, unknown>;
   relationshipSettings?: KtxScanRelationshipConfig;
   now?: () => Date;
+  /**
+   * Invoked once the last non-relationship stage completes and before
+   * relationship detection runs, so the descriptions + embeddings reach the
+   * queryable layer even if the relationship stage is later interrupted.
+   */
+  onCheckpoint?: (checkpoint: KtxLocalScanEnrichmentResult) => Promise<void>;
 }
 
 export interface KtxLocalScanEnrichmentResult {
@@ -80,6 +93,7 @@ export interface KtxLocalScanEnrichmentResult {
   relationshipProfile: KtxRelationshipProfileArtifact | null;
   resolvedRelationships: KtxResolvedRelationshipDiscoveryCandidate[] | null;
   compositeRelationships: KtxCompositeRelationshipCandidate[] | null;
+  relationshipPartial: { reason: KtxRelationshipDetectionStopReason } | null;
 }
 
 function tableId(table: KtxSchemaTable): string {
@@ -301,7 +315,7 @@ async function generateDescriptions(input: {
       limitTable(async () => {
         await input.progress?.update(
           (index + 1) / totalTables,
-          `Generating descriptions ${index + 1}/${totalTables} tables`,
+          `Generating descriptions ${index + 1}/${totalTables} (${table.name}, ${table.columns.length} cols)`,
           {
             transient: true,
           },
@@ -419,7 +433,7 @@ async function runEnrichmentStage<TOutput>(input: {
   compute: () => Promise<TOutput>;
 }): Promise<TOutput> {
   const existing = await input.stateStore?.findCompletedStage<TOutput>({
-    runId: input.runId,
+    connectionId: input.connectionId,
     stage: input.stage,
     inputHash: input.inputHash,
   });
@@ -575,7 +589,29 @@ export async function runLocalScanEnrichment(
   let relationshipProfile: KtxRelationshipProfileArtifact | null = null;
   let resolvedRelationships: KtxResolvedRelationshipDiscoveryCandidate[] | null = null;
   let compositeRelationships: KtxCompositeRelationshipCandidate[] | null = null;
+  let relationshipPartial: { reason: KtxRelationshipDetectionStopReason } | null = null;
   let relationships: KtxScanRelationshipSummary = { accepted: 0, review: 0, rejected: 0, skipped: 0 };
+
+  // Promote the paid descriptions + embeddings to the queryable layer at the
+  // cost boundary, before the slow, kill-prone relationship stage — so an
+  // interrupted relationship stage degrades to "no joins," never "no descriptions."
+  if (shouldDetectRelationships && summary.tableDescriptions === 'completed' && input.onCheckpoint) {
+    await input.onCheckpoint({
+      snapshot,
+      summary: { ...summary },
+      relationships,
+      state: summarizeKtxScanEnrichmentState(state),
+      warnings: [...warnings],
+      descriptionUpdates: descriptions,
+      embeddingUpdates,
+      relationshipUpdate: null,
+      relationshipProfile: null,
+      resolvedRelationships: null,
+      compositeRelationships: null,
+      relationshipPartial: null,
+    });
+  }
+
   if (shouldDetectRelationships) {
     const relationshipProgress = progress?.startPhase(0.25);
     const relationshipStage = await runEnrichmentStage({
@@ -600,6 +636,8 @@ export async function runLocalScanEnrichment(
           context: input.context,
           settings: relationshipSettings,
           llmRuntime: input.providers?.llmRuntime ?? null,
+          ...(relationshipProgress ? { progress: relationshipProgress } : {}),
+          ...(input.now ? { now: () => input.now!().getTime() } : {}),
         });
 
         await relationshipProgress?.update(
@@ -615,6 +653,7 @@ export async function runLocalScanEnrichment(
           statisticalValidation: detection.statisticalValidation,
           llmRelationshipValidation: detection.llmRelationshipValidation,
           warnings: detection.warnings,
+          partial: detection.partial,
         };
       },
     });
@@ -627,7 +666,19 @@ export async function runLocalScanEnrichment(
     resolvedRelationships = relationshipStage.resolvedRelationships;
     compositeRelationships = relationshipStage.compositeRelationships;
     relationships = relationshipStage.relationships;
+    relationshipPartial = relationshipStage.partial;
     warnings.push(...relationshipStage.warnings);
+    if (relationshipPartial) {
+      warnings.push({
+        code: 'relationship_detection_partial',
+        message:
+          relationshipPartial.reason === 'aborted'
+            ? 'Relationship detection was cancelled before completing; the joins found so far are partial.'
+            : 'Relationship detection hit its wall-clock budget (scan.relationships.detectionBudgetMs) before completing; the joins found so far are partial. Raise the budget to run a fuller pass.',
+        recoverable: true,
+        metadata: { reason: relationshipPartial.reason },
+      });
+    }
   }
 
   await progress?.update(1, 'Enrichment complete');
@@ -643,5 +694,6 @@ export async function runLocalScanEnrichment(
     relationshipProfile,
     resolvedRelationships,
     compositeRelationships,
+    relationshipPartial,
   };
 }

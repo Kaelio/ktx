@@ -220,6 +220,7 @@ function enrichment(): KtxLocalScanEnrichmentResult {
       },
     ],
     compositeRelationships: null,
+    relationshipPartial: null,
   };
 }
 
@@ -291,6 +292,7 @@ describe('writeLocalScanEnrichmentArtifacts', () => {
         profileSampleRows: 500,
         profileConcurrency: 3,
         validationConcurrency: 2,
+        detectionBudgetMs: 600000,
       },
     });
 
@@ -476,6 +478,7 @@ describe('writeLocalScanEnrichmentArtifacts', () => {
         profileSampleRows: 10000,
         profileConcurrency: 4,
         validationConcurrency: 4,
+        detectionBudgetMs: 600000,
       },
       dryRun: false,
     });
@@ -746,6 +749,7 @@ describe('writeLocalScanEnrichmentArtifacts', () => {
         profileSampleRows: 10000,
         profileConcurrency: 4,
         validationConcurrency: 4,
+        detectionBudgetMs: 600000,
       },
       dryRun: false,
     });

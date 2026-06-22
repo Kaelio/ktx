@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   completedKtxScanEnrichmentStateSummary,
@@ -103,7 +104,7 @@ describe('scan enrichment state', () => {
 
     await expect(
       store.findCompletedStage({
-        runId: 'scan-run-1',
+        connectionId: 'warehouse',
         stage: 'descriptions',
         inputHash,
       }),
@@ -116,11 +117,54 @@ describe('scan enrichment state', () => {
 
     await expect(
       store.findCompletedStage({
-        runId: 'scan-run-1',
+        connectionId: 'warehouse',
         stage: 'descriptions',
         inputHash: 'different-hash',
       }),
     ).resolves.toBeNull();
+  });
+
+  it('resolves a completed stage across a fresh run id by content identity', async () => {
+    const inputHash = computeKtxScanEnrichmentInputHash({
+      snapshot,
+      mode: 'enriched',
+      detectRelationships: true,
+      providerIdentity: { provider: 'local-heuristic' },
+    });
+
+    await store.saveCompletedStage({
+      runId: 'scan-run-first',
+      connectionId: 'warehouse',
+      syncId: 'sync-first',
+      mode: 'enriched',
+      stage: 'descriptions',
+      inputHash,
+      output: [{ table: { catalog: null, db: 'public', name: 'orders' }, tableDescription: 'first' }],
+      updatedAt: '2026-04-29T12:00:00.000Z',
+    });
+    // A later run with the SAME content identity overwrites in place (the
+    // primary key no longer includes run_id), and the lookup resolves it
+    // without ever knowing the run id that produced it.
+    await store.saveCompletedStage({
+      runId: 'scan-run-second',
+      connectionId: 'warehouse',
+      syncId: 'sync-second',
+      mode: 'enriched',
+      stage: 'descriptions',
+      inputHash,
+      output: [{ table: { catalog: null, db: 'public', name: 'orders' }, tableDescription: 'second' }],
+      updatedAt: '2026-04-29T12:05:00.000Z',
+    });
+
+    const resolved = await store.findCompletedStage({
+      connectionId: 'warehouse',
+      stage: 'descriptions',
+      inputHash,
+    });
+    expect(resolved?.runId).toBe('scan-run-second');
+    expect(resolved?.output).toEqual([
+      { table: { catalog: null, db: 'public', name: 'orders' }, tableDescription: 'second' },
+    ]);
   });
 
   it('records failed stages without making them reusable', async () => {
@@ -137,7 +181,7 @@ describe('scan enrichment state', () => {
 
     await expect(
       store.findCompletedStage({
-        runId: 'scan-run-2',
+        connectionId: 'warehouse',
         stage: 'embeddings',
         inputHash: 'hash-2',
       }),
@@ -151,6 +195,47 @@ describe('scan enrichment state', () => {
         errorMessage: 'embedding service timed out',
       }),
     ]);
+  });
+
+  it('recreates the resume cache when an older primary key shape is found', async () => {
+    const dbPath = join(tempDir, 'legacy.sqlite');
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE local_scan_enrichment_stages (
+        run_id TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        input_hash TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        sync_id TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        output_json TEXT,
+        error_message TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, stage)
+      );
+      INSERT INTO local_scan_enrichment_stages
+        VALUES ('old-run', 'descriptions', 'hash', 'warehouse', 'sync', 'enriched', 'completed', 'null', NULL, '2026-01-01T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    const recreated = new SqliteLocalScanEnrichmentStateStore({ dbPath });
+    // The legacy row is dropped with the old table; the new key shape is in
+    // force, so a fresh save + lookup round-trips cleanly.
+    await recreated.saveCompletedStage({
+      runId: 'new-run',
+      connectionId: 'warehouse',
+      syncId: 'sync',
+      mode: 'enriched',
+      stage: 'descriptions',
+      inputHash: 'hash',
+      output: ['fresh'],
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    });
+    await expect(
+      recreated.findCompletedStage({ connectionId: 'warehouse', stage: 'descriptions', inputHash: 'hash' }),
+    ).resolves.toMatchObject({ runId: 'new-run', output: ['fresh'] });
+    await expect(recreated.listRunStages('old-run')).resolves.toEqual([]);
   });
 
   it('summarizes resumed, completed, and failed stages for reports', () => {
