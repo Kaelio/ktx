@@ -309,7 +309,10 @@ export class KtxMongoDbScanConnector implements KtxScanConnector {
     database: string,
     collection: KtxMongoListedCollection,
   ): Promise<KtxSchemaTable> {
-    const estimatedRows = await client.estimatedDocumentCount(database, collection.name);
+    const isView = collection.type === 'view';
+    // estimatedDocumentCount issues a count command, which MongoDB rejects on a
+    // view (CommandNotSupportedOnView); only count real collections.
+    const estimatedRows = isView ? null : await client.estimatedDocumentCount(database, collection.name);
     const documents = await client.find(database, collection.name, {
       sort: { [this.orderBy]: -1 },
       limit: this.sampleSize,
@@ -318,9 +321,9 @@ export class KtxMongoDbScanConnector implements KtxScanConnector {
       catalog: null,
       db: database,
       name: collection.name,
-      kind: collection.type === 'view' ? 'view' : 'table',
+      kind: isView ? 'view' : 'table',
       comment: null,
-      estimatedRows: collection.type === 'view' ? null : estimatedRows,
+      estimatedRows,
       columns: inferKtxMongoCollectionColumns(documents, this.dialect),
       foreignKeys: [],
     };

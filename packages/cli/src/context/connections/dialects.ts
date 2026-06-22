@@ -87,3 +87,13 @@ export function getSqlDialectForDriver(driver: string): KtxSqlDialect {
   }
   throw new Error(`Driver "${driver}" has no SQL dialect. SQL drivers: ${supportedSqlDrivers.join(', ')}`);
 }
+
+/**
+ * Whether a driver can generate and execute SQL. Single source of truth for the
+ * SQL/non-SQL boundary: a driver is SQL-queryable iff it has a SQL dialect, so
+ * non-SQL sources (e.g. mongodb) are excluded without a hand-maintained list.
+ */
+export function isSqlQueryableDriver(driver: string | undefined): boolean {
+  const normalized = (driver ?? '').toLowerCase().trim();
+  return Object.prototype.hasOwnProperty.call(sqlDialectFactories, normalized);
+}

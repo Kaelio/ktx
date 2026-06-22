@@ -9,6 +9,7 @@ import {
 } from '../../../src/connectors/mongodb/connector.js';
 import { createMongoDbLiveDatabaseIntrospection } from '../../../src/connectors/mongodb/live-database-introspection.js';
 import { executeProjectReadOnlySql } from '../../../src/context/connections/project-sql-executor.js';
+import { tableRefSet } from '../../../src/context/scan/table-ref.js';
 import type { KtxLocalProject } from '../../../src/context/project/project.js';
 import type { KtxMongoDocument } from '../../../src/connectors/mongodb/schema-inference.js';
 
@@ -140,6 +141,60 @@ describe('KtxMongoDbScanConnector.introspect', () => {
       factory,
     ).introspect({ connectionId: 'mongo-prod', driver: 'mongodb' }, { runId: 't' });
     expect(snapshot.tables.map((table) => table.name)).toEqual(['users']);
+  });
+
+  it('restricts introspection to input.tableScope (the scan layer does not post-filter)', async () => {
+    const { factory } = fakeClientFactory();
+    const snapshot = await connector(baseConnection, factory).introspect(
+      {
+        connectionId: 'mongo-prod',
+        driver: 'mongodb',
+        tableScope: tableRefSet([{ catalog: null, db: 'app', name: 'users' }]),
+      },
+      { runId: 't' },
+    );
+    expect(snapshot.tables.map((table) => table.name)).toEqual(['users']);
+  });
+
+  it('yields zero tables for a database whose scoped set is empty', async () => {
+    const { factory } = fakeClientFactory();
+    const snapshot = await connector(baseConnection, factory).introspect(
+      {
+        connectionId: 'mongo-prod',
+        driver: 'mongodb',
+        tableScope: tableRefSet([{ catalog: null, db: 'other', name: 'users' }]),
+      },
+      { runId: 't' },
+    );
+    expect(snapshot.tables).toEqual([]);
+  });
+
+  it('does not count documents on a view (estimatedDocumentCount fails on views)', async () => {
+    const collections: KtxMongoListedCollection[] = [
+      { name: 'users' },
+      { name: 'active_users', type: 'view' },
+    ];
+    const client: KtxMongoClient = {
+      listCollections: vi.fn(async () => collections),
+      // Real MongoDB rejects a count command on a view with CommandNotSupportedOnView.
+      estimatedDocumentCount: vi.fn(async (_db: string, name: string) => {
+        if (name === 'active_users') {
+          throw new Error('CommandNotSupportedOnView: count is not supported on a view');
+        }
+        return 2;
+      }),
+      find: vi.fn(async (_db: string, name: string) => DOCUMENTS[name] ?? DOCUMENTS.users!),
+      ping: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+    const snapshot = await connector(baseConnection, { create: vi.fn(() => client) }).introspect(
+      { connectionId: 'mongo-prod', driver: 'mongodb' },
+      { runId: 't' },
+    );
+    const view = snapshot.tables.find((table) => table.name === 'active_users')!;
+    expect(view.kind).toBe('view');
+    expect(view.estimatedRows).toBeNull();
+    expect(client.estimatedDocumentCount).not.toHaveBeenCalledWith('app', 'active_users');
   });
 });
 
