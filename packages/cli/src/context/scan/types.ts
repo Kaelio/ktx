@@ -7,7 +7,8 @@ export type KtxConnectionDriver =
   | 'bigquery'
   | 'snowflake'
   | 'mysql'
-  | 'clickhouse';
+  | 'clickhouse'
+  | 'mongodb';
 
 export type KtxScanMode = 'structural' | 'relationships' | 'enriched';
 
