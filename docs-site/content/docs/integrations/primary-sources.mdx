@@ -556,7 +556,9 @@ MongoDB has no fixed schema, so **ktx** infers one by sampling the most recent
 descending. Because an ObjectId embeds its creation time, this captures the
 collection's current shape with zero configuration. When `_id` is not an
 ObjectId (custom string or UUID keys), set `order_by` to a timestamp field such
-as `createdAt` so "most recent" is well-defined.
+as `createdAt` so "most recent" is well-defined. A custom `order_by` field
+should be indexed — an unindexed sort hits MongoDB's in-memory sort limit and
+fails on large collections (`_id`, the default, is always indexed).
 
 For each top-level field, **ktx** unions the BSON types seen and derives
 nullability from how often the field is present:
@@ -564,7 +566,7 @@ nullability from how often the field is present:
 - Scalar BSON types map to `string`, `number`, `time`, or `boolean`
 - A field seen with more than one type is recorded as `mixed` and treated as a string
 - Sub-documents and arrays become a single opaque `json` column (no dotted-path
-  columns)
+  columns); their sampled values are stringified, not faithfully serialized
 - `_id` is the primary key
 
 ### Features
@@ -586,7 +588,8 @@ nullability from how often the field is present:
 - Strictly read-only: the connector only issues `find`, `listCollections`,
   `estimatedDocumentCount`, and read aggregations
 - Sampling rides the `_id` index and uses a server-side time limit so large
-  collections do not stall a run
+  collections do not stall a run; a custom `order_by` must be indexed for the
+  same guarantee
 - `sample_size` trades inference coverage for speed; raise it for collections
   with highly variable documents
 

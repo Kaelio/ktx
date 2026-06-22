@@ -349,11 +349,17 @@ export class KtxMongoDbScanConnector implements KtxScanConnector {
       limit: input.limit,
       projection: { [input.column]: 1 },
     });
-    const values = documents
-      .map((document) => document[input.column])
-      .filter((value) => value !== null && value !== undefined)
-      .map(normalizeSampleValue);
-    return { values, nullCount: null, distinctCount: null };
+    const values: unknown[] = [];
+    let nullCount = 0;
+    for (const document of documents) {
+      const value = document[input.column];
+      if (value === null || value === undefined) {
+        nullCount += 1;
+        continue;
+      }
+      values.push(normalizeSampleValue(value));
+    }
+    return { values, nullCount, distinctCount: null };
   }
 
   async listSchemas(): Promise<string[]> {

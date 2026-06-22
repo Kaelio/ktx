@@ -76,7 +76,10 @@ const mongodbConnectionSchema = z
       .string()
       .min(1)
       .optional()
-      .describe('Field to sort by descending when sampling. Defaults to _id; set this when _id is not an ObjectId.'),
+      .describe(
+        'Field to sort by descending when sampling. Defaults to _id; set this when _id is not an ObjectId. ' +
+          'Should be indexed — an unindexed sort hits MongoDB\'s in-memory sort limit on large collections.',
+      ),
   })
   .describe('MongoDB primary-source connection. Schema is inferred by sampling the most recent documents.');
 

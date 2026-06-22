@@ -199,13 +199,15 @@ describe('KtxMongoDbScanConnector.introspect', () => {
 });
 
 describe('KtxMongoDbScanConnector sampling', () => {
-  it('samples a column, flattening nested values', async () => {
+  it('samples a column, flattening nested values and counting nulls over the window', async () => {
     const { factory } = fakeClientFactory();
     const result = await connector(baseConnection, factory).sampleColumn(
       { connectionId: 'mongo-prod', table: { catalog: null, db: 'app', name: 'users' }, column: 'address', limit: 10 },
       { runId: 't' },
     );
     expect(result.values).toEqual([JSON.stringify({ city: 'NY' })]);
+    // address is present in the first sampled document and absent from the second
+    expect(result.nullCount).toBe(1);
   });
 });
 
