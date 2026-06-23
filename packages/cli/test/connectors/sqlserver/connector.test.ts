@@ -404,6 +404,50 @@ describe('KtxSqlServerScanConnector', () => {
     await connector.cleanup();
   });
 
+  it('hoists leading CTEs before applying the SQL Server TOP wrapper', async () => {
+    const queries: string[] = [];
+    const request = {
+      input: vi.fn((_name: string, _value: unknown) => request),
+      query: vi.fn(async (sql: string): Promise<KtxSqlServerQueryResult> => {
+        queries.push(sql);
+        return result([{ value: 1 }], ['value']);
+      }),
+    };
+    const poolFactory: KtxSqlServerPoolFactory = {
+      createPool: vi.fn(async () => ({
+        request: () => request,
+        close: vi.fn(async () => undefined),
+      })),
+    };
+    const connector = new KtxSqlServerScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'sqlserver',
+        host: 'db.example.test',
+        database: 'analytics',
+        username: 'reader',
+        schema: 'dbo',
+      },
+      poolFactory,
+    });
+
+    await expect(
+      connector.executeReadOnly(
+        {
+          connectionId: 'warehouse',
+          sql: 'WITH child_values AS (SELECT 1 AS value) SELECT value FROM child_values',
+          maxRows: 1,
+        },
+        { runId: 'scan-run-sqlserver-cte-limit' },
+      ),
+    ).resolves.toMatchObject({ headers: ['value'], rows: [[1]], rowCount: 1 });
+
+    expect(queries).toEqual([
+      'WITH child_values AS (SELECT 1 AS value) SELECT TOP 1 * FROM (SELECT value FROM child_values) AS ktx_query_result',
+    ]);
+    expect(queries[0]).not.toContain('FROM (WITH');
+  });
+
   it('limits introspection to tables in tableScope', async () => {
     const queries: string[] = [];
     const inputs: Array<{ name: string; value: unknown }> = [];

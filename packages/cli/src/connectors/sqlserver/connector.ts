@@ -1,4 +1,4 @@
-import { assertReadOnlySql, stripTrailingSqlNoise } from '../../context/connections/read-only-sql.js';
+import { assertReadOnlySql, hoistLeadingCte, stripTrailingSqlNoise } from '../../context/connections/read-only-sql.js';
 import { getDialectForDriver } from '../../context/connections/dialects.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
@@ -277,7 +277,8 @@ function limitSqlForSqlServerExecution(sqlText: string, maxRows: number | undefi
   if (!Number.isInteger(maxRows) || maxRows <= 0) {
     throw new Error('maxRows must be a positive integer.');
   }
-  return `SELECT TOP ${maxRows} * FROM (${trimmed}) AS ktx_query_result`;
+  const { withPrefix, body } = hoistLeadingCte(trimmed);
+  return `${withPrefix}SELECT TOP ${maxRows} * FROM (${body}) AS ktx_query_result`;
 }
 
 export function isKtxSqlServerConnectionConfig(
