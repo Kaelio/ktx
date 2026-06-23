@@ -8,6 +8,8 @@ import { profileKtxRelationshipSchema } from '../../../src/context/scan/relation
 import { validateKtxRelationshipDiscoveryCandidates } from '../../../src/context/scan/relationship-validation.js';
 import type { KtxQueryResult, KtxReadOnlyQueryInput, KtxScanContext } from '../../../src/context/scan/types.js';
 
+// This harness runs SQL directly through SQLite; row-limit wrapper coverage lives
+// in read-only-sql.test.ts and the SQL Server connector test.
 class InMemorySqliteExecutor {
   readonly db = new Database(':memory:');
   queryCount = 0;
