@@ -27,6 +27,12 @@ export interface WriteLocalScanManifestShardsInput {
   dryRun: boolean;
   descriptionUpdates?: KtxLocalScanEnrichmentResult['descriptionUpdates'];
   relationshipUpdate?: KtxLocalScanEnrichmentResult['relationshipUpdate'];
+  /**
+   * When set, write only the shards that contain one of these tables. All shards
+   * are still built (so merging preserves prior content); the unlisted shards are
+   * left untouched on disk. Used by the incremental flush to bound git commits.
+   */
+  onlyChangedTableNames?: ReadonlySet<string>;
 }
 
 export interface WriteLocalScanManifestShardsResult {
@@ -252,6 +258,80 @@ async function loadExistingManifestState(
   return { descriptions, preservedJoins, usage };
 }
 
+// The incremental descriptions resume record. It lives at a stable, NON-syncId
+// path: a from-scratch interruption gets a fresh syncId on the next run, so a
+// syncId-scoped record would be unreachable on resume. The manifest already lives
+// at the same stable per-connection scope.
+function descriptionsProgressPath(connectionId: string): string {
+  return `raw-sources/${connectionId}/${LIVE_DATABASE_ADAPTER}/enrichment-progress/descriptions.json`;
+}
+
+interface DescriptionsProgressRecord {
+  inputHash: string;
+  descriptions: LocalDescriptionUpdates;
+}
+
+export interface KtxScanDescriptionResumeStore {
+  /** Prior enriched descriptions when the durable record matches `inputHash`, else null. */
+  load(inputHash: string): Promise<LocalDescriptionUpdates | null>;
+  /** Persist the descriptions so far + the manifest shards that gained a table this batch. */
+  flush(input: {
+    inputHash: string;
+    snapshot: KtxSchemaSnapshot;
+    descriptionUpdates: LocalDescriptionUpdates;
+    changedTableNames: ReadonlySet<string>;
+  }): Promise<void>;
+}
+
+export function createKtxScanDescriptionResumeStore(deps: {
+  project: KtxLocalProject;
+  connectionId: string;
+  syncId: string;
+  driver: KtxConnectionDriver;
+}): KtxScanDescriptionResumeStore {
+  const path = descriptionsProgressPath(deps.connectionId);
+  return {
+    async load(inputHash) {
+      let content: string;
+      try {
+        ({ content } = await deps.project.fileStore.readFile(path));
+      } catch {
+        return null;
+      }
+      try {
+        const record = JSON.parse(content) as DescriptionsProgressRecord | null;
+        // A changed inputHash (schema or enrichment settings changed) ignores the
+        // prior record and recomputes — spec-19's inputHash-gated resume semantics.
+        if (!record || record.inputHash !== inputHash || !Array.isArray(record.descriptions)) {
+          return null;
+        }
+        return record.descriptions;
+      } catch {
+        return null;
+      }
+    },
+    async flush({ inputHash, snapshot, descriptionUpdates, changedTableNames }) {
+      const record: DescriptionsProgressRecord = { inputHash, descriptions: descriptionUpdates };
+      await writeJsonArtifact(
+        deps.project,
+        path,
+        record,
+        `scan(${LIVE_DATABASE_ADAPTER}): flush enrichment descriptions progress syncId=${deps.syncId}`,
+      );
+      await writeLocalScanManifestShards({
+        project: deps.project,
+        connectionId: deps.connectionId,
+        syncId: deps.syncId,
+        driver: deps.driver,
+        snapshot,
+        descriptionUpdates,
+        dryRun: false,
+        onlyChangedTableNames: changedTableNames,
+      });
+    },
+  };
+}
+
 async function writeJsonArtifact(
   project: KtxLocalProject,
   path: string,
@@ -290,6 +370,9 @@ export async function writeLocalScanManifestShards(
 
   const manifestShards: string[] = [];
   for (const [shardKey, shard] of [...shards.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    if (input.onlyChangedTableNames && !Object.keys(shard.tables).some((table) => input.onlyChangedTableNames!.has(table))) {
+      continue;
+    }
     const path = `${schemaDir(input.connectionId)}/${shardKey}.yaml`;
     await input.project.fileStore.writeFile(
       path,

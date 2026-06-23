@@ -11,6 +11,7 @@ import {
   summarizeKtxScanEnrichmentState,
 } from './enrichment-state.js';
 import { skippedKtxScanEnrichmentSummary } from './enrichment-summary.js';
+import type { KtxScanDescriptionResumeStore } from './local-enrichment-artifacts.js';
 import type {
   KtxEmbeddingUpdate,
   KtxEnrichedColumn,
@@ -65,6 +66,12 @@ export interface KtxLocalScanEnrichmentInput {
   context: KtxScanContext;
   providers: KtxLocalScanEnrichmentProviders | null;
   stateStore?: KtxScanEnrichmentStateStore | null;
+  /**
+   * Durable per-batch resume record for the descriptions stage. When present, an
+   * interrupted descriptions stage resumes by re-enriching only the tables not
+   * already flushed (inputHash-gated). Null/undefined disables incremental flush.
+   */
+  descriptionResumeStore?: KtxScanDescriptionResumeStore | null;
   syncId?: string;
   providerIdentity?: Record<string, unknown>;
   relationshipSettings?: KtxScanRelationshipConfig;
@@ -223,6 +230,9 @@ function deterministicLlmRuntime(): KtxLlmRuntimePort {
     async runAgentLoop() {
       return { stopReason: 'natural' };
     },
+    subprocessForkSpec() {
+      return null;
+    },
   };
 }
 
@@ -276,11 +286,31 @@ function embeddingBatchSize(maxBatchSize: number): number {
   return Number.isInteger(maxBatchSize) && maxBatchSize > 0 ? maxBatchSize : 100;
 }
 
+type KtxScanDescriptionUpdate = KtxLocalScanEnrichmentResult['descriptionUpdates'][number];
+
+// Per-batch flush cadence: bounds the at-risk window (and the manifest-rewrite /
+// git-commit cost) to a small number of tables.
+const DESCRIPTION_FLUSH_EVERY = 10;
+
+function isEnrichedDescriptionUpdate(update: KtxScanDescriptionUpdate): boolean {
+  return update.tableDescription !== null || Object.values(update.columnDescriptions).some((value) => value !== null);
+}
+
+function nullDescriptionUpdate(table: KtxSchemaTable): KtxScanDescriptionUpdate {
+  return {
+    table: tableRef(table),
+    tableDescription: null,
+    columnDescriptions: Object.fromEntries(table.columns.map((column) => [column.name, null])),
+  };
+}
+
 async function generateDescriptions(input: {
   snapshot: KtxSchemaSnapshot;
   connector: KtxScanConnector;
   context: KtxScanContext;
   providers: KtxLocalScanEnrichmentProviders;
+  inputHash: string;
+  resumeStore?: KtxScanDescriptionResumeStore | null;
   progress?: KtxProgressPort;
   warnings?: KtxScanWarning[];
 }): Promise<KtxLocalScanEnrichmentResult['descriptionUpdates']> {
@@ -303,52 +333,125 @@ async function generateDescriptions(input: {
     },
   });
 
-  const updates: KtxLocalScanEnrichmentResult['descriptionUpdates'] = [];
   const totalTables = input.snapshot.tables.length;
   if (totalTables === 0) {
     await input.progress?.update(1, 'No tables to describe');
-    return updates;
+    return [];
   }
+
+  // Resume: recover already-enriched tables (inputHash-gated) and re-issue LLM
+  // calls only for the remainder. A failed/skipped table carries null descriptions
+  // and is not recovered, so it is retried.
+  const recovered = input.resumeStore ? ((await input.resumeStore.load(input.inputHash)) ?? []) : [];
+  const enrichedByName = new Map<string, KtxScanDescriptionUpdate>();
+  for (const update of recovered) {
+    if (isEnrichedDescriptionUpdate(update)) {
+      enrichedByName.set(update.table.name, update);
+    }
+  }
+  const remaining = input.snapshot.tables.filter((table) => !enrichedByName.has(table.name));
+  const recoveredCount = enrichedByName.size;
+  if (recoveredCount > 0) {
+    input.context.logger?.info(
+      `[enrich] resume: recovered ${recoveredCount}/${totalTables} descriptions, enriching ${remaining.length}`,
+    );
+  }
+
+  const pendingChanged = new Set<string>();
+  let sinceFlush = 0;
+  let flushing = false;
+  const flush = async (force: boolean): Promise<void> => {
+    if (!input.resumeStore || flushing || pendingChanged.size === 0) {
+      return;
+    }
+    if (!force && sinceFlush < DESCRIPTION_FLUSH_EVERY) {
+      return;
+    }
+    flushing = true;
+    const changedTableNames = new Set(pendingChanged);
+    pendingChanged.clear();
+    sinceFlush = 0;
+    try {
+      await input.resumeStore.flush({
+        inputHash: input.inputHash,
+        snapshot: input.snapshot,
+        descriptionUpdates: [...enrichedByName.values()],
+        changedTableNames,
+      });
+    } finally {
+      flushing = false;
+    }
+  };
+
   const limitTable = pLimit(DESCRIPTION_TABLE_CONCURRENCY);
-  const tableUpdates = await Promise.all(
-    input.snapshot.tables.map((table, index) =>
+  await Promise.all(
+    remaining.map((table, index) =>
       limitTable(async () => {
         await input.progress?.update(
-          (index + 1) / totalTables,
-          `Generating descriptions ${index + 1}/${totalTables} (${table.name}, ${table.columns.length} cols)`,
+          (recoveredCount + index + 1) / totalTables,
+          `Generating descriptions ${recoveredCount + index + 1}/${totalTables} (${table.name}, ${table.columns.length} cols)`,
           {
             transient: true,
           },
         );
-        const batched = await generator.generateBatchedTableDescriptions({
-          connectionId: input.snapshot.connectionId,
-          connector: input.connector,
-          context: input.context,
-          dataSourceType: input.snapshot.driver,
-          supportsNestedAnalysis: input.connector.capabilities.nestedAnalysis,
-          table: {
-            catalog: table.catalog,
-            db: table.db,
-            name: table.name,
-            rawDescriptions: table.comment ? { db: table.comment } : {},
-            columns: table.columns.map((column) => ({
-              name: column.name,
-              type: column.nativeType,
-              ...(column.comment ? { rawDescriptions: { db: column.comment } } : {}),
-            })),
-          },
-        });
-        return {
-          table: tableRef(table),
-          tableDescription: batched.tableDescription,
-          columnDescriptions: Object.fromEntries(batched.columnDescriptions),
-        };
+        // Stage-level guarantee: a single table's failure costs one missing
+        // description, never the whole stage's output. (generateBatchedTableDescriptions
+        // already degrades its own failures to null descriptions; this backstop keeps
+        // the guarantee at the fan-out even if a future path throws.) A genuine
+        // cancellation still propagates so the stage fails and resumes.
+        let update: KtxScanDescriptionUpdate;
+        try {
+          const batched = await generator.generateBatchedTableDescriptions({
+            connectionId: input.snapshot.connectionId,
+            connector: input.connector,
+            context: input.context,
+            dataSourceType: input.snapshot.driver,
+            supportsNestedAnalysis: input.connector.capabilities.nestedAnalysis,
+            table: {
+              catalog: table.catalog,
+              db: table.db,
+              name: table.name,
+              rawDescriptions: table.comment ? { db: table.comment } : {},
+              columns: table.columns.map((column) => ({
+                name: column.name,
+                type: column.nativeType,
+                ...(column.comment ? { rawDescriptions: { db: column.comment } } : {}),
+              })),
+            },
+          });
+          update = {
+            table: tableRef(table),
+            tableDescription: batched.tableDescription,
+            columnDescriptions: Object.fromEntries(batched.columnDescriptions),
+          };
+        } catch (error) {
+          if (input.context.signal?.aborted) {
+            throw error;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          input.context.logger?.warn(`[enrich] table ${table.name} failed: ${message}`);
+          warningSink?.push({
+            code: 'enrichment_failed',
+            message: `Failed to generate description for ${table.name}: ${message}`,
+            table: table.name,
+            recoverable: true,
+            metadata: {},
+          });
+          update = nullDescriptionUpdate(table);
+        }
+        if (isEnrichedDescriptionUpdate(update)) {
+          enrichedByName.set(table.name, update);
+          pendingChanged.add(table.name);
+          sinceFlush += 1;
+          await flush(false);
+        }
       }),
     ),
   );
-  updates.push(...tableUpdates);
+  await flush(true);
   await input.progress?.update(1, `Generated descriptions for ${totalTables} tables`);
-  return updates;
+  // Full set in snapshot order: recovered + freshly enriched, null for any still-failed.
+  return input.snapshot.tables.map((table) => enrichedByName.get(table.name) ?? nullDescriptionUpdate(table));
 }
 
 async function buildEmbeddings(input: {
@@ -547,6 +650,8 @@ export async function runLocalScanEnrichment(
           connector: input.connector,
           context: input.context,
           providers,
+          inputHash,
+          resumeStore: input.descriptionResumeStore,
           progress: descriptionProgress,
           warnings,
         }),

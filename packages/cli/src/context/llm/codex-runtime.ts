@@ -9,14 +9,17 @@ import { resolveCodexModel } from './codex-models.js';
 import { buildCodexRuntimeConfig } from './codex-runtime-config.js';
 import { CodexSdkCliRunner, type CodexSdkRunner } from './codex-sdk-runner.js';
 import type { RateLimitGovernor } from './rate-limit-governor.js';
+import type { KtxModelRole } from '../../llm/types.js';
 import type {
   KtxGenerateObjectInput,
+  KtxGenerateStructuredJsonInput,
   KtxGenerateTextInput,
   KtxLlmRuntimePort,
   KtxRuntimeToolSet,
   LlmTokenUsage,
   RunLoopParams,
   RunLoopResult,
+  SubprocessRuntimeForkSpec,
 } from './runtime-port.js';
 
 export interface CodexKtxLlmRuntimeDeps {
@@ -249,54 +252,76 @@ export class CodexKtxLlmRuntime implements KtxLlmRuntimePort {
     }
   }
 
+  // Structured generation has no tools, so it skips the MCP server that
+  // generateText/runAgentLoop need; generateObject and generateStructuredJson
+  // (the kill-boundary child path) share this one streaming implementation.
+  private async streamStructuredText(input: {
+    role: KtxModelRole;
+    prompt: string;
+    system?: string;
+    jsonSchema: Record<string, unknown>;
+    abortSignal?: AbortSignal;
+  }): Promise<{ text: string; summary: CodexExecEventSummary; startedAt: number }> {
+    const startedAt = Date.now();
+    const model = modelForRole(this.deps.modelSlots, input.role);
+    const config = buildCodexRuntimeConfig({ model });
+    const result = await this.runWithRateLimitRetry(
+      input.abortSignal,
+      async () => {
+        const collected = await collectEvents(
+          await this.runner.runStreamed({
+            projectDir: this.deps.projectDir,
+            model,
+            prompt: promptWithSystem(input.system, input.prompt),
+            configOverrides: config.configOverrides,
+            env: config.env,
+            outputSchema: input.jsonSchema,
+            ...(input.abortSignal ? { signal: input.abortSignal } : {}),
+          }),
+        );
+        const summary = summarizeCodexExecEvents(collected.events, { startedAt });
+        return { collected, summary };
+      },
+      ({ collected, summary }) => summaryError(summary, collected.streamError),
+    );
+    return {
+      text: assertSuccessfulText(result.summary, result.collected.streamError),
+      summary: result.summary,
+      startedAt,
+    };
+  }
+
   async generateObject<TOutput, TSchema extends z.ZodType<TOutput>>(
     input: KtxGenerateObjectInput<TOutput, TSchema>,
   ): Promise<TOutput> {
-    const startedAt = Date.now();
-    const model = modelForRole(this.deps.modelSlots, input.role);
-    const mcp = await mcpForTools({
-      projectDir: this.deps.projectDir,
-      toolSet: input.tools,
-      startMcpServer: this.deps.startMcpServer,
+    const { text, summary, startedAt } = await this.streamStructuredText({
+      role: input.role,
+      prompt: input.prompt,
+      ...(input.system !== undefined ? { system: input.system } : {}),
+      jsonSchema: z.toJSONSchema(input.schema, { target: 'draft-7' }) as Record<string, unknown>,
+      ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+    });
+    input.onMetrics?.(metrics(summary, startedAt));
+    return parseStructuredOutput(input.schema, text);
+  }
+
+  async generateStructuredJson(input: KtxGenerateStructuredJsonInput): Promise<unknown> {
+    const { text } = await this.streamStructuredText({
+      role: input.role,
+      prompt: input.prompt,
+      ...(input.system !== undefined ? { system: input.system } : {}),
+      jsonSchema: input.jsonSchema,
+      ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     });
     try {
-      const config = buildCodexRuntimeConfig({
-        model,
-        ...(mcp
-          ? {
-              mcp: {
-                url: mcp.url,
-                bearerTokenEnvVar: mcp.bearerTokenEnvVar,
-                bearerToken: mcp.bearerToken,
-                toolNames: runtimeToolNames(input.tools),
-              },
-            }
-          : {}),
-      });
-      const result = await this.runWithRateLimitRetry(
-        input.abortSignal,
-        async () => {
-          const collected = await collectEvents(
-            await this.runner.runStreamed({
-              projectDir: this.deps.projectDir,
-              model,
-              prompt: promptWithSystem(input.system, input.prompt),
-              configOverrides: config.configOverrides,
-              env: config.env,
-              outputSchema: z.toJSONSchema(input.schema, { target: 'draft-7' }) as Record<string, unknown>,
-              ...(input.abortSignal ? { signal: input.abortSignal } : {}),
-            }),
-          );
-          const summary = summarizeCodexExecEvents(collected.events, { startedAt });
-          return { collected, summary };
-        },
-        ({ collected, summary }) => summaryError(summary, collected.streamError),
-      );
-      input.onMetrics?.(metrics(result.summary, startedAt));
-      return parseStructuredOutput(input.schema, assertSuccessfulText(result.summary, result.collected.streamError));
-    } finally {
-      await mcp?.close();
+      return JSON.parse(text);
+    } catch (error) {
+      throw new Error(`Codex structured output is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  subprocessForkSpec(): SubprocessRuntimeForkSpec {
+    return { backend: 'codex', projectDir: this.deps.projectDir, modelSlots: this.deps.modelSlots };
   }
 
   async runAgentLoop(params: RunLoopParams): Promise<RunLoopResult> {

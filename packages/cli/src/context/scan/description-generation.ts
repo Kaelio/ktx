@@ -1,5 +1,10 @@
-import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
+import type { ChildProcess } from 'node:child_process';
 import { z } from 'zod';
+import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
+import {
+  KtxSubprocessDeadlineError,
+  runGenerateObjectInSubprocess,
+} from '../../context/llm/subprocess-generate-object.js';
 import type {
   KtxColumnSampleInput,
   KtxColumnSampleResult,
@@ -145,6 +150,8 @@ export interface KtxDescriptionGeneratorOptions {
   logger?: KtxScanLoggerPort;
   onWarning?: (warning: KtxScanWarning) => void;
   settings: KtxDescriptionGenerationSettings;
+  /** @internal Test seam: spawn the kill-boundary child for subprocess backends. */
+  spawnSubprocessGenerateChild?: () => ChildProcess;
 }
 
 interface ColumnTaskResult {
@@ -510,12 +517,14 @@ export class KtxDescriptionGenerator {
   private readonly logger?: KtxScanLoggerPort;
   private readonly onWarning?: (warning: KtxScanWarning) => void;
   private readonly settings: ResolvedKtxDescriptionGenerationSettings;
+  private readonly spawnSubprocessGenerateChild?: () => ChildProcess;
 
   constructor(options: KtxDescriptionGeneratorOptions) {
     this.llmRuntime = options.llmRuntime;
     this.cache = options.cache;
     this.logger = options.logger;
     this.onWarning = options.onWarning;
+    this.spawnSubprocessGenerateChild = options.spawnSubprocessGenerateChild;
     this.settings = {
       columnMaxWords: options.settings.columnMaxWords,
       tableMaxWords: options.settings.tableMaxWords,
@@ -784,8 +793,44 @@ export class KtxDescriptionGenerator {
         `[enrich] llm:start table=${input.table.name} cols=${input.table.columns.length} promptChars=${prompt.user.length} timeoutMs=${enrichTimeoutMs} attempts=${enrichAttempts}`,
         { connectorId: input.connector.id, table: input.table.name, columns: input.table.columns.length },
       );
+      // Subprocess backends (codex/claude-code) own an SDK child that ignores the
+      // in-process abort, so each attempt runs behind a tree-killable boundary;
+      // HTTP backends keep the native abortSignal -> fetch cancellation.
+      const enrichForkSpec = this.llmRuntime.subprocessForkSpec();
+      const enrichJsonSchema = enrichForkSpec
+        ? (z.toJSONSchema(batchedTableDescriptionSchema, { target: 'draft-7' }) as Record<string, unknown>)
+        : null;
       const generated = await retryAsync(
         async () => {
+          if (enrichForkSpec && enrichJsonSchema) {
+            try {
+              return await runGenerateObjectInSubprocess<
+                BatchedTableDescriptionOutput,
+                typeof batchedTableDescriptionSchema
+              >({
+                forkSpec: enrichForkSpec,
+                role: 'candidateExtraction',
+                system: prompt.system,
+                prompt: prompt.user,
+                schema: batchedTableDescriptionSchema,
+                jsonSchema: enrichJsonSchema,
+                deadlineMs: enrichTimeoutMs,
+                ...(input.context.signal ? { signal: input.context.signal } : {}),
+                ...(this.spawnSubprocessGenerateChild
+                  ? { spawnChild: this.spawnSubprocessGenerateChild }
+                  : {}),
+              });
+            } catch (error) {
+              // The boundary tree-kills the wedged child on deadline; a per-table
+              // timeout is not worth retrying (it would just time out again), so
+              // surface it as KtxAbortedError so retryAsync stops immediately.
+              if (error instanceof KtxSubprocessDeadlineError && !input.context.signal?.aborted) {
+                lastTimedOut = true;
+                throw new KtxAbortedError();
+              }
+              throw error;
+            }
+          }
           const enrichTimeout = AbortSignal.timeout(enrichTimeoutMs);
           const abortSignal = input.context.signal
             ? AbortSignal.any([enrichTimeout, input.context.signal])

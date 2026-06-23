@@ -96,6 +96,7 @@ function deterministicLlmRuntime(): KtxLlmRuntimePort {
     generateText: vi.fn(async (input) => `Deterministic description for ${input.prompt.slice(0, 64).trim() || 'data source'}`),
     generateObject: vi.fn(async () => ({ pkCandidates: [], fkCandidates: [] }) as never),
     runAgentLoop: vi.fn(),
+    subprocessForkSpec: () => null,
   };
 }
 

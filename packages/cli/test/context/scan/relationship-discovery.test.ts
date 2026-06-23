@@ -224,6 +224,7 @@ function llmRuntime(output: unknown): KtxLlmRuntimePort {
     generateText: vi.fn(),
     generateObject: vi.fn(async () => output) as KtxLlmRuntimePort['generateObject'],
     runAgentLoop: vi.fn(),
+    subprocessForkSpec: () => null,
   };
 }
 

@@ -19,6 +19,7 @@ import {
   runLocalScanEnrichment,
 } from './local-enrichment.js';
 import {
+  createKtxScanDescriptionResumeStore,
   writeLocalScanEnrichmentArtifacts,
   writeLocalScanEnrichmentCheckpoint,
   writeLocalScanManifestShards,
@@ -507,6 +508,14 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
         },
         providers: enrichmentProviders,
         stateStore: enrichmentStateStore,
+        descriptionResumeStore: options.dryRun
+          ? null
+          : createKtxScanDescriptionResumeStore({
+              project: options.project,
+              connectionId: options.connectionId,
+              syncId: record.syncId,
+              driver,
+            }),
         syncId: record.syncId,
         providerIdentity: localScanProviderIdentity(
           options.project.config.scan.enrichment,

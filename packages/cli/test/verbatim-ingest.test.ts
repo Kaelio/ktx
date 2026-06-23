@@ -179,6 +179,9 @@ function fakeLlmRuntime(metadata: { summary: string; tags: string[]; sl_refs: st
     async runAgentLoop() {
       throw new Error('runAgentLoop is not used by verbatim ingest');
     },
+    subprocessForkSpec() {
+      return null;
+    },
   };
 }
 
@@ -192,6 +195,9 @@ function throwingLlmRuntime(): KtxLlmRuntimePort {
     },
     async runAgentLoop() {
       throw new Error('runAgentLoop is not used by verbatim ingest');
+    },
+    subprocessForkSpec() {
+      return null;
     },
   };
 }
