@@ -943,13 +943,19 @@ export async function runLocalScanEnrichment(
   }
 
   await progress?.update(1, 'Enrichment complete');
+  // The manifest merge treats ai/db descriptions as scan-managed and overwrites
+  // them with whatever this run emits, so a subset run that skips descriptions
+  // must still emit the prior on-disk ones — else the write deletes them (D3
+  // "unselected stages are left untouched on disk"). Fresh-this-run if descriptions
+  // ran, else loaded from the on-disk _schema.
+  const writtenDescriptionUpdates = await resolveDownstreamDescriptions();
   return {
     snapshot,
     summary,
     relationships,
     state: summarizeKtxScanEnrichmentState(state),
     warnings,
-    descriptionUpdates: descriptions,
+    descriptionUpdates: writtenDescriptionUpdates,
     embeddingUpdates,
     relationshipUpdate,
     relationshipProfile,

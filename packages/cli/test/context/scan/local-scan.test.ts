@@ -2034,6 +2034,147 @@ describe('local scan', () => {
       'raw-sources/warehouse/live-database/2026-04-29-160000-scan-run-sqlserver/scan-report.json',
     );
   });
+
+  // Regression (spec 21 defect, 2026-06-24): the structural manifest write that runs
+  // BEFORE enrichment must not let a `--stages` subset delete the prior on-disk
+  // descriptions. This goes through the full runLocalScan path (the unit-level
+  // enrichment test could not catch the structural-pre-write ordering).
+  it('a --stages relationships scan preserves on-disk descriptions while adding joins', async () => {
+    const snapshot: KtxSchemaSnapshot = {
+      connectionId: 'warehouse',
+      driver: 'postgres',
+      extractedAt: '2026-05-07T09:00:00.000Z',
+      scope: {},
+      metadata: {},
+      tables: [
+        {
+          catalog: null,
+          db: null,
+          name: 'accounts',
+          kind: 'table',
+          comment: null,
+          estimatedRows: 2,
+          foreignKeys: [],
+          columns: [
+            {
+              name: 'id',
+              nativeType: 'integer',
+              normalizedType: 'integer',
+              dimensionType: 'number',
+              nullable: false,
+              primaryKey: false,
+              comment: null,
+            },
+          ],
+        },
+        {
+          catalog: null,
+          db: null,
+          name: 'orders',
+          kind: 'table',
+          comment: null,
+          estimatedRows: 3,
+          foreignKeys: [],
+          columns: [
+            {
+              name: 'id',
+              nativeType: 'integer',
+              normalizedType: 'integer',
+              dimensionType: 'number',
+              nullable: false,
+              primaryKey: false,
+              comment: null,
+            },
+            {
+              name: 'account_id',
+              nativeType: 'integer',
+              normalizedType: 'integer',
+              dimensionType: 'number',
+              nullable: false,
+              primaryKey: false,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    };
+    // Enriched fixture already on disk: ai descriptions, zero joins.
+    await project.fileStore.writeFile(
+      'semantic-layer/warehouse/_schema/public.yaml',
+      YAML.stringify(
+        {
+          tables: {
+            accounts: {
+              table: 'accounts',
+              descriptions: { ai: 'AI accounts table' },
+              columns: [{ name: 'id', type: 'number', descriptions: { ai: 'AI accounts id' } }],
+            },
+            orders: {
+              table: 'orders',
+              descriptions: { ai: 'AI orders table' },
+              columns: [
+                { name: 'id', type: 'number', descriptions: { ai: 'AI orders id' } },
+                { name: 'account_id', type: 'number', descriptions: { ai: 'AI account ref' } },
+              ],
+            },
+          },
+        },
+        { indent: 2, lineWidth: 0 },
+      ),
+      'ktx',
+      'ktx@example.com',
+      'Seed enriched fixture',
+    );
+    const shardPath = 'semantic-layer/warehouse/_schema/public.yaml';
+    const aiBefore = ((await project.fileStore.readFile(shardPath)).content.match(/\bai:/g) ?? []).length;
+    expect(aiBefore).toBe(5);
+
+    const connector: KtxScanConnector = {
+      id: 'test:warehouse',
+      driver: 'postgres',
+      capabilities: {
+        structuralIntrospection: true,
+        tableSampling: false,
+        columnSampling: false,
+        columnStats: true,
+        readOnlySql: true,
+        nestedAnalysis: false,
+        eventStreamDiscovery: false,
+        formalForeignKeys: false,
+        estimatedRowCounts: true,
+      },
+      ...connectorScopeListing,
+      introspect: vi.fn(async () => snapshot),
+      async executeReadOnly(input: KtxReadOnlyQueryInput) {
+        return relationshipSqlResult(input);
+      },
+    };
+
+    const result = await runLocalScan({
+      project,
+      adapters: [fetchOnlyAdapter({ snapshot })],
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      stages: ['relationships'],
+      connector,
+      enrichmentProviders: { llmRuntime: deterministicLlmRuntime() },
+      jobId: 'scan-stages-relationships-preserve',
+      now: () => new Date('2026-05-07T09:30:00.000Z'),
+    });
+
+    // The relationships stage actually ran and accepted a join...
+    expect(result.report.relationships.accepted).toBe(1);
+    const after = (await project.fileStore.readFile(shardPath)).content;
+    // ...and every prior ai description survived the structural + enrichment writes.
+    expect((after.match(/\bai:/g) ?? []).length).toBe(aiBefore);
+    expect(after).toContain('AI orders table');
+    expect(after).toContain('AI account ref');
+    const manifest = YAML.parse(after) as {
+      tables: Record<string, { joins?: Array<{ to: string; source: string }> }>;
+    };
+    expect(manifest.tables.orders?.joins?.some((join) => join.to === 'accounts')).toBe(true);
+  });
 });
 
 describe('resolveEnabledTables', () => {

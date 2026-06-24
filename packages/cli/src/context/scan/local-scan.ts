@@ -470,6 +470,13 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
   const enrichmentStateStore = connector ? createLocalScanEnrichmentStateStore(options) : null;
   let enrichmentState: KtxScanEnrichmentStateSummary = completedKtxScanEnrichmentStateSummary();
   let enrichmentSnapshot: KtxSchemaSnapshot | null = null;
+  // On a `--stages` subset run, the structural manifest write below (and the
+  // later enrichment write) merge with on-disk shards, but the merge treats ai/db
+  // descriptions as scan-managed and overwrites them with whatever the run emits.
+  // A subset that skips `descriptions` emits none, so without this the structural
+  // write would delete the prior descriptions before enrichment can preserve them.
+  // Capture them up front (only for subset runs) and feed them to both writes.
+  let priorDescriptionUpdates: Awaited<ReturnType<typeof loadOnDiskDescriptionUpdates>> | null = null;
   if (!reusedExistingScanArtifacts && !report.dryRun && report.artifactPaths.rawSourcesDir) {
     await options.progress?.update(0.7, 'Writing schema artifacts');
     const rawSnapshot = await readLocalScanStructuralSnapshot({
@@ -483,12 +490,20 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
     if (rawSnapshot.warnings?.length) {
       report.warnings.push(...rawSnapshot.warnings);
     }
+    if (options.stages !== undefined && connector) {
+      priorDescriptionUpdates = await loadOnDiskDescriptionUpdates(
+        options.project,
+        options.connectionId,
+        rawSnapshot,
+      );
+    }
     const manifestArtifacts = await writeLocalScanManifestShards({
       project: options.project,
       connectionId: options.connectionId,
       syncId: record.syncId,
       driver,
       snapshot: rawSnapshot,
+      ...(priorDescriptionUpdates ? { descriptionUpdates: priorDescriptionUpdates } : {}),
       dryRun: false,
     });
     report.artifactPaths.manifestShards = manifestArtifacts.manifestShards;
@@ -526,7 +541,9 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
             }),
         syncId: record.syncId,
         loadPriorDescriptions: (enrichedSnapshot) =>
-          loadOnDiskDescriptionUpdates(options.project, options.connectionId, enrichedSnapshot),
+          priorDescriptionUpdates
+            ? Promise.resolve(priorDescriptionUpdates)
+            : loadOnDiskDescriptionUpdates(options.project, options.connectionId, enrichedSnapshot),
         llmIdentity: localScanLlmIdentity(options.project.config.llm),
         embeddingIdentity: localScanEmbeddingIdentity(options.project.config.scan.enrichment),
         relationshipSettings: options.project.config.scan.relationships,

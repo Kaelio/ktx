@@ -505,3 +505,63 @@ relationships and clears after re-embed). Full `pnpm --filter @kaelio/ktx run te
 `test/skills/analytics-skill-content.test.ts` — the analytics `SKILL.md` lacks a
 `**Window functions**` heading the test expects — was present before this work and left
 untouched.)
+
+---
+
+## ⚠️ Defect found in post-implementation validation (2026-06-24)
+
+**`--stages` subset excluding `descriptions` WIPES existing on-disk descriptions.** Violates Req
+"preserve-others / a selective run never deletes another stage's artifacts."
+
+**Reproduction (deterministic):**
+- `northwind` before: 110 `ai:` column/table descriptions, 0 join edges.
+- `ktx-dev ingest northwind --stages relationships` → completes in ~35s, adds **22 join edges** ✅
+  but the rewritten `public.yaml` has **0 descriptions** (no `ai:`, no `db:`, columns bare). ❌
+- A full `ktx-dev ingest northwind` (all stages) restores 110 descriptions + keeps the 22 joins.
+
+**Likely root cause:** the relationships-only path rewrites the schema from the raw snapshot + only the
+freshly-run stage. The implementation notes claim `snapshotToKtxEnrichedSchema` merges `ai` descriptions
+and that descriptions are hydrated "fresh-this-run, else on-disk via `loadPriorDescriptions`" — but on the
+**write path** of a subset run the prior descriptions are NOT merged into the emitted schema (they reach
+the `llmProposals` evidence packet only). So the on-disk `_schema` loses them.
+
+**Impact:** blocks the intended joins-everywhere backfill (`--stages relationships` across all dbs) and the
+`--stages descriptions`-only re-runs — either would destroy the unselected stage's artifacts across every
+db. Caught on a 1-db validation before any rollout.
+
+**Acceptance fix:** after any `--stages` subset, the on-disk `_schema` must **retain all prior `ai:`/`db:`
+descriptions** (and prior joins when descriptions-only) for stages not named — only the named stages'
+artifacts change. Add a regression test that ingests a fully-enriched fixture, runs `--stages relationships`,
+and asserts description count is unchanged while joins increase.
+
+### ✅ Fixed (2026-06-24)
+
+**Real root cause (deeper than the first diagnosis):** the wipe happened in **two** places, and the first
+fix attempt only addressed one. `runLocalScan` (`context/scan/local-scan.ts`) writes the **structural**
+manifest shard from the bare snapshot *before* enrichment runs; that write merges with the on-disk shard,
+but the merge (`mergeDescriptionsPreservingExternal`, `live-database/manifest.ts`) treats `ai`/`db` as
+**scan-managed** and overwrites them with whatever the run emits — and the structural write emits none. So a
+subset run deleted the descriptions on the structural pre-write, *then* `runLocalScanEnrichment` read the
+already-wiped shard via `loadPriorDescriptions` and had nothing to restore. (A unit-level enrichment test
+passed because it never exercised the structural pre-write — a divergent-harness miss; the regression test
+was rewritten to go through the full `runLocalScan` path.)
+
+**What changed:**
+- `runLocalScanEnrichment` (`local-enrichment.ts`) now returns the **best-available** descriptions
+  (`resolveDownstreamDescriptions()` — fresh-this-run if `descriptions` ran, else the on-disk ones) as
+  `descriptionUpdates`, instead of `[]` when the stage is skipped — so the enrichment write re-applies them.
+- `runLocalScan` (`local-scan.ts`) now, on a subset run, **captures the prior on-disk descriptions before
+  the structural manifest write** and feeds them to both the structural write and enrichment — so the
+  structural pre-write preserves them too (robust even if relationship detection later fails).
+- Joins were already preserved for `--stages descriptions` via the existing manual/inferred
+  `preservedJoins` path; verified by a symmetric test.
+
+**Tests:** `local-scan.test.ts` — a full `runLocalScan` `--stages relationships` run preserves on-disk `ai`
+descriptions while adding a join (RED without the fix, GREEN with it). `local-enrichment.test.ts` — the
+enrichment-layer contract (`--stages relationships` preserves descriptions / `--stages descriptions`
+preserves joins).
+
+**Live validation (northwind, 15 tables):** `--stages relationships` BEFORE `ai:110 joins:22` → AFTER
+`ai:110 joins:22` (descriptions intact; previously wiped to 0). `--stages descriptions` restored the
+descriptions from the spec-20 resume record (`ai:0 → ai:110`) with **no** LLM calls while keeping `joins:22`.
+Full `pnpm --filter @kaelio/ktx run test` (3089 passed), `type-check`, `dead-code`, and `build` pass.

@@ -1,6 +1,15 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
+import YAML from 'yaml';
 import { buildDefaultKtxProjectConfig } from '../../../src/context/project/config.js';
+import { initKtxProject } from '../../../src/context/project/project.js';
+import {
+  loadOnDiskDescriptionUpdates,
+  writeLocalScanEnrichmentArtifacts,
+} from '../../../src/context/scan/local-enrichment-artifacts.js';
 import type {
   KtxScanEnrichmentCompletedStage,
   KtxScanEnrichmentFailedStage,
@@ -1399,5 +1408,225 @@ describe('local scan enrichment', () => {
       embeddingIdentity: embeddingV2,
     });
     expect(afterReembed.warnings.filter((warning) => warning.code === 'enrichment_stage_stale')).toEqual([]);
+  });
+
+  const enrichedFixtureSnapshot = (): KtxSchemaSnapshot => ({
+    connectionId: 'warehouse',
+    driver: 'sqlite',
+    extractedAt: '2026-05-07T00:00:00.000Z',
+    scope: {},
+    metadata: {},
+    tables: [
+      {
+        catalog: null,
+        db: null,
+        name: 'accounts',
+        kind: 'table',
+        comment: 'DB accounts',
+        estimatedRows: 2,
+        foreignKeys: [],
+        columns: [
+          {
+            name: 'id',
+            nativeType: 'INTEGER',
+            normalizedType: 'integer',
+            dimensionType: 'number',
+            nullable: false,
+            primaryKey: false,
+            comment: 'DB accounts id',
+          },
+        ],
+      },
+      {
+        catalog: null,
+        db: null,
+        name: 'orders',
+        kind: 'table',
+        comment: 'DB orders',
+        estimatedRows: 3,
+        foreignKeys: [],
+        columns: [
+          {
+            name: 'id',
+            nativeType: 'INTEGER',
+            normalizedType: 'integer',
+            dimensionType: 'number',
+            nullable: false,
+            primaryKey: false,
+            comment: 'DB orders id',
+          },
+          {
+            name: 'account_id',
+            nativeType: 'INTEGER',
+            normalizedType: 'integer',
+            dimensionType: 'number',
+            nullable: false,
+            primaryKey: false,
+            comment: 'DB account ref',
+          },
+        ],
+      },
+    ],
+  });
+
+  const countKeyOccurrences = (text: string, key: string): number =>
+    (text.match(new RegExp(`\\b${key}:`, 'g')) ?? []).length;
+
+  // Regression (spec 21 defect, 2026-06-24): a --stages subset that omits a stage
+  // must not delete that stage's on-disk artifacts from the written _schema.
+  it('a --stages relationships run preserves on-disk descriptions while adding joins', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'ktx-stage-preserve-rel-'));
+    const executor = new InMemorySqliteExecutor();
+    try {
+      executor.db.exec(`
+        CREATE TABLE accounts (id INTEGER NOT NULL);
+        CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+        INSERT INTO accounts (id) VALUES (1), (2);
+        INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+      `);
+      const project = await initKtxProject({ projectDir: join(tempDir, 'project') });
+      const shardPath = 'semantic-layer/warehouse/_schema/public.yaml';
+      // Enriched fixture: full ai + db descriptions, zero joins.
+      await project.fileStore.writeFile(
+        shardPath,
+        YAML.stringify(
+          {
+            tables: {
+              accounts: {
+                table: 'accounts',
+                descriptions: { ai: 'AI accounts table', db: 'DB accounts' },
+                columns: [{ name: 'id', type: 'number', descriptions: { ai: 'AI accounts id', db: 'DB accounts id' } }],
+              },
+              orders: {
+                table: 'orders',
+                descriptions: { ai: 'AI orders table', db: 'DB orders' },
+                columns: [
+                  { name: 'id', type: 'number', descriptions: { ai: 'AI orders id', db: 'DB orders id' } },
+                  { name: 'account_id', type: 'number', descriptions: { ai: 'AI account ref', db: 'DB account ref' } },
+                ],
+              },
+            },
+          },
+          { indent: 2, lineWidth: 0 },
+        ),
+        'ktx',
+        'ktx@example.com',
+        'Seed enriched fixture',
+      );
+      const before = await readFile(join(project.projectDir, shardPath), 'utf-8');
+      const aiBefore = countKeyOccurrences(before, 'ai');
+      const dbBefore = countKeyOccurrences(before, 'db');
+      expect(aiBefore).toBeGreaterThan(0);
+
+      const scanConnector = {
+        ...connector(),
+        driver: 'sqlite' as const,
+        capabilities: createKtxConnectorCapabilities({ readOnlySql: true, columnStats: true }),
+        introspect: vi.fn(async () => enrichedFixtureSnapshot()),
+        executeReadOnly: executor.executeReadOnly.bind(executor),
+      };
+      const result = await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'enriched',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'preserve-rel-1' },
+        providers: createDeterministicLocalScanEnrichmentProviders(),
+        stages: ['relationships'],
+        syncId: 'sync-preserve-rel',
+        loadPriorDescriptions: (snap) => loadOnDiskDescriptionUpdates(project, 'warehouse', snap),
+      });
+      await writeLocalScanEnrichmentArtifacts({
+        project,
+        connectionId: 'warehouse',
+        syncId: 'sync-preserve-rel',
+        driver: 'sqlite',
+        enrichment: result,
+        dryRun: false,
+      });
+
+      const after = await readFile(join(project.projectDir, shardPath), 'utf-8');
+      // Every prior ai:/db: description survived the relationships-only run...
+      expect(countKeyOccurrences(after, 'ai')).toBe(aiBefore);
+      expect(countKeyOccurrences(after, 'db')).toBe(dbBefore);
+      expect(after).toContain('AI orders table');
+      expect(after).toContain('AI account ref');
+      // ...and the relationships stage actually added joins (it was 0 before).
+      expect(result.relationships.accepted).toBeGreaterThan(0);
+      const shard = YAML.parse(after) as { tables: Record<string, { joins?: unknown[] }> };
+      expect(Object.values(shard.tables).some((table) => (table.joins ?? []).length > 0)).toBe(true);
+    } finally {
+      executor.close();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a --stages descriptions run preserves on-disk joins while refreshing descriptions', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'ktx-stage-preserve-desc-'));
+    try {
+      const project = await initKtxProject({ projectDir: join(tempDir, 'project') });
+      const shardPath = 'semantic-layer/warehouse/_schema/public.yaml';
+      // Fixture: an inferred join present, descriptions absent.
+      await project.fileStore.writeFile(
+        shardPath,
+        YAML.stringify(
+          {
+            tables: {
+              accounts: { table: 'accounts', columns: [{ name: 'id', type: 'number' }] },
+              orders: {
+                table: 'orders',
+                columns: [
+                  { name: 'id', type: 'number' },
+                  { name: 'account_id', type: 'number' },
+                ],
+                joins: [
+                  { to: 'accounts', on: 'orders.account_id = accounts.id', relationship: 'many_to_one', source: 'inferred' },
+                ],
+              },
+            },
+          },
+          { indent: 2, lineWidth: 0 },
+        ),
+        'ktx',
+        'ktx@example.com',
+        'Seed joins fixture',
+      );
+
+      const scanConnector = {
+        ...connector(),
+        driver: 'sqlite' as const,
+        introspect: vi.fn(async () => enrichedFixtureSnapshot()),
+      };
+      const result = await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'enriched',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'preserve-desc-1' },
+        providers: createDeterministicLocalScanEnrichmentProviders(),
+        stages: ['descriptions'],
+        syncId: 'sync-preserve-desc',
+        loadPriorDescriptions: (snap) => loadOnDiskDescriptionUpdates(project, 'warehouse', snap),
+      });
+      await writeLocalScanEnrichmentArtifacts({
+        project,
+        connectionId: 'warehouse',
+        syncId: 'sync-preserve-desc',
+        driver: 'sqlite',
+        enrichment: result,
+        dryRun: false,
+      });
+
+      const after = await readFile(join(project.projectDir, shardPath), 'utf-8');
+      const shard = YAML.parse(after) as {
+        tables: Record<string, { joins?: Array<{ to: string; source: string }> }>;
+      };
+      // The inferred join survived the descriptions-only run...
+      expect(shard.tables.orders?.joins?.some((join) => join.to === 'accounts' && join.source === 'inferred')).toBe(true);
+      // ...and the descriptions stage (re)wrote ai descriptions.
+      expect(countKeyOccurrences(after, 'ai')).toBeGreaterThan(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
