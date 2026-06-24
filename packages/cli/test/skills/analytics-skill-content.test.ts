@@ -17,7 +17,7 @@ describe('analytics SKILL.md SQL craft', () => {
     expect(skill).toContain('</sql_craft>');
     expect(skill).toContain('**Schema discovery before writing SQL**');
     expect(skill).toContain('**Composition**');
-    expect(skill).toContain('**Window functions**');
+    expect(skill).toContain('**Ordering & aggregation determinism**');
     expect(skill).toContain('**Numeric precision**');
     expect(skill).toContain('**Answer completeness / interpretation**');
   });
@@ -39,7 +39,7 @@ describe('analytics SKILL.md SQL craft', () => {
       'Complete the panel', // full-domain spine for "each/every/all" panels
       'Default by additivity', // COALESCE 0 for additive, NULL otherwise
       'Keep the inputs to a derived value', // inputs alongside ratio
-      'Expose identity, not just the label', // entity identifier
+      'Project BOTH identity and label', // entity identifier
       'Diagnose empty results', // relax filters one at a time
       'Cumulative / running total', // explicit unbounded-preceding frame (spec 11)
       'Rolling window over calendar time', // calendar range, not row count (spec 11)
