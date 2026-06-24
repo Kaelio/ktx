@@ -738,4 +738,70 @@ describe('ClaudeCodeKtxLlmRuntime', () => {
       message: 'Unsupported Claude Code model "gpt-5". Use sonnet, opus, haiku, or a claude-* model id.',
     });
   });
+
+  it('reports a Claude Code session limit as a session limit, not an auth or ktx failure', async () => {
+    const query = vi.fn((_input: any) =>
+      stream([
+        initMessage(),
+        resultMessage({
+          subtype: 'error_during_execution',
+          is_error: true,
+          errors: ["You've hit your session limit · resets 10:50pm (Asia/Saigon)"],
+        }),
+      ]),
+    );
+
+    const result = await runClaudeCodeAuthProbe({ projectDir: '/tmp/project', model: 'sonnet', query, env: {} });
+    const message = (result as { message: string }).message;
+
+    expect(result.ok).toBe(false);
+    // Auth worked; the subscription is capped. Must not tell the user to re-authenticate.
+    expect(message).not.toContain('authentication is not usable');
+    // Frame it as Claude Code's session limit, tell them to wait, and preserve the reset text.
+    expect(message).toContain('Claude Code session limit reached');
+    expect(message).toContain('Wait for the reset shown');
+    expect(message).toContain('resets 10:50pm (Asia/Saigon)');
+  });
+
+  it('reports a Claude Code rate limit as a rate limit, not an auth failure', async () => {
+    const query = vi.fn((_input: any) =>
+      stream([
+        initMessage(),
+        resultMessage({
+          subtype: 'error_during_execution',
+          is_error: true,
+          errors: ['API Error: 429 Too Many Requests'],
+        }),
+      ]),
+    );
+
+    const result = await runClaudeCodeAuthProbe({ projectDir: '/tmp/project', model: 'sonnet', query, env: {} });
+    const message = (result as { message: string }).message;
+
+    expect(result.ok).toBe(false);
+    expect(message).not.toContain('authentication is not usable');
+    expect(message).toContain('Claude Code is rate limited');
+    expect(message).toContain('429 Too Many Requests');
+  });
+
+  it('still reports a genuine auth failure as an auth failure', async () => {
+    const query = vi.fn((_input: any) =>
+      stream([
+        initMessage(),
+        resultMessage({
+          subtype: 'error_during_execution',
+          is_error: true,
+          errors: ['Invalid API key · Please run `claude login`'],
+        }),
+      ]),
+    );
+
+    const result = await runClaudeCodeAuthProbe({ projectDir: '/tmp/project', model: 'sonnet', query, env: {} });
+    const message = (result as { message: string }).message;
+
+    expect(result.ok).toBe(false);
+    expect(message).toContain('authentication is not usable');
+    expect(message).not.toContain('session limit reached');
+    expect(message).not.toContain('rate limited');
+  });
 });

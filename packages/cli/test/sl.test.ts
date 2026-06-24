@@ -618,6 +618,15 @@ joins: []
     vi.stubEnv('CI', '');
     const projectDir = join(tempDir, 'project');
     await seedSlSource({ projectDir });
+    const config = parseKtxProjectConfig(await readFile(join(projectDir, 'ktx.yaml'), 'utf-8'));
+    await writeFile(
+      join(projectDir, 'ktx.yaml'),
+      serializeKtxProjectConfig({
+        ...config,
+        connections: { ...config.connections, warehouse: { driver: 'postgres' } },
+      }),
+      'utf-8',
+    );
     const io = makeIo({ isTTY: true });
     const createSemanticLayerCompute = vi.fn(() => ({
       query: vi.fn(async () => ({
@@ -654,6 +663,7 @@ joins: []
     const projectDir = join(tempDir, 'project');
     const project = await initKtxProject({ projectDir });
     project.config.connections.warehouse = { driver: 'postgres' };
+    await writeFile(join(projectDir, 'ktx.yaml'), serializeKtxProjectConfig(project.config), 'utf-8');
     await project.fileStore.writeFile(
       'semantic-layer/warehouse/orders.yaml',
       `name: orders
@@ -721,6 +731,7 @@ joins: []
     const projectDir = join(tempDir, 'project');
     const project = await initKtxProject({ projectDir });
     project.config.connections.warehouse = { driver: 'postgres' };
+    await writeFile(join(projectDir, 'ktx.yaml'), serializeKtxProjectConfig(project.config), 'utf-8');
     await project.fileStore.writeFile(
       'semantic-layer/warehouse/orders.yaml',
       `name: orders

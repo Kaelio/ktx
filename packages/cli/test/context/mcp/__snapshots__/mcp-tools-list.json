@@ -2,7 +2,7 @@
   {
     "name": "connection_list",
     "title": "Connection List",
-    "description": "List configured read-only data connections available to this ktx project. Use this before connection-scoped tools when the project may have multiple warehouses.",
+    "description": "List configured read-only data connections available to this ktx project. Use this before connection-scoped tools when the project may have multiple warehouses. A \"_ktx_federated\" entry (when present) queries all its member databases together; use its id for cross-database joins.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -23,6 +23,15 @@
                 "type": "string"
               },
               "connectionType": {
+                "type": "string"
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "hint": {
                 "type": "string"
               }
             },

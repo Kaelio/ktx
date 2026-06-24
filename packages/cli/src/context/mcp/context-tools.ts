@@ -10,7 +10,7 @@ import {
   shouldEmitMcpTelemetry,
 } from '../../telemetry/index.js';
 import { collectTelemetryRedactionSecrets } from '../../telemetry/redaction-secrets.js';
-import { scrubErrorClass } from '../../telemetry/scrubber.js';
+import { formatErrorDetail, scrubErrorClass } from '../../telemetry/scrubber.js';
 import { mcpSlowToolMs, serializeMcpError, type KtxMcpLogger } from './logger.js';
 import type {
   KtxMcpClientInfo,
@@ -59,7 +59,7 @@ const toolAnnotations = {
 
 const toolDescriptions = {
   connection_list:
-    'List configured read-only data connections available to this ktx project. Use this before connection-scoped tools when the project may have multiple warehouses.',
+    'List configured read-only data connections available to this ktx project. Use this before connection-scoped tools when the project may have multiple warehouses. A "_ktx_federated" entry (when present) queries all its member databases together; use its id for cross-database joins.',
   discover_data:
     'Search across ktx wiki pages, semantic-layer sources, measures, dimensions, raw tables, and columns. Example: discover_data({ query: "monthly orders by customer", connectionId: "warehouse", kinds: ["sl_source", "table"] }).',
   wiki_search:
@@ -241,6 +241,8 @@ const connectionListOutputSchema = z.object({
       id: z.string(),
       name: z.string(),
       connectionType: z.string(),
+      members: z.array(z.string()).optional(),
+      hint: z.string().optional(),
     }),
   ),
 });
@@ -641,6 +643,28 @@ interface InstrumentMcpServerDeps {
   getClientInfo?: () => KtxMcpClientInfo | undefined;
 }
 
+// Tools registered via registerParsedTool catch their own errors and return an
+// isError result, so the telemetry layer never sees the thrown Error. Recover
+// the failure message from the result's text content (the same string the agent
+// reads) so the outcome event is self-diagnosing.
+function mcpErrorResultDetail(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null || !('content' in result)) {
+    return undefined;
+  }
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .map((block) =>
+      typeof block === 'object' && block !== null && typeof (block as { text?: unknown }).text === 'string'
+        ? (block as { text: string }).text
+        : '',
+    )
+    .join('\n');
+  return formatErrorDetail(text);
+}
+
 function instrumentMcpServer(server: KtxMcpServerLike, deps: InstrumentMcpServerDeps): KtxMcpServerLike {
   return {
     registerTool(name, config, handler) {
@@ -660,6 +684,7 @@ function instrumentMcpServer(server: KtxMcpServerLike, deps: InstrumentMcpServer
           const durationMs = Math.max(0, performance.now() - startedAt);
           const isError = toolResultIsError(result);
           if (deps.io && deps.projectDir && shouldEmitMcpTelemetry()) {
+            const errorDetail = isError ? mcpErrorResultDetail(result) : undefined;
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
               projectDir: deps.projectDir,
@@ -669,6 +694,7 @@ function instrumentMcpServer(server: KtxMcpServerLike, deps: InstrumentMcpServer
                 outcome: isError ? 'error' : 'ok',
                 durationMs,
                 sampleRate: mcpTelemetrySampleRate(),
+                ...(errorDetail ? { errorDetail } : {}),
                 ...clientTelemetryFields(deps.getClientInfo),
               },
             });
@@ -707,6 +733,7 @@ function instrumentMcpServer(server: KtxMcpServerLike, deps: InstrumentMcpServer
           }
           if (deps.io && deps.projectDir && shouldEmitMcpTelemetry()) {
             const errorClass = scrubErrorClass(error);
+            const errorDetail = formatErrorDetail(error);
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
               projectDir: deps.projectDir,
@@ -715,6 +742,7 @@ function instrumentMcpServer(server: KtxMcpServerLike, deps: InstrumentMcpServer
                 toolName: name,
                 outcome: 'error',
                 ...(errorClass ? { errorClass } : {}),
+                ...(errorDetail ? { errorDetail } : {}),
                 durationMs,
                 sampleRate: mcpTelemetrySampleRate(),
                 ...clientTelemetryFields(deps.getClientInfo),

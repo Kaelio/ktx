@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { KtxExpectedError, KtxQueryError } from '../../../src/errors.js';
 import {
   assertReadOnlySql,
+  hoistLeadingCte,
   limitSqlForExecution,
   stripTrailingSqlNoise,
 } from '../../../src/context/connections/read-only-sql.js';
@@ -18,6 +20,20 @@ describe('assertReadOnlySql', () => {
     expect(() => assertReadOnlySql('create table x(id int)')).toThrow(
       'Only read-only SELECT/WITH queries can be executed locally',
     );
+  });
+
+  // A guard refusing the agent's SQL is an expected outcome; classifying it as
+  // KtxQueryError keeps reportException from filing it as a ktx fault.
+  it('rejects with an expected KtxQueryError, not a bare Error', () => {
+    expect(() => assertReadOnlySql('delete from orders')).toThrow(KtxQueryError);
+    expect(() => assertReadOnlySql('describe orders')).toThrow(KtxQueryError);
+    expect(() => assertReadOnlySql('select 1; drop table orders')).toThrow(KtxQueryError);
+    try {
+      assertReadOnlySql('describe orders');
+      expect.unreachable('expected a throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(KtxExpectedError);
+    }
   });
 
   it('accepts read-only queries that begin with leading comments', () => {
@@ -66,6 +82,60 @@ describe('assertReadOnlySql', () => {
   });
 });
 
+describe('hoistLeadingCte', () => {
+  it('leaves non-CTE SQL untouched', () => {
+    expect(hoistLeadingCte('select * from orders')).toEqual({
+      withPrefix: '',
+      body: 'select * from orders',
+    });
+  });
+
+  it('splits a single leading CTE from the main query', () => {
+    expect(hoistLeadingCte('WITH paid AS (SELECT * FROM orders) SELECT * FROM paid')).toEqual({
+      withPrefix: 'WITH paid AS (SELECT * FROM orders) ',
+      body: 'SELECT * FROM paid',
+    });
+  });
+
+  it('splits multiple CTEs, recursive CTEs, column lists, and UNION bodies', () => {
+    expect(
+      hoistLeadingCte(
+        'WITH RECURSIVE nodes(id, parent_id) AS (SELECT id, parent_id FROM roots UNION ALL SELECT child.id, child.parent_id FROM child JOIN nodes ON child.parent_id = nodes.id), totals AS (SELECT count(*) AS total FROM nodes) SELECT total FROM totals',
+      ),
+    ).toEqual({
+      withPrefix:
+        'WITH RECURSIVE nodes(id, parent_id) AS (SELECT id, parent_id FROM roots UNION ALL SELECT child.id, child.parent_id FROM child JOIN nodes ON child.parent_id = nodes.id), totals AS (SELECT count(*) AS total FROM nodes) ',
+      body: 'SELECT total FROM totals',
+    });
+  });
+
+  it('ignores WITH, commas, and closing parens inside literals, identifiers, and comments', () => {
+    expect(
+      hoistLeadingCte(
+        `WITH tricky AS (
+          SELECT 'WITH x AS (SELECT 1), nope' AS "value, )"
+          FROM orders
+          WHERE note = ')'
+          /* comment ), next AS (SELECT 1) */
+        ) SELECT * FROM tricky`,
+      ),
+    ).toEqual({
+      withPrefix: `WITH tricky AS (
+          SELECT 'WITH x AS (SELECT 1), nope' AS "value, )"
+          FROM orders
+          WHERE note = ')'
+          /* comment ), next AS (SELECT 1) */
+        ) `,
+      body: 'SELECT * FROM tricky',
+    });
+  });
+
+  it('falls back to the legacy whole-query body when the CTE is malformed', () => {
+    const malformed = 'WITH broken AS (SELECT * FROM orders SELECT * FROM broken';
+    expect(hoistLeadingCte(malformed)).toEqual({ withPrefix: '', body: malformed });
+  });
+});
+
 describe('limitSqlForExecution', () => {
   it('wraps compiled SQL and strips trailing semicolons', () => {
     expect(limitSqlForExecution('select * from public.orders; ', 25)).toBe(
@@ -80,6 +150,18 @@ describe('limitSqlForExecution', () => {
   it('strips leading comments before wrapping with a row limit', () => {
     expect(limitSqlForExecution('-- top customers\nselect * from public.orders', 25)).toBe(
       'select * from (select * from public.orders) as ktx_query_result limit 25',
+    );
+  });
+
+  it('hoists leading CTEs before applying the generic LIMIT wrapper', () => {
+    expect(limitSqlForExecution('WITH paid AS (SELECT * FROM orders) SELECT * FROM paid', 25)).toBe(
+      'WITH paid AS (SELECT * FROM orders) select * from (SELECT * FROM paid) as ktx_query_result limit 25',
+    );
+  });
+
+  it('keeps the generic wrapper byte-identical for non-CTE SQL', () => {
+    expect(limitSqlForExecution('select id, status from public.orders', 25)).toBe(
+      'select * from (select id, status from public.orders) as ktx_query_result limit 25',
     );
   });
 

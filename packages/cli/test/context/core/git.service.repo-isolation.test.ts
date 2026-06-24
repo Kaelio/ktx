@@ -21,7 +21,11 @@ function coreConfig(configDir: string): KtxCoreConfig {
 }
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, {
+  // `-c commit.gpgsign=false` keeps fixture commits deterministic regardless of the host's git
+  // config: a contributor with commit.gpgsign=true would otherwise fail these raw commits under a
+  // synthetic identity that owns no secret key.
+  const fixtureArgs = args[0] === 'commit' ? ['-c', 'commit.gpgsign=false', ...args] : args;
+  return execFileSync('git', fixtureArgs, {
     cwd,
     encoding: 'utf-8',
     env: {

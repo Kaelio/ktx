@@ -81,6 +81,8 @@ interface KtxConnectionSummary {
   id: string;
   name: string;
   connectionType: string;
+  members?: string[];
+  hint?: string;
 }
 
 interface KtxConnectionsMcpPort {

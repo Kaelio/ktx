@@ -1,16 +1,14 @@
+import { executeFederatedQuery } from './connectors/duckdb/federated-executor.js';
 import type { KtxSqlQueryExecutionInput, KtxSqlQueryExecutorPort } from './context/connections/query-executor.js';
+import { executeProjectReadOnlySql } from './context/connections/project-sql-executor.js';
 import type { KtxLocalProject } from './context/project/project.js';
-import type { KtxScanConnector, KtxScanContext } from './context/scan/types.js';
 import { createKtxCliScanConnector } from './local-scan-connectors.js';
 
 type CreateConnector = typeof createKtxCliScanConnector;
 
 export interface KtxCliIngestQueryExecutorDeps {
   createConnector?: CreateConnector;
-}
-
-async function cleanupConnector(connector: KtxScanConnector | null): Promise<void> {
-  await connector?.cleanup?.();
+  executeFederated?: typeof executeFederatedQuery;
 }
 
 export function createKtxCliIngestQueryExecutor(
@@ -20,30 +18,13 @@ export function createKtxCliIngestQueryExecutor(
   const createConnector = deps.createConnector ?? createKtxCliScanConnector;
   return {
     async execute(input: KtxSqlQueryExecutionInput) {
-      let connector: KtxScanConnector | null = null;
-      try {
-        connector = await createConnector(project, input.connectionId);
-        if (!connector.capabilities.readOnlySql || !connector.executeReadOnly) {
-          throw new Error(
-            `Connection "${input.connectionId}" driver "${connector.driver}" does not support read-only SQL execution.`,
-          );
-        }
-
-        const ctx: KtxScanContext = { runId: 'ingest-sql-execution' };
-        const result = await connector.executeReadOnly(
-          { connectionId: input.connectionId, sql: input.sql, maxRows: input.maxRows },
-          ctx,
-        );
-        return {
-          headers: result.headers,
-          rows: result.rows,
-          totalRows: result.totalRows,
-          command: 'SELECT',
-          rowCount: result.rowCount,
-        };
-      } finally {
-        await cleanupConnector(connector);
-      }
+      return executeProjectReadOnlySql({
+        project,
+        input,
+        createConnector: (connectionId) => createConnector(project, connectionId),
+        executeFederated: deps.executeFederated,
+        runId: 'ingest-sql-execution',
+      });
     },
   };
 }

@@ -4,6 +4,7 @@ import type { TableUsageOutput } from '../../context/ingest/adapters/historic-sq
 import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { isSlYamlPath } from '../../context/sl/source-files.js';
+import { deriveFederatedConnection } from '../connections/federation.js';
 import type { KtxLocalScanEnrichmentResult } from './local-enrichment.js';
 import {
   buildKtxRelationshipArtifacts,
@@ -199,10 +200,43 @@ function joinReferencesExistingColumns(
   return true;
 }
 
+async function federatedSiblingTargets(
+  project: KtxLocalProject,
+  connectionId: string,
+): Promise<Set<string>> {
+  const descriptor = deriveFederatedConnection(project.config.connections, project.projectDir);
+  if (!descriptor) {
+    return new Set();
+  }
+  const siblings = descriptor.members.filter((member) => member.connectionId !== connectionId);
+  const perSibling = await Promise.all(siblings.map((sibling) => siblingJoinTargets(project, sibling.connectionId)));
+  return new Set(perSibling.flat());
+}
+
+async function siblingJoinTargets(project: KtxLocalProject, connectionId: string): Promise<string[]> {
+  const listed = await project.fileStore.listFiles(schemaDir(connectionId)).catch(() => ({ files: [] }));
+  const files = listed.files.filter(isSlYamlPath);
+  const perFile = await Promise.all(
+    files.map(async (file) => {
+      const shard = await project.fileStore
+        .readFile(file)
+        .then(({ content }) => YAML.parse(content) as LiveDatabaseManifestShard | null)
+        .catch(() => null);
+      // entry.table is buildTableRef's member-local ref (1-3 parts:
+      // table / schema.table / catalog.schema.table), never connectionId-
+      // prefixed — so prefixing with the member id yields the fully-qualified
+      // `to:` form authored in cross-DB joins.
+      return Object.values(shard?.tables ?? {}).map((entry) => `${connectionId}.${entry.table}`);
+    }),
+  );
+  return perFile.flat();
+}
+
 async function loadExistingManifestState(
   project: KtxLocalProject,
   connectionId: string,
   snapshot: KtxSchemaSnapshot,
+  siblingTargets: Set<string>,
 ): Promise<ExistingManifestState> {
   const descriptions = new Map<string, LiveDatabaseManifestExistingDescriptions>();
   const preservedJoins = new Map<string, LiveDatabaseManifestJoinEntry[]>();
@@ -242,7 +276,7 @@ async function loadExistingManifestState(
         const joins = (entry.joins ?? []).filter((join) => {
           return (
             (join.source === 'manual' || join.source === 'inferred') &&
-            validTableNames.has(join.to) &&
+            (validTableNames.has(join.to) || siblingTargets.has(join.to)) &&
             joinReferencesExistingColumns(join, columnsByTable)
           );
         });
@@ -270,7 +304,8 @@ export async function loadOnDiskDescriptionUpdates(
   connectionId: string,
   snapshot: KtxSchemaSnapshot,
 ): Promise<LocalDescriptionUpdates> {
-  const existing = await loadExistingManifestState(project, connectionId, snapshot);
+  const siblingTargets = await federatedSiblingTargets(project, connectionId);
+  const existing = await loadExistingManifestState(project, connectionId, snapshot, siblingTargets);
   return snapshot.tables.map((table) => {
     const entry = existing.descriptions.get(table.name);
     const columnDescriptions: Record<string, string | null> = {};
@@ -384,7 +419,13 @@ export async function writeLocalScanManifestShards(
     };
   }
 
-  const existing = await loadExistingManifestState(input.project, input.connectionId, input.snapshot);
+  const siblingTargets = await federatedSiblingTargets(input.project, input.connectionId);
+  const existing = await loadExistingManifestState(
+    input.project,
+    input.connectionId,
+    input.snapshot,
+    siblingTargets,
+  );
   const { shards } = buildLiveDatabaseManifestShards({
     connectionType: input.driver.toUpperCase(),
     tables: snapshotTablesToManifestData(input.snapshot, input.descriptionUpdates),
@@ -392,6 +433,7 @@ export async function writeLocalScanManifestShards(
     existingDescriptions: existing.descriptions,
     existingPreservedJoins: existing.preservedJoins,
     existingUsage: existing.usage,
+    federatedSiblingTargets: siblingTargets,
     mapColumnType: (dimensionType) => dimensionType,
   });
 

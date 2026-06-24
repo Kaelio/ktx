@@ -4,10 +4,8 @@ import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../contex
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { connectorTestFailure, createKtxConnectorCapabilities, type KtxConnectorTestResult, type KtxColumnSampleInput, type KtxColumnSampleResult, type KtxColumnStatsInput, type KtxColumnStatsResult, type KtxQueryResult, type KtxReadOnlyQueryInput, type KtxScanConnector, type KtxScanContext, type KtxScanInput, type KtxSchemaColumn, type KtxSchemaSnapshot, type KtxSchemaTable, type KtxTableRef, type KtxTableSampleInput, type KtxTableListEntry, type KtxTableSampleResult } from '../../context/scan/types.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
-import { readFileSync } from 'node:fs';
+import { resolveStringReference } from '../shared/string-reference.js';
 import { Agent as HttpsAgent } from 'node:https';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
 
 export interface KtxClickHouseConnectionConfig {
   driver?: string;
@@ -141,19 +139,6 @@ function stringConfigValue(
 ): string | undefined {
   const value = connection?.[key];
   return typeof value === 'string' && value.trim().length > 0 ? resolveStringReference(value.trim(), env) : undefined;
-}
-
-function resolveStringReference(value: string, env: NodeJS.ProcessEnv): string {
-  if (value.startsWith('env:')) {
-    const envName = value.slice('env:'.length);
-    return env[envName] ?? '';
-  }
-  if (value.startsWith('file:')) {
-    const rawPath = value.slice('file:'.length);
-    const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(1)) : rawPath;
-    return readFileSync(path, 'utf-8').trim();
-  }
-  return value;
 }
 
 function maybeNumber(value: unknown): number | undefined {

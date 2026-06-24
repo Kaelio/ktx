@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import type { KtxEmbeddingPort } from '../../context/core/embedding.js';
+import { deriveFederatedConnection, FEDERATED_CONNECTION_ID } from '../connections/federation.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { HybridSearchCore } from '../../context/search/hybrid-search-core.js';
 import type { SearchCandidateGenerator } from '../../context/search/types.js';
@@ -169,7 +170,38 @@ export async function loadLocalSlSourceRecords(
   project: KtxLocalProject,
   input: { connectionId: string },
 ): Promise<LocalSlSourceRecord[]> {
-  const connectionId = assertSafeConnectionId(input.connectionId);
+  if (input.connectionId === FEDERATED_CONNECTION_ID) {
+    const descriptor = deriveFederatedConnection(project.config.connections, project.projectDir);
+    if (!descriptor) {
+      return [];
+    }
+    const perMember = await Promise.all(
+      descriptor.members.map(async (member) => {
+        const records = await loadSingleConnectionSourceRecords(project, member.connectionId);
+        return records.map((record) => {
+          // The federated view is one virtual connection: rows carry its id and a
+          // member-prefixed name, so a listing/search row round-trips to
+          // `ktx sl -c _ktx_federated read <name>`. Member origin lives in the name.
+          const name = `${member.connectionId}.${record.name}`;
+          return {
+            ...record,
+            connectionId: FEDERATED_CONNECTION_ID,
+            name,
+            source: { ...record.source, name },
+          };
+        });
+      }),
+    );
+    return perMember.flat();
+  }
+  return loadSingleConnectionSourceRecords(project, input.connectionId);
+}
+
+async function loadSingleConnectionSourceRecords(
+  project: KtxLocalProject,
+  rawConnectionId: string,
+): Promise<LocalSlSourceRecord[]> {
+  const connectionId = assertSafeConnectionId(rawConnectionId);
   const dir = `semantic-layer/${connectionId}`;
   const schemaDir = `${dir}/_schema`;
   const listed = await project.fileStore.listFiles(dir);

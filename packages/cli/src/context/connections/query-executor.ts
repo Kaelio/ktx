@@ -8,8 +8,9 @@ export interface KtxSqlQueryExecutionInput {
   maxRows?: number;
 }
 
-interface KtxSqlQueryExecutionResult {
+export interface KtxSqlQueryExecutionResult {
   headers: string[];
+  headerTypes?: string[];
   rows: unknown[][];
   totalRows: number;
   command: string;

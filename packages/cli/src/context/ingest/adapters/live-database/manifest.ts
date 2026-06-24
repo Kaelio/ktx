@@ -86,6 +86,9 @@ export interface BuildLiveDatabaseManifestShardsInput {
   existingPreservedJoins?: Map<string, LiveDatabaseManifestJoinEntry[]>;
   existingDescriptions?: Map<string, LiveDatabaseManifestExistingDescriptions>;
   existingUsage?: Map<string, TableUsageOutput>;
+  // Table refs owned by other federated members; declared cross-DB joins to
+  // these survive even though the target has no shard in this snapshot.
+  federatedSiblingTargets?: Set<string>;
 }
 
 export interface BuildLiveDatabaseManifestShardsResult {
@@ -204,15 +207,20 @@ function joinCondition(
     .join(' AND ');
 }
 
-function buildJoinsByTable(
+/** @internal */
+export function buildJoinsByTable(
   tableNames: Set<string>,
   joins: LiveDatabaseManifestJoinData[],
   preservedJoins: Map<string, LiveDatabaseManifestJoinEntry[]>,
+  federatedSiblingTargets: Set<string> = new Set(),
 ): Map<string, LiveDatabaseManifestJoinEntry[]> {
   const joinsByTable = new Map<string, LiveDatabaseManifestJoinEntry[]>();
 
   for (const join of joins) {
-    if (!tableNames.has(join.fromTable) || !tableNames.has(join.toTable)) {
+    const fromLocal = tableNames.has(join.fromTable);
+    const toLocal = tableNames.has(join.toTable);
+    const toSibling = federatedSiblingTargets.has(join.toTable);
+    if (!fromLocal || (!toLocal && !toSibling)) {
       continue;
     }
     const relationship = RELATIONSHIP_MAP[join.relationship] ?? join.relationship;
@@ -223,13 +231,17 @@ function buildJoinsByTable(
       source: join.source,
     });
 
-    const reverseRelationship = RELATIONSHIP_INVERSE[relationship] ?? 'one_to_many';
-    addJoinOnce(joinsByTable, join.toTable, {
-      to: join.fromTable,
-      on: joinCondition(join.toTable, join.toColumns, join.fromTable, join.fromColumns),
-      relationship: reverseRelationship,
-      source: join.source,
-    });
+    // Reverse direction only when the target is a local table in THIS snapshot;
+    // a federated sibling has no shard here, so it gets no reverse entry.
+    if (toLocal) {
+      const reverseRelationship = RELATIONSHIP_INVERSE[relationship] ?? 'one_to_many';
+      addJoinOnce(joinsByTable, join.toTable, {
+        to: join.fromTable,
+        on: joinCondition(join.toTable, join.toColumns, join.fromTable, join.fromColumns),
+        relationship: reverseRelationship,
+        source: join.source,
+      });
+    }
   }
 
   for (const [tableName, tableJoins] of preservedJoins) {
@@ -237,7 +249,7 @@ function buildJoinsByTable(
       continue;
     }
     for (const join of tableJoins) {
-      if (tableNames.has(join.to)) {
+      if (tableNames.has(join.to) || federatedSiblingTargets.has(join.to)) {
         addJoinOnce(joinsByTable, tableName, join);
       }
     }
@@ -250,7 +262,12 @@ export function buildLiveDatabaseManifestShards(
   input: BuildLiveDatabaseManifestShardsInput,
 ): BuildLiveDatabaseManifestShardsResult {
   const tableNames = new Set(input.tables.map((table) => table.name));
-  const joinsByTable = buildJoinsByTable(tableNames, input.joins, input.existingPreservedJoins ?? new Map());
+  const joinsByTable = buildJoinsByTable(
+    tableNames,
+    input.joins,
+    input.existingPreservedJoins ?? new Map(),
+    input.federatedSiblingTargets ?? new Set(),
+  );
   const shards = new Map<string, LiveDatabaseManifestShard>();
 
   for (const table of input.tables) {

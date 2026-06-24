@@ -6,6 +6,7 @@ import { type NotionBotInfo, NotionClient } from './context/ingest/adapters/noti
 import { createLocalLookerCredentialResolver } from './context/ingest/adapters/looker/local-looker.adapter.js';
 import { metabaseRuntimeConfigFromLocalConnection } from './context/ingest/adapters/metabase/local-metabase.adapter.js';
 import { testRepoConnection } from './context/ingest/repo-fetch.js';
+import { federatedConnectionListing } from './context/connections/federation.js';
 import { getDriverRegistration } from './context/connections/drivers.js';
 import { parseNotionConnectionConfig, resolveNotionConnectionAuthToken } from './context/connections/notion-config.js';
 import { resolveKtxConfigReference } from './context/core/config-reference.js';
@@ -447,14 +448,22 @@ export async function runKtxConnection(
         io.stdout.write('No connections configured. Run `ktx setup` to add one.\n');
         return 0;
       }
-      const idWidth = Math.max('ID'.length, ...entries.map(([id]) => id.length));
-      const driverWidth = Math.max(
-        'DRIVER'.length,
+      const federated = federatedConnectionListing(project.config.connections, args.projectDir);
+      const idCandidates = [...entries.map(([id]) => id), ...(federated ? [federated.id] : [])];
+      const driverLengths = [
         ...entries.map(([, c]) => (c.driver ?? 'unknown').length),
-      );
+        ...(federated ? [federated.driver.length] : []),
+      ];
+      const idWidth = Math.max('ID'.length, ...idCandidates.map((id) => id.length));
+      const driverWidth = Math.max('DRIVER'.length, ...driverLengths);
       io.stdout.write(`${'ID'.padEnd(idWidth)}  ${'DRIVER'.padEnd(driverWidth)}\n`);
       for (const [id, connection] of entries) {
         io.stdout.write(`${id.padEnd(idWidth)}  ${(connection.driver ?? 'unknown').padEnd(driverWidth)}\n`);
+      }
+      if (federated) {
+        io.stdout.write(`${federated.id.padEnd(idWidth)}  ${federated.driver.padEnd(driverWidth)}\n`);
+        io.stdout.write(`  federates: ${federated.members.join(', ')}\n`);
+        io.stdout.write(`  ${federated.hint}\n`);
       }
       return 0;
     }

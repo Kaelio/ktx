@@ -22,7 +22,11 @@ from semantic_layer.models import (
     SemanticQuery,
     SourceDefinition,
 )
-from semantic_layer.parser import ExpressionParser, quote_reserved_identifiers
+from semantic_layer.parser import (
+    ExpressionParser,
+    parse_predicate,
+    quote_reserved_identifiers,
+)
 
 # DIALECT CONVENTION:
 #   User-authored measure `expr`, `filter`, and computed-column fragments must
@@ -910,9 +914,7 @@ class QueryPlanner:
         for c in source.columns:
             col_to_source[c.name] = source_name
 
-        tree = sqlglot.parse_one(
-            f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
-        )
+        condition = parse_predicate(expr, self.dialect)
 
         def _qualify_column(node):
             if (
@@ -926,8 +928,8 @@ class QueryPlanner:
                 )
             return node
 
-        transformed = tree.transform(_qualify_column)
-        return transformed.expressions[0].sql(dialect=self.dialect)
+        transformed = condition.transform(_qualify_column)
+        return transformed.sql(dialect=self.dialect)
 
     def _detect_fan_out(
         self,
@@ -1254,14 +1256,7 @@ class QueryPlanner:
     ) -> None:
         """Raise an error if an OR expression mixes WHERE and HAVING conditions."""
         try:
-            tree = sqlglot.parse_one(
-                f"SELECT * WHERE {quote_reserved_identifiers(clause)}",
-                dialect=self.dialect,
-            )
-            where = tree.find(exp.Where)
-            if not where:
-                return
-            inner = where.this
+            inner = parse_predicate(clause, self.dialect)
             # Only check if the top level contains OR
             or_parts: list[str] = []
 
@@ -1295,14 +1290,7 @@ class QueryPlanner:
     def _split_top_level_and(self, expr: str) -> list[str]:
         """Split a filter expression on top-level AND (not inside parentheses or strings)."""
         try:
-            tree = sqlglot.parse_one(
-                f"SELECT * WHERE {quote_reserved_identifiers(expr)}",
-                dialect=self.dialect,
-            )
-            where = tree.find(exp.Where)
-            if not where:
-                return [expr]
-            inner = where.this
+            inner = parse_predicate(expr, self.dialect)
             parts: list[str] = []
 
             def _collect_and(node):

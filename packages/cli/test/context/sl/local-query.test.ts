@@ -324,7 +324,7 @@ grain: []
     ).rejects.toThrow('Local semantic-layer execution requires a query executor.');
   });
 
-  it('requires connectionId when multiple connections are configured', async () => {
+  it('requires connectionId, listing the configured connections, when several exist', async () => {
     project.config.connections.analytics = { driver: 'bigquery' };
 
     await expect(
@@ -332,6 +332,16 @@ grain: []
         query: { measures: ['orders.order_count'], dimensions: [] },
         compute,
       }),
-    ).rejects.toThrow('connectionId is required when the local project has zero or multiple connections.');
+    ).rejects.toThrow('connectionId is required. Configured connections: analytics, warehouse.');
+  });
+
+  it('rejects a connectionId that is not configured, listing the configured connections', async () => {
+    await expect(
+      compileLocalSlQuery(project, {
+        connectionId: 'DIG_SMART_REP',
+        query: { measures: ['orders.order_count'], dimensions: [] },
+        compute,
+      }),
+    ).rejects.toThrow('Connection "DIG_SMART_REP" is not configured in ktx.yaml. Configured connections: warehouse.');
   });
 });
