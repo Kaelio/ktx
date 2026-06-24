@@ -34,6 +34,7 @@ connection is selected.
 | `--query-history` | Include database query-history usage patterns | Stored connection default |
 | `--no-query-history` | Skip database query-history usage patterns for this run | Stored connection default |
 | `--query-history-window-days <days>` | BigQuery/Snowflake query-history lookback window for this run | Stored connection default |
+| `--stages <list>` | Comma-separated enrichment stages to (re)run: `descriptions`, `embeddings`, `relationships` | All three |
 | `--text <content>` | Capture inline text into **ktx** memory; repeatable | `[]` |
 | `--file <path>` | Capture a text file into **ktx** memory; use `-` for stdin; repeatable | `[]` |
 | `--verbatim` | Store each `--text`/`--file` document body unchanged as a `GLOBAL` wiki page; the LLM derives metadata only | `false` |
@@ -88,6 +89,41 @@ document body **unchanged** as a `GLOBAL` wiki page:
   absent fields. `--connection-id <id>` scopes the page to that connection by
   setting its `connections` frontmatter.
 
+### Selecting enrichment stages
+
+Database enrichment runs three stages: `descriptions` (one LLM call per table),
+`embeddings` (vectors over the schema and descriptions), and `relationships`
+(join detection, optionally LLM-proposed). Each stage is cached on a **per-stage
+hash of only its own inputs**, so changing one stage's inputs invalidates only
+that stage. Switching the description LLM re-runs only `descriptions`; upgrading
+the embeddings model re-runs only `embeddings`; turning on
+`scan.relationships.llmProposals` re-runs only `relationships`. The expensive
+per-table descriptions are never thrown away because an unrelated setting moved.
+
+`--stages <list>` re-runs a chosen subset on an already-ingested connection. A
+named stage is **force-recomputed** (it bypasses the completed-stage cache),
+while unselected stages are left exactly as they are on disk:
+
+- `ktx ingest warehouse --stages embeddings` — re-embed on a new model, keeping
+  descriptions and joins.
+- `ktx ingest --all --stages relationships --no-query-history` — backfill joins
+  across every database after enabling `llmProposals`, without re-paying for
+  descriptions.
+- `ktx ingest warehouse --stages descriptions` — re-run thin descriptions (for
+  example after raising `KTX_ENRICH_LLM_TIMEOUT_MS`). When nothing the
+  descriptions depend on changed, the per-table resume record means only the
+  tables that previously failed are re-sent to the LLM.
+
+Stage names are validated: an unknown or empty name (`--stages foo`, `--stages
+descriptions,foo`, `--stages ""`) is a hard parse error. Naming all three
+(`--stages descriptions,embeddings,relationships`) forces a full enrichment
+recompute, which is **not** the same as omitting the flag (omitting resumes
+whatever is already done). After a selective run, **ktx** warns
+(`enrichment_stage_stale`) when an unselected stage's inputs no longer match what
+it was last built from — for example, re-running `descriptions` flags
+`embeddings` as stale until you re-run `--stages embeddings`. The warning is
+informational; **ktx** never silently cascades the extra work.
+
 ## Examples
 
 ```bash
@@ -101,6 +137,11 @@ ktx ingest warehouse
 ktx ingest warehouse --query-history
 # Set the lookback window for BigQuery or Snowflake query history
 ktx ingest warehouse --query-history-window-days 30
+
+# Re-embed one connection on a new embeddings model (descriptions/joins untouched)
+ktx ingest warehouse --stages embeddings
+# Backfill LLM-proposed joins across every database without re-describing
+ktx ingest --all --stages relationships --no-query-history
 
 # Build a context-source connection
 ktx ingest notion

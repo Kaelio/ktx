@@ -1,10 +1,12 @@
-import { type Command, Option } from '@commander-js/extra-typings';
+import { type Command, InvalidArgumentError, Option } from '@commander-js/extra-typings';
 import {
   collectOption,
   type KtxCliCommandContext,
   parsePositiveIntegerOption,
   resolveCommandProjectDir,
 } from '../cli-program.js';
+import { KTX_SCAN_ENRICHMENT_STAGES } from '../context/scan/enrichment-state.js';
+import type { KtxScanEnrichmentStage } from '../context/scan/types.js';
 import type { KtxCliDeps, KtxCliIo } from '../index.js';
 import { runtimeInstallPolicyFromFlags } from '../managed-python-command.js';
 import type { KtxPublicIngestArgs } from '../public-ingest.js';
@@ -13,6 +15,36 @@ import type { KtxTextIngestArgs } from '../text-ingest.js';
 import { resolveConnectionSelection } from './connection-selection.js';
 
 profileMark('module:commands/ingest-commands');
+
+/**
+ * Parses `--stages` into an ordered, de-duplicated subset of the canonical
+ * enrichment-stage registry. An unknown or empty name is a hard parse error so
+ * a typo never silently degrades to "run everything."
+ *
+ * @internal
+ */
+export function parseEnrichmentStagesOption(value: string): KtxScanEnrichmentStage[] {
+  const names = value
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+  if (names.length === 0) {
+    throw new InvalidArgumentError(
+      `must be a non-empty comma-separated list of stages (${KTX_SCAN_ENRICHMENT_STAGES.join(', ')})`,
+    );
+  }
+  const valid = new Set<string>(KTX_SCAN_ENRICHMENT_STAGES);
+  const selected = new Set<KtxScanEnrichmentStage>();
+  for (const name of names) {
+    if (!valid.has(name)) {
+      throw new InvalidArgumentError(
+        `unknown stage "${name}"; valid stages are ${KTX_SCAN_ENRICHMENT_STAGES.join(', ')}`,
+      );
+    }
+    selected.add(name as KtxScanEnrichmentStage);
+  }
+  return KTX_SCAN_ENRICHMENT_STAGES.filter((stage) => selected.has(stage));
+}
 
 interface IngestCommandOptions {
   runTextIngest: (args: KtxTextIngestArgs, io: KtxCliIo, deps: KtxCliDeps) => Promise<number>;
@@ -32,6 +64,11 @@ export function registerIngestCommands(
     .addOption(new Option('--query-history', 'Include database query-history usage patterns').conflicts('noQueryHistory'))
     .addOption(new Option('--no-query-history', 'Skip database query-history usage patterns'))
     .option('--query-history-window-days <days>', 'Query-history lookback window for this run', parsePositiveIntegerOption)
+    .option(
+      '--stages <stages>',
+      'Comma-separated enrichment stages to (re)run (descriptions,embeddings,relationships); omit to run all',
+      parseEnrichmentStagesOption,
+    )
     .option('--text <content>', 'Capture inline text into ktx memory; repeatable', collectOption, [])
     .option('--file <path>', 'Capture a text file into ktx memory; use - for stdin; repeatable', collectOption, [])
     .option(
@@ -54,6 +91,10 @@ export function registerIngestCommands(
 
     if (options.verbatim === true && !hasTextCapture) {
       command.error('error: --verbatim requires --text or --file');
+    }
+
+    if (options.stages !== undefined && hasTextCapture) {
+      command.error('error: --stages applies to database ingest only; it cannot be combined with --text or --file');
     }
 
     if (hasTextCapture) {
@@ -97,6 +138,7 @@ export function registerIngestCommands(
       inputMode: options.input === false ? 'disabled' : 'auto',
       queryHistory,
       ...(options.queryHistoryWindowDays !== undefined ? { queryHistoryWindowDays: options.queryHistoryWindowDays } : {}),
+      ...(options.stages ? { stages: options.stages } : {}),
       cliVersion: context.packageInfo.version,
       runtimeInstallPolicy: runtimeInstallPolicyFromFlags(options),
     };

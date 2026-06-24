@@ -98,6 +98,7 @@ export interface ContextBuildArgs {
   queryHistory?: Extract<KtxPublicIngestArgs, { command: 'run' }>['queryHistory'];
   queryHistoryWindowDays?: number;
   scanMode?: Extract<KtxPublicIngestArgs, { command: 'run' }>['scanMode'];
+  stages?: Extract<KtxPublicIngestArgs, { command: 'run' }>['stages'];
   detectRelationships?: boolean;
   cliVersion?: string;
   runtimeInstallPolicy?: KtxManagedPythonInstallPolicy;
@@ -990,6 +991,7 @@ export async function runContextBuild(
     ...(args.queryHistory ? { queryHistory: args.queryHistory } : {}),
     ...(args.queryHistoryWindowDays !== undefined ? { queryHistoryWindowDays: args.queryHistoryWindowDays } : {}),
     ...(args.scanMode ? { scanMode: args.scanMode } : {}),
+    ...(args.stages ? { stages: args.stages } : {}),
     ...(args.detectRelationships !== undefined ? { detectRelationships: args.detectRelationships } : {}),
     ...(args.cliVersion ? { cliVersion: args.cliVersion } : {}),
     ...(args.runtimeInstallPolicy ? { runtimeInstallPolicy: args.runtimeInstallPolicy } : {}),

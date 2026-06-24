@@ -6,8 +6,14 @@ import { KtxDescriptionGenerator } from './description-generation.js';
 import { buildKtxColumnEmbeddingText } from './embedding-text.js';
 import {
   completedKtxScanEnrichmentStateSummary,
-  computeKtxScanEnrichmentInputHash,
+  computeKtxDescriptionsStageHash,
+  computeKtxEmbeddingsStageHash,
+  computeKtxRelationshipsStageHash,
+  computeKtxScanDescriptionDigest,
+  KTX_SCAN_ENRICHMENT_STAGES,
+  type KtxScanEmbeddingIdentity,
   type KtxScanEnrichmentStateStore,
+  type KtxScanLlmIdentity,
   summarizeKtxScanEnrichmentState,
 } from './enrichment-state.js';
 import { skippedKtxScanEnrichmentSummary } from './enrichment-summary.js';
@@ -61,6 +67,13 @@ export interface KtxLocalScanEnrichmentInput {
   connectionId: string;
   mode: KtxScanMode;
   detectRelationships?: boolean;
+  /**
+   * Enrichment stages to (re)run this invocation. Undefined runs every eligible
+   * stage and respects the completed-stage short-circuit (spec-19 resume). When
+   * present, only the named stages run — each force-recomputes (bypassing the
+   * short-circuit) while unselected stages are left untouched on disk (D3).
+   */
+  stages?: KtxScanEnrichmentStage[];
   connector: KtxScanConnector;
   snapshot?: KtxSchemaSnapshot;
   context: KtxScanContext;
@@ -72,8 +85,19 @@ export interface KtxLocalScanEnrichmentInput {
    * already flushed (inputHash-gated). Null/undefined disables incremental flush.
    */
   descriptionResumeStore?: KtxScanDescriptionResumeStore | null;
+  /**
+   * Lazily loads the descriptions already persisted in the on-disk _schema, used
+   * to feed embeddings + relationships their description context when the
+   * descriptions stage does not run this invocation (e.g. `--stages relationships`).
+   * Called at most once and only when a downstream stage needs it, so a normal
+   * full run never pays the read.
+   */
+  loadPriorDescriptions?: (snapshot: KtxSchemaSnapshot) => Promise<KtxLocalScanEnrichmentResult['descriptionUpdates']>;
   syncId?: string;
-  providerIdentity?: Record<string, unknown>;
+  /** Description-LLM identity that keys the descriptions + relationships stage hashes. */
+  llmIdentity?: KtxScanLlmIdentity;
+  /** Embedding-model identity that keys the embeddings stage hash. */
+  embeddingIdentity?: KtxScanEmbeddingIdentity;
   relationshipSettings?: KtxScanRelationshipConfig;
   now?: () => Date;
   /**
@@ -203,6 +227,17 @@ function providerlessEnrichedWarning(relationshipDetection: boolean): KtxScanWar
   };
 }
 
+function stagePrerequisiteReason(stage: KtxScanEnrichmentStage): string {
+  switch (stage) {
+    case 'descriptions':
+      return 'LLM enrichment is not configured (set scan.enrichment.mode and an LLM provider)';
+    case 'embeddings':
+      return 'no embedding provider is configured (set scan.enrichment.embeddings)';
+    case 'relationships':
+      return 'relationship discovery is disabled (scan.relationships.enabled is false)';
+  }
+}
+
 export function createDeterministicLocalScanEnrichmentProviders(): KtxLocalScanEnrichmentProviders {
   return {
     llmRuntime: deterministicLlmRuntime(),
@@ -239,12 +274,16 @@ function deterministicLlmRuntime(): KtxLlmRuntimePort {
 export function snapshotToKtxEnrichedSchema(
   snapshot: KtxSchemaSnapshot,
   embeddingsByColumnId: ReadonlyMap<string, number[]> = new Map(),
+  descriptions: KtxLocalScanEnrichmentResult['descriptionUpdates'] = [],
 ): KtxEnrichedSchema {
+  const descriptionByTable = new Map(descriptions.map((item) => [item.table.name, item]));
   const tables: KtxEnrichedTable[] = snapshot.tables.map((table) => {
     const id = tableId(table);
     const ref = tableRef(table);
+    const tableDescription = descriptionByTable.get(table.name);
     const columns: KtxEnrichedColumn[] = table.columns.map((column) => {
       const idForColumn = columnId(table, column);
+      const aiColumnDescription = tableDescription?.columnDescriptions[column.name] ?? null;
       return {
         id: idForColumn,
         tableId: id,
@@ -258,6 +297,7 @@ export function snapshotToKtxEnrichedSchema(
         parentColumnId: null,
         descriptions: {
           ...(column.comment ? { db: column.comment } : {}),
+          ...(aiColumnDescription ? { ai: aiColumnDescription } : {}),
         },
         embedding: embeddingsByColumnId.get(idForColumn) ?? null,
         sampleValues: null,
@@ -270,6 +310,7 @@ export function snapshotToKtxEnrichedSchema(
       enabled: true,
       descriptions: {
         ...(table.comment ? { db: table.comment } : {}),
+        ...(tableDescription?.tableDescription ? { ai: tableDescription.tableDescription } : {}),
       },
       columns,
     };
@@ -454,19 +495,18 @@ async function generateDescriptions(input: {
   return input.snapshot.tables.map((table) => enrichedByName.get(table.name) ?? nullDescriptionUpdate(table));
 }
 
-async function buildEmbeddings(input: {
-  snapshot: KtxSchemaSnapshot;
-  embedding: KtxEmbeddingPort;
-  descriptions: KtxLocalScanEnrichmentResult['descriptionUpdates'];
-  progress?: KtxProgressPort;
-}): Promise<{ updates: KtxEmbeddingUpdate[]; byColumnId: Map<string, number[]> }> {
-  const descriptionByTable = new Map(input.descriptions.map((item) => [item.table.name, item]));
+// The exact per-column text fed to the embedding model. Shared by the embeddings
+// stage and the descriptionDigest so the embeddings hash content-addresses the
+// real text the model sees (D4).
+function buildKtxColumnEmbeddingTexts(
+  snapshot: KtxSchemaSnapshot,
+  descriptions: KtxLocalScanEnrichmentResult['descriptionUpdates'],
+): Array<{ columnId: string; text: string }> {
+  const descriptionByTable = new Map(descriptions.map((item) => [item.table.name, item]));
   const texts: Array<{ columnId: string; text: string }> = [];
-
-  for (const table of input.snapshot.tables) {
+  for (const table of snapshot.tables) {
     const tableDescriptions = descriptionByTable.get(table.name);
     for (const column of table.columns) {
-      const id = columnId(table, column);
       const text = buildKtxColumnEmbeddingText({
         tableName: table.name,
         columnName: column.name,
@@ -481,9 +521,18 @@ async function buildEmbeddings(input: {
           incoming: [],
         },
       });
-      texts.push({ columnId: id, text });
+      texts.push({ columnId: columnId(table, column), text });
     }
   }
+  return texts;
+}
+
+async function buildEmbeddings(input: {
+  embedding: KtxEmbeddingPort;
+  texts: Array<{ columnId: string; text: string }>;
+  progress?: KtxProgressPort;
+}): Promise<{ updates: KtxEmbeddingUpdate[]; byColumnId: Map<string, number[]> }> {
+  const texts = input.texts;
 
   const embeddings: number[][] = [];
   const maxBatchSize = embeddingBatchSize(input.embedding.maxBatchSize);
@@ -533,17 +582,26 @@ async function runEnrichmentStage<TOutput>(input: {
   resumedStages: KtxScanEnrichmentStage[];
   completedStages: KtxScanEnrichmentStage[];
   failedStages: KtxScanEnrichmentStage[];
+  /**
+   * When true the stage re-enters compute() even if a completed row matches,
+   * skipping the spec-19 short-circuit. The intent of naming a stage in
+   * `--stages` is "recompute this" (D3); the inner compute() still honors the
+   * spec-20 per-table resume record.
+   */
+  forceRecompute?: boolean;
   compute: () => Promise<TOutput>;
 }): Promise<TOutput> {
-  const existing = await input.stateStore?.findCompletedStage<TOutput>({
-    connectionId: input.connectionId,
-    stage: input.stage,
-    inputHash: input.inputHash,
-  });
-  if (existing) {
-    input.resumedStages.push(input.stage);
-    input.completedStages.push(input.stage);
-    return existing.output;
+  if (!input.forceRecompute) {
+    const existing = await input.stateStore?.findCompletedStage<TOutput>({
+      connectionId: input.connectionId,
+      stage: input.stage,
+      inputHash: input.inputHash,
+    });
+    if (existing) {
+      input.resumedStages.push(input.stage);
+      input.completedStages.push(input.stage);
+      return existing.output;
+    }
   }
 
   try {
@@ -608,17 +666,39 @@ export async function runLocalScanEnrichment(
   const state = completedKtxScanEnrichmentStateSummary();
   const syncId = input.syncId ?? input.context.runId;
   const relationshipSettings = input.relationshipSettings ?? buildDefaultKtxProjectConfig().scan.relationships;
-  const inputHash = computeKtxScanEnrichmentInputHash({
-    snapshot,
-    mode: input.mode,
-    detectRelationships: input.detectRelationships ?? false,
-    providerIdentity: input.providerIdentity ?? {},
-    relationshipSettings,
-  });
+  const llmIdentity: KtxScanLlmIdentity = input.llmIdentity ?? { model: null, baseUrlConfigured: false };
+  const embeddingIdentity: KtxScanEmbeddingIdentity = input.embeddingIdentity ?? {
+    model: null,
+    dimensions: null,
+    batchSize: null,
+  };
+  const descriptionsHash = computeKtxDescriptionsStageHash({ snapshot, llmIdentity });
+  const relationshipsHash = computeKtxRelationshipsStageHash({ snapshot, relationshipSettings, llmIdentity });
   const warnings: KtxScanWarning[] = [];
+  const selectedStages = input.stages;
+  const runsStage = (stage: KtxScanEnrichmentStage): boolean =>
+    selectedStages === undefined || selectedStages.includes(stage);
+  const forcesStage = (stage: KtxScanEnrichmentStage): boolean =>
+    selectedStages !== undefined && selectedStages.includes(stage);
+
   let descriptions: KtxLocalScanEnrichmentResult['descriptionUpdates'] = [];
+  let descriptionsRanThisInvocation = false;
+  let priorDescriptions: KtxLocalScanEnrichmentResult['descriptionUpdates'] | null | undefined;
+  // Best-available descriptions for the downstream stages (embeddings,
+  // relationships): fresh ones when descriptions ran this invocation, else the
+  // descriptions persisted in the on-disk _schema. Behavior follows the input
+  // (did descriptions run?), not which stage subset the caller selected (D5).
+  const resolveDownstreamDescriptions = async (): Promise<KtxLocalScanEnrichmentResult['descriptionUpdates']> => {
+    if (descriptionsRanThisInvocation) {
+      return descriptions;
+    }
+    if (priorDescriptions === undefined) {
+      priorDescriptions = input.loadPriorDescriptions ? await input.loadPriorDescriptions(snapshot) : null;
+    }
+    return priorDescriptions ?? [];
+  };
+
   let embeddingUpdates: KtxEmbeddingUpdate[] = [];
-  let schema = snapshotToKtxEnrichedSchema(snapshot);
   const summary: KtxScanEnrichmentSummary = { ...skippedKtxScanEnrichmentSummary };
   const relationshipDetectionEnabled = relationshipSettings.enabled;
   const shouldDetectRelationships =
@@ -629,40 +709,70 @@ export async function runLocalScanEnrichment(
     warnings.push(providerlessEnrichedWarning(shouldDetectRelationships));
   }
 
+  // A stage explicitly named in --stages whose prerequisite is missing must be
+  // surfaced, never silently no-op (D2).
+  if (selectedStages !== undefined) {
+    const stageEligible: Record<KtxScanEnrichmentStage, boolean> = {
+      descriptions: input.mode === 'enriched' && input.providers != null,
+      embeddings: input.mode === 'enriched' && input.providers?.embedding != null,
+      relationships: shouldDetectRelationships,
+    };
+    for (const stage of selectedStages) {
+      if (!stageEligible[stage]) {
+        warnings.push({
+          code: 'enrichment_stage_skipped',
+          message: `Requested --stages ${stage}, but it cannot run: ${stagePrerequisiteReason(stage)}.`,
+          recoverable: true,
+          metadata: { stage },
+        });
+      }
+    }
+  }
+
   if (input.mode === 'enriched' && input.providers) {
     const providers = input.providers;
-    const descriptionProgress = progress?.startPhase(0.45);
-    descriptions = await runEnrichmentStage({
-      stateStore: input.stateStore,
-      runId: input.context.runId,
-      connectionId: input.connectionId,
-      syncId,
-      mode: input.mode,
-      stage: 'descriptions',
-      inputHash,
-      now,
-      resumedStages: state.resumedStages,
-      completedStages: state.completedStages,
-      failedStages: state.failedStages,
-      compute: () =>
-        generateDescriptions({
-          snapshot,
-          connector: input.connector,
-          context: input.context,
-          providers,
-          inputHash,
-          resumeStore: input.descriptionResumeStore,
-          progress: descriptionProgress,
-          warnings,
-        }),
-    });
-    summary.dataDictionary = input.connector.sampleColumn ? 'completed' : 'skipped';
-    summary.tableDescriptions = 'completed';
-    summary.columnDescriptions = 'completed';
+    if (runsStage('descriptions')) {
+      const descriptionProgress = progress?.startPhase(0.45);
+      descriptions = await runEnrichmentStage({
+        stateStore: input.stateStore,
+        runId: input.context.runId,
+        connectionId: input.connectionId,
+        syncId,
+        mode: input.mode,
+        stage: 'descriptions',
+        inputHash: descriptionsHash,
+        now,
+        forceRecompute: forcesStage('descriptions'),
+        resumedStages: state.resumedStages,
+        completedStages: state.completedStages,
+        failedStages: state.failedStages,
+        compute: () =>
+          generateDescriptions({
+            snapshot,
+            connector: input.connector,
+            context: input.context,
+            providers,
+            inputHash: descriptionsHash,
+            resumeStore: input.descriptionResumeStore,
+            progress: descriptionProgress,
+            warnings,
+          }),
+      });
+      descriptionsRanThisInvocation = true;
+      summary.dataDictionary = input.connector.sampleColumn ? 'completed' : 'skipped';
+      summary.tableDescriptions = 'completed';
+      summary.columnDescriptions = 'completed';
+    }
 
-    const embeddingProgress = progress?.startPhase(0.2);
     const embedding = providers.embedding;
-    if (embedding) {
+    if (embedding && runsStage('embeddings')) {
+      const embeddingProgress = progress?.startPhase(0.2);
+      const embeddingTexts = buildKtxColumnEmbeddingTexts(snapshot, await resolveDownstreamDescriptions());
+      const embeddingsHash = computeKtxEmbeddingsStageHash({
+        snapshot,
+        embeddingIdentity,
+        descriptionDigest: computeKtxScanDescriptionDigest(embeddingTexts.map((item) => item.text)),
+      });
       embeddingUpdates = await runEnrichmentStage({
         stateStore: input.stateStore,
         runId: input.context.runId,
@@ -670,22 +780,21 @@ export async function runLocalScanEnrichment(
         syncId,
         mode: input.mode,
         stage: 'embeddings',
-        inputHash,
+        inputHash: embeddingsHash,
         now,
+        forceRecompute: forcesStage('embeddings'),
         resumedStages: state.resumedStages,
         completedStages: state.completedStages,
         failedStages: state.failedStages,
         compute: async () => {
           const embeddings = await buildEmbeddings({
-            snapshot,
             embedding,
-            descriptions,
+            texts: embeddingTexts,
             progress: embeddingProgress,
           });
           return embeddings.updates;
         },
       });
-      schema = snapshotToKtxEnrichedSchema(snapshot, embeddingsByColumnId(embeddingUpdates));
       summary.embeddings = 'completed';
     }
   }
@@ -717,8 +826,17 @@ export async function runLocalScanEnrichment(
     });
   }
 
-  if (shouldDetectRelationships) {
+  if (shouldDetectRelationships && runsStage('relationships')) {
     const relationshipProgress = progress?.startPhase(0.25);
+    // Relationship detection (incl. llmProposals) runs against the
+    // best-available descriptions + this run's embeddings, so the join-proposal
+    // prompt carries descriptions on both the full-run and relationships-only
+    // paths (D5). Embeddings are this run's only — they are not re-hydrated.
+    const relationshipSchema = snapshotToKtxEnrichedSchema(
+      snapshot,
+      embeddingsByColumnId(embeddingUpdates),
+      await resolveDownstreamDescriptions(),
+    );
     const relationshipStage = await runEnrichmentStage({
       stateStore: input.stateStore,
       runId: input.context.runId,
@@ -726,8 +844,9 @@ export async function runLocalScanEnrichment(
       syncId,
       mode: input.mode,
       stage: 'relationships',
-      inputHash,
+      inputHash: relationshipsHash,
       now,
+      forceRecompute: forcesStage('relationships'),
       resumedStages: state.resumedStages,
       completedStages: state.completedStages,
       failedStages: state.failedStages,
@@ -737,7 +856,7 @@ export async function runLocalScanEnrichment(
           connectionId: input.connectionId,
           dialect,
           connector: input.connector,
-          schema,
+          schema: relationshipSchema,
           context: input.context,
           settings: relationshipSettings,
           llmRuntime: input.providers?.llmRuntime ?? null,
@@ -783,6 +902,43 @@ export async function runLocalScanEnrichment(
         recoverable: true,
         metadata: { reason: relationshipPartial.reason },
       });
+    }
+  }
+
+  // Derived staleness: after a selective run, surface (never silently leave) any
+  // unselected stage whose stored hash no longer matches its current inputs (D4).
+  // The embeddings hash includes the description digest, so a re-describe makes
+  // embeddings diverge here; relationships are deliberately decoupled (D5) and so
+  // never diverge from a description change.
+  if (selectedStages !== undefined && input.stateStore) {
+    const currentStageHash: Record<KtxScanEnrichmentStage, () => Promise<string>> = {
+      descriptions: () => Promise.resolve(descriptionsHash),
+      relationships: () => Promise.resolve(relationshipsHash),
+      embeddings: async () => {
+        const embeddingTexts = buildKtxColumnEmbeddingTexts(snapshot, await resolveDownstreamDescriptions());
+        return computeKtxEmbeddingsStageHash({
+          snapshot,
+          embeddingIdentity,
+          descriptionDigest: computeKtxScanDescriptionDigest(embeddingTexts.map((item) => item.text)),
+        });
+      },
+    };
+    for (const stage of KTX_SCAN_ENRICHMENT_STAGES) {
+      if (selectedStages.includes(stage)) {
+        continue;
+      }
+      const completed = await input.stateStore.findLatestCompletedStage({ connectionId: input.connectionId, stage });
+      if (!completed) {
+        continue;
+      }
+      if (completed.inputHash !== (await currentStageHash[stage]())) {
+        warnings.push({
+          code: 'enrichment_stage_stale',
+          message: `The ${stage} enrichment stage is now stale: its inputs changed since it last ran. Refresh it with \`ktx ingest ${input.connectionId} --stages ${stage}\`.`,
+          recoverable: true,
+          metadata: { stage },
+        });
+      }
     }
   }
 

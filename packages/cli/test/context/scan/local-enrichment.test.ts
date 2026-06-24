@@ -211,6 +211,14 @@ function memoryEnrichmentStateStore(): KtxScanEnrichmentStateStore {
       }
       return record as KtxScanEnrichmentCompletedStage<TOutput>;
     },
+    async findLatestCompletedStage(input) {
+      const matches = [...records.values()].filter(
+        (record): record is KtxScanEnrichmentCompletedStage =>
+          record.status === 'completed' && record.connectionId === input.connectionId && record.stage === input.stage,
+      );
+      matches.sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1));
+      return matches[0] ?? null;
+    },
     async saveCompletedStage(input) {
       records.set(key(input), {
         ...input,
@@ -729,7 +737,8 @@ describe('local scan enrichment', () => {
       providers,
       stateStore,
       syncId: 'sync-resume-1',
-      providerIdentity: { provider: 'fake', embeddingDimensions: 6 },
+      llmIdentity: { model: 'fake', baseUrlConfigured: false },
+      embeddingIdentity: { model: 'fake-embed', dimensions: 6, batchSize: 64 },
     });
 
     const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
@@ -745,7 +754,8 @@ describe('local scan enrichment', () => {
       providers,
       stateStore,
       syncId: 'sync-resume-2',
-      providerIdentity: { provider: 'fake', embeddingDimensions: 6 },
+      llmIdentity: { model: 'fake', baseUrlConfigured: false },
+      embeddingIdentity: { model: 'fake-embed', dimensions: 6, batchSize: 64 },
     });
 
     expect(first.state.completedStages).toEqual(['descriptions', 'embeddings', 'relationships']);
@@ -929,7 +939,8 @@ describe('local scan enrichment', () => {
       providers,
       stateStore,
       syncId: 'sync-resume-hash',
-      providerIdentity: { provider: 'fake', embeddingDimensions: 6 },
+      llmIdentity: { model: 'fake', baseUrlConfigured: false },
+      embeddingIdentity: { model: 'fake-embed', dimensions: 6, batchSize: 64 },
     });
 
     const firstTable = snapshot.tables[0];
@@ -954,7 +965,8 @@ describe('local scan enrichment', () => {
       providers,
       stateStore,
       syncId: 'sync-resume-hash',
-      providerIdentity: { provider: 'fake', embeddingDimensions: 6 },
+      llmIdentity: { model: 'fake', baseUrlConfigured: false },
+      embeddingIdentity: { model: 'fake-embed', dimensions: 6, batchSize: 64 },
     });
 
     expect(result.state.resumedStages).toEqual([]);
@@ -1024,4 +1036,368 @@ describe('local scan enrichment', () => {
     }
   });
 
+  it('merges ai descriptions into the enriched relationship schema', () => {
+    const schema = snapshotToKtxEnrichedSchema(snapshot, new Map(), [
+      {
+        table: { catalog: null, db: 'public', name: 'orders' },
+        tableDescription: 'All customer orders',
+        columnDescriptions: { customer_id: 'FK to the owning customer' },
+      },
+    ]);
+    const orders = schema.tables.find((table) => table.ref.name === 'orders');
+    expect(orders?.descriptions).toMatchObject({ db: 'Customer orders', ai: 'All customer orders' });
+    expect(orders?.columns.find((column) => column.name === 'customer_id')?.descriptions).toMatchObject({
+      db: 'Customer id',
+      ai: 'FK to the owning customer',
+    });
+  });
+
+  it('force-reruns a named stage past the completed-row short-circuit and leaves unselected stages untouched', async () => {
+    const stateStore = memoryEnrichmentStateStore();
+    const scanConnector = connector();
+    const providers = {
+      ...createDeterministicLocalScanEnrichmentProviders(),
+      embedding: fakeScanEmbedding({ dimensions: 6 }),
+    };
+    const identity = {
+      llmIdentity: { model: 'fake', baseUrlConfigured: false },
+      embeddingIdentity: { model: 'fake-embed', dimensions: 6, batchSize: 64 },
+    };
+
+    await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'force-1' },
+      providers,
+      stateStore,
+      syncId: 'force-s1',
+      ...identity,
+    });
+
+    const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
+    const embedBatch = vi.spyOn(providers.embedding, 'embedBatch');
+
+    const rerun = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'force-2' },
+      providers,
+      stateStore,
+      syncId: 'force-s2',
+      stages: ['descriptions'],
+      ...identity,
+    });
+
+    // Only descriptions ran, and it recomputed (not resumed) despite a matching
+    // completed row; embeddings + relationships were left untouched.
+    expect(rerun.state.completedStages).toEqual(['descriptions']);
+    expect(rerun.state.resumedStages).toEqual([]);
+    expect(generateObject).toHaveBeenCalled();
+    expect(embedBatch).not.toHaveBeenCalled();
+  });
+
+  it('naming every stage forces a full recompute rather than a no-op resume', async () => {
+    const stateStore = memoryEnrichmentStateStore();
+    const scanConnector = connector();
+    const providers = {
+      ...createDeterministicLocalScanEnrichmentProviders(),
+      embedding: fakeScanEmbedding({ dimensions: 6 }),
+    };
+    const identity = {
+      llmIdentity: { model: 'fake', baseUrlConfigured: false },
+      embeddingIdentity: { model: 'fake-embed', dimensions: 6, batchSize: 64 },
+    };
+
+    await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'full-1' },
+      providers,
+      stateStore,
+      syncId: 'full-s1',
+      ...identity,
+    });
+
+    const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
+    const embedBatch = vi.spyOn(providers.embedding, 'embedBatch');
+
+    const rerun = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'full-2' },
+      providers,
+      stateStore,
+      syncId: 'full-s2',
+      stages: ['descriptions', 'embeddings', 'relationships'],
+      ...identity,
+    });
+
+    expect(rerun.state.resumedStages).toEqual([]);
+    expect(rerun.state.completedStages).toEqual(['descriptions', 'embeddings', 'relationships']);
+    expect(generateObject).toHaveBeenCalled();
+    expect(embedBatch).toHaveBeenCalled();
+  });
+
+  it('isolates per-stage invalidation: changing the embedding identity re-runs only embeddings', async () => {
+    const stateStore = memoryEnrichmentStateStore();
+    const scanConnector = connector();
+    const providers = {
+      ...createDeterministicLocalScanEnrichmentProviders(),
+      embedding: fakeScanEmbedding({ dimensions: 6 }),
+    };
+    const llmIdentity = { model: 'fake', baseUrlConfigured: false };
+
+    await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'iso-1' },
+      providers,
+      stateStore,
+      syncId: 'iso-s1',
+      llmIdentity,
+      embeddingIdentity: { model: 'embed-v1', dimensions: 6, batchSize: 64 },
+    });
+
+    const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
+    const embedBatch = vi.spyOn(providers.embedding, 'embedBatch');
+
+    const rerun = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'iso-2' },
+      providers,
+      stateStore,
+      syncId: 'iso-s2',
+      llmIdentity,
+      embeddingIdentity: { model: 'embed-v2', dimensions: 6, batchSize: 64 },
+    });
+
+    // Only the embeddings hash moved: descriptions + relationships resume from
+    // cache, embeddings recompute. No LLM description/proposal calls fire.
+    expect(rerun.state.resumedStages).toEqual(['descriptions', 'relationships']);
+    expect(rerun.state.completedStages).toEqual(['descriptions', 'embeddings', 'relationships']);
+    expect(generateObject).not.toHaveBeenCalled();
+    expect(embedBatch).toHaveBeenCalled();
+  });
+
+  it('warns when a selected stage cannot run because its prerequisite is missing', async () => {
+    const result = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: false,
+      connector: connector(),
+      context: { runId: 'prereq-1' },
+      // No embedding provider configured.
+      providers: createDeterministicLocalScanEnrichmentProviders(),
+      stages: ['embeddings'],
+      llmIdentity: { model: 'fake', baseUrlConfigured: false },
+    });
+
+    expect(result.summary.embeddings).toBe('skipped');
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ code: 'enrichment_stage_skipped', metadata: { stage: 'embeddings' } }),
+    );
+  });
+
+  it('feeds on-disk descriptions into the llmProposals prompt on a relationships-only run', async () => {
+    const executor = new InMemorySqliteExecutor();
+    try {
+      executor.db.exec(`
+        CREATE TABLE accounts (id INTEGER NOT NULL);
+        CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+        INSERT INTO accounts (id) VALUES (1), (2);
+        INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+      `);
+      const scanConnector = {
+        ...connector(),
+        driver: 'sqlite' as const,
+        capabilities: createKtxConnectorCapabilities({ readOnlySql: true, columnStats: true }),
+        introspect: vi.fn(async () => noDeclaredRelationshipSnapshot()),
+        executeReadOnly: executor.executeReadOnly.bind(executor),
+      };
+      const providers = createDeterministicLocalScanEnrichmentProviders();
+      const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
+      const onDiskDescriptions: Array<{
+        table: { catalog: null; db: null; name: string };
+        tableDescription: string | null;
+        columnDescriptions: Record<string, string | null>;
+      }> = [
+        {
+          table: { catalog: null, db: null, name: 'orders' },
+          tableDescription: 'Customer purchase orders',
+          columnDescriptions: { id: 'Order identifier', account_id: 'The owning account reference' },
+        },
+        {
+          table: { catalog: null, db: null, name: 'accounts' },
+          tableDescription: 'Account records',
+          columnDescriptions: { id: 'Account identifier' },
+        },
+      ];
+
+      await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'enriched',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'rel-only-hydration' },
+        providers,
+        stages: ['relationships'],
+        llmIdentity: { model: 'fake', baseUrlConfigured: false },
+        loadPriorDescriptions: async () => onDiskDescriptions,
+      });
+
+      // The relationship-proposal prompt (the only generateObject calls on a
+      // relationships-only run) carries the on-disk descriptions, not just names.
+      const prompts = generateObject.mock.calls.map((call) => String((call[0] as { prompt: string }).prompt));
+      expect(prompts.length).toBeGreaterThan(0);
+      expect(prompts.some((prompt) => prompt.includes('The owning account reference'))).toBe(true);
+    } finally {
+      executor.close();
+    }
+  });
+
+  it('resume record still skips already-enriched tables when a forced descriptions rerun re-enters compute', async () => {
+    const stateStore = memoryEnrichmentStateStore();
+    const scanConnector = connector();
+    const providers = createDeterministicLocalScanEnrichmentProviders();
+    const identity = { llmIdentity: { model: 'fake', baseUrlConfigured: false } };
+    const resumeStore = {
+      load: vi.fn(async () => [
+        {
+          table: { catalog: null, db: 'public', name: 'customers' },
+          tableDescription: 'Recovered customers description',
+          columnDescriptions: { id: 'Recovered id' },
+        },
+      ]),
+      flush: vi.fn(async () => {}),
+    };
+
+    // Populate a completed descriptions row so a non-forced run would short-circuit.
+    await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: false,
+      connector: scanConnector,
+      context: { runId: 'resume-force-1' },
+      providers,
+      stateStore,
+      syncId: 'resume-force-s1',
+      ...identity,
+    });
+
+    const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
+    const rerun = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: false,
+      connector: scanConnector,
+      context: { runId: 'resume-force-2' },
+      providers,
+      stateStore,
+      syncId: 'resume-force-s2',
+      stages: ['descriptions'],
+      descriptionResumeStore: resumeStore,
+      ...identity,
+    });
+
+    // Forced compute re-entered, consulted the resume record, recovered
+    // 'customers', and only re-issued the LLM for the un-recovered 'orders'.
+    expect(resumeStore.load).toHaveBeenCalled();
+    expect(generateObject).toHaveBeenCalledTimes(1);
+    expect(rerun.descriptionUpdates.find((update) => update.table.name === 'customers')?.tableDescription).toBe(
+      'Recovered customers description',
+    );
+    expect(rerun.state.resumedStages).toEqual([]);
+  });
+
+  it('flags an unselected stage stale when its inputs changed, names the cascade, and clears after re-running it', async () => {
+    const stateStore = memoryEnrichmentStateStore();
+    const scanConnector = connector();
+    const providers = {
+      ...createDeterministicLocalScanEnrichmentProviders(),
+      embedding: fakeScanEmbedding({ dimensions: 6 }),
+    };
+    const llmIdentity = { model: 'fake', baseUrlConfigured: false };
+    const embeddingV1 = { model: 'embed-v1', dimensions: 6, batchSize: 64 };
+    const embeddingV2 = { model: 'embed-v2', dimensions: 6, batchSize: 64 };
+
+    // Full run captures embeddings + relationships keyed on the v1 embedding model.
+    const full = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'stale-1' },
+      providers,
+      stateStore,
+      syncId: 'stale-s1',
+      llmIdentity,
+      embeddingIdentity: embeddingV1,
+    });
+    // Stand in for the persisted _schema so embeddings-only runs see the same
+    // descriptions the descriptions stage produces (deterministic content).
+    const loadPriorDescriptions = async () => full.descriptionUpdates;
+
+    // The embedding model changed in config, but the operator re-ran only descriptions.
+    const reDescribe = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'stale-2' },
+      providers,
+      stateStore,
+      syncId: 'stale-s2',
+      stages: ['descriptions'],
+      loadPriorDescriptions,
+      llmIdentity,
+      embeddingIdentity: embeddingV2,
+    });
+    const stale = reDescribe.warnings.filter((warning) => warning.code === 'enrichment_stage_stale');
+    expect(stale.map((warning) => warning.metadata?.stage)).toEqual(['embeddings']);
+    expect(stale[0]?.message).toContain('--stages embeddings');
+
+    // Re-embedding on v2 stores the fresh embeddings hash, clearing the staleness.
+    await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'stale-3' },
+      providers,
+      stateStore,
+      syncId: 'stale-s3',
+      stages: ['embeddings'],
+      loadPriorDescriptions,
+      llmIdentity,
+      embeddingIdentity: embeddingV2,
+    });
+    const afterReembed = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: true,
+      connector: scanConnector,
+      context: { runId: 'stale-4' },
+      providers,
+      stateStore,
+      syncId: 'stale-s4',
+      stages: ['descriptions'],
+      loadPriorDescriptions,
+      llmIdentity,
+      embeddingIdentity: embeddingV2,
+    });
+    expect(afterReembed.warnings.filter((warning) => warning.code === 'enrichment_stage_stale')).toEqual([]);
+  });
 });

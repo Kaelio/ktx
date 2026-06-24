@@ -258,6 +258,33 @@ async function loadExistingManifestState(
   return { descriptions, preservedJoins, usage };
 }
 
+/**
+ * Reconstructs the descriptions already persisted in the on-disk `_schema` as
+ * the in-memory `descriptionUpdates` shape, so a stage-selective run that skips
+ * the descriptions stage (e.g. `--stages relationships`/`--stages embeddings`)
+ * can still feed embeddings + relationships the prior AI descriptions. Tables or
+ * columns with no AI description carry `null`.
+ */
+export async function loadOnDiskDescriptionUpdates(
+  project: KtxLocalProject,
+  connectionId: string,
+  snapshot: KtxSchemaSnapshot,
+): Promise<LocalDescriptionUpdates> {
+  const existing = await loadExistingManifestState(project, connectionId, snapshot);
+  return snapshot.tables.map((table) => {
+    const entry = existing.descriptions.get(table.name);
+    const columnDescriptions: Record<string, string | null> = {};
+    for (const column of table.columns) {
+      columnDescriptions[column.name] = entry?.columns.get(column.name)?.ai ?? null;
+    }
+    return {
+      table: { catalog: table.catalog, db: table.db, name: table.name },
+      tableDescription: entry?.table?.ai ?? null,
+      columnDescriptions,
+    };
+  });
+}
+
 // The incremental descriptions resume record. It lives at a stable, NON-syncId
 // path: a from-scratch interruption gets a fresh syncId on the next run, so a
 // syncId-scoped record would be unreachable on resume. The manifest already lives

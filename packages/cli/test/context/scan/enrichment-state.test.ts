@@ -5,11 +5,21 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   completedKtxScanEnrichmentStateSummary,
-  computeKtxScanEnrichmentInputHash,
+  computeKtxDescriptionsStageHash,
+  computeKtxEmbeddingsStageHash,
+  computeKtxRelationshipsStageHash,
+  computeKtxScanDescriptionDigest,
+  type KtxScanEmbeddingIdentity,
+  type KtxScanLlmIdentity,
   summarizeKtxScanEnrichmentState,
 } from '../../../src/context/scan/enrichment-state.js';
 import { SqliteLocalScanEnrichmentStateStore } from '../../../src/context/scan/sqlite-local-enrichment-state-store.js';
+import { buildDefaultKtxProjectConfig } from '../../../src/context/project/config.js';
 import type { KtxSchemaSnapshot } from '../../../src/context/scan/types.js';
+
+const llmIdentity: KtxScanLlmIdentity = { model: 'opus', baseUrlConfigured: false };
+const embeddingIdentity: KtxScanEmbeddingIdentity = { model: 'minilm', dimensions: 384, batchSize: 64 };
+const relationshipSettings = buildDefaultKtxProjectConfig().scan.relationships;
 
 const snapshot: KtxSchemaSnapshot = {
   connectionId: 'warehouse',
@@ -54,28 +64,19 @@ describe('scan enrichment state', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('computes stable input hashes without depending on object key order', () => {
-    const first = computeKtxScanEnrichmentInputHash({
-      snapshot,
-      mode: 'enriched',
-      detectRelationships: true,
-      providerIdentity: { provider: 'local-heuristic', llmModel: 'a' },
-    });
-    const second = computeKtxScanEnrichmentInputHash({
+  it('computes stable per-stage hashes without depending on object key order', () => {
+    const first = computeKtxDescriptionsStageHash({ snapshot, llmIdentity });
+    const second = computeKtxDescriptionsStageHash({
       snapshot: { ...snapshot, metadata: {} },
-      mode: 'enriched',
-      detectRelationships: true,
-      providerIdentity: { llmModel: 'a', provider: 'local-heuristic' },
+      llmIdentity: { baseUrlConfigured: false, model: 'opus' },
     });
     const firstTable = snapshot.tables[0];
     if (!firstTable) {
       throw new Error('Expected test snapshot table');
     }
-    const changed = computeKtxScanEnrichmentInputHash({
+    const changed = computeKtxDescriptionsStageHash({
       snapshot: { ...snapshot, tables: [{ ...firstTable, name: 'orders_v2' }] },
-      mode: 'enriched',
-      detectRelationships: true,
-      providerIdentity: { provider: 'local-heuristic', llmModel: 'a' },
+      llmIdentity,
     });
 
     expect(first).toMatch(/^[a-f0-9]{64}$/);
@@ -83,13 +84,48 @@ describe('scan enrichment state', () => {
     expect(changed).not.toBe(first);
   });
 
+  it('isolates per-stage invalidation: one input changes only its own stage', () => {
+    const descriptionDigest = computeKtxScanDescriptionDigest(['orders.id (integer)']);
+    const descriptions = computeKtxDescriptionsStageHash({ snapshot, llmIdentity });
+    const embeddings = computeKtxEmbeddingsStageHash({ snapshot, embeddingIdentity, descriptionDigest });
+    const relationships = computeKtxRelationshipsStageHash({ snapshot, relationshipSettings, llmIdentity });
+
+    // Switching the description LLM re-keys descriptions + relationships (both
+    // depend on llmIdentity) but NOT embeddings.
+    const otherLlm: KtxScanLlmIdentity = { model: 'sonnet', baseUrlConfigured: false };
+    expect(computeKtxDescriptionsStageHash({ snapshot, llmIdentity: otherLlm })).not.toBe(descriptions);
+    expect(computeKtxRelationshipsStageHash({ snapshot, relationshipSettings, llmIdentity: otherLlm })).not.toBe(
+      relationships,
+    );
+    expect(computeKtxEmbeddingsStageHash({ snapshot, embeddingIdentity, descriptionDigest })).toBe(embeddings);
+
+    // Swapping the embeddings model re-keys only embeddings.
+    const otherEmbedding: KtxScanEmbeddingIdentity = { model: 'mpnet', dimensions: 768, batchSize: 64 };
+    expect(computeKtxEmbeddingsStageHash({ snapshot, embeddingIdentity: otherEmbedding, descriptionDigest })).not.toBe(
+      embeddings,
+    );
+    expect(computeKtxDescriptionsStageHash({ snapshot, llmIdentity })).toBe(descriptions);
+    expect(computeKtxRelationshipsStageHash({ snapshot, relationshipSettings, llmIdentity })).toBe(relationships);
+
+    // A description-content change (new digest) re-keys only embeddings;
+    // relationships are deliberately decoupled from description content (D5).
+    const otherDigest = computeKtxScanDescriptionDigest(['orders.id (integer). A primary key.']);
+    expect(computeKtxEmbeddingsStageHash({ snapshot, embeddingIdentity, descriptionDigest: otherDigest })).not.toBe(
+      embeddings,
+    );
+    expect(computeKtxRelationshipsStageHash({ snapshot, relationshipSettings, llmIdentity })).toBe(relationships);
+
+    // Flipping llmProposals re-keys only relationships.
+    const otherRelationships = { ...relationshipSettings, llmProposals: !relationshipSettings.llmProposals };
+    expect(
+      computeKtxRelationshipsStageHash({ snapshot, relationshipSettings: otherRelationships, llmIdentity }),
+    ).not.toBe(relationships);
+    expect(computeKtxDescriptionsStageHash({ snapshot, llmIdentity })).toBe(descriptions);
+    expect(computeKtxEmbeddingsStageHash({ snapshot, embeddingIdentity, descriptionDigest })).toBe(embeddings);
+  });
+
   it('persists completed stages and ignores stale hashes', async () => {
-    const inputHash = computeKtxScanEnrichmentInputHash({
-      snapshot,
-      mode: 'enriched',
-      detectRelationships: true,
-      providerIdentity: { provider: 'local-heuristic' },
-    });
+    const inputHash = computeKtxDescriptionsStageHash({ snapshot, llmIdentity });
 
     await store.saveCompletedStage({
       runId: 'scan-run-1',
@@ -125,12 +161,7 @@ describe('scan enrichment state', () => {
   });
 
   it('resolves a completed stage across a fresh run id by content identity', async () => {
-    const inputHash = computeKtxScanEnrichmentInputHash({
-      snapshot,
-      mode: 'enriched',
-      detectRelationships: true,
-      providerIdentity: { provider: 'local-heuristic' },
-    });
+    const inputHash = computeKtxDescriptionsStageHash({ snapshot, llmIdentity });
 
     await store.saveCompletedStage({
       runId: 'scan-run-first',

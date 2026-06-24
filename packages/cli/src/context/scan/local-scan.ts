@@ -6,12 +6,16 @@ import { getLocalStageOnlyIngestStatus, type LocalIngestRunRecord, runLocalStage
 import type { SourceAdapter } from '../../context/ingest/types.js';
 import { createLocalKtxLlmRuntimeFromConfig } from '../../context/llm/local-config.js';
 import { KtxScanEmbeddingPortAdapter } from '../../context/llm/embedding-port.js';
-import type { KtxProjectLlmConfig, KtxScanEnrichmentConfig, KtxScanRelationshipConfig } from '../project/config.js';
+import type { KtxProjectLlmConfig, KtxScanEnrichmentConfig } from '../project/config.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { ktxLocalStateDbPath } from '../project/local-state-db.js';
 import { redactKtxScanReport } from './credentials.js';
 import { resolveEnabledTables } from './enabled-tables.js';
-import { completedKtxScanEnrichmentStateSummary } from './enrichment-state.js';
+import {
+  completedKtxScanEnrichmentStateSummary,
+  type KtxScanEmbeddingIdentity,
+  type KtxScanLlmIdentity,
+} from './enrichment-state.js';
 import { failedKtxScanEnrichmentSummary, ktxScanErrorMessage } from './enrichment-summary.js';
 import {
   createDeterministicLocalScanEnrichmentProviders,
@@ -20,6 +24,7 @@ import {
 } from './local-enrichment.js';
 import {
   createKtxScanDescriptionResumeStore,
+  loadOnDiskDescriptionUpdates,
   writeLocalScanEnrichmentArtifacts,
   writeLocalScanEnrichmentCheckpoint,
   writeLocalScanManifestShards,
@@ -30,6 +35,7 @@ import type {
   KtxConnectionDriver,
   KtxProgressPort,
   KtxScanConnector,
+  KtxScanEnrichmentStage,
   KtxScanEnrichmentStateSummary,
   KtxScanMode,
   KtxScanReport,
@@ -73,6 +79,8 @@ export interface RunLocalScanOptions {
   connectionId: string;
   mode?: KtxScanMode;
   detectRelationships?: boolean;
+  /** Enrichment stages to (re)run; omit to run all eligible stages. */
+  stages?: KtxScanEnrichmentStage[];
   dryRun?: boolean;
   trigger?: KtxScanTrigger;
   databaseIntrospectionUrl?: string;
@@ -238,19 +246,18 @@ function createLocalScanEnrichmentStateStore(options: RunLocalScanOptions): Sqli
   return new SqliteLocalScanEnrichmentStateStore({ dbPath: ktxLocalStateDbPath(options.project) });
 }
 
-function localScanProviderIdentity(
-  config: KtxScanEnrichmentConfig,
-  llmConfig: KtxProjectLlmConfig,
-  relationships: KtxScanRelationshipConfig,
-): Record<string, unknown> {
+function localScanLlmIdentity(llmConfig: KtxProjectLlmConfig): KtxScanLlmIdentity {
   return {
-    mode: config.mode,
-    embeddingDimensions: config.embeddings?.dimensions ?? null,
-    llmModel: llmConfig.models.default ?? null,
-    embeddingModel: config.embeddings?.model ?? null,
-    batchSize: config.embeddings?.batchSize ?? null,
+    model: llmConfig.models.default ?? null,
     baseUrlConfigured: Boolean(llmConfig.provider.gateway?.base_url),
-    relationships,
+  };
+}
+
+function localScanEmbeddingIdentity(config: KtxScanEnrichmentConfig): KtxScanEmbeddingIdentity {
+  return {
+    model: config.embeddings?.model ?? null,
+    dimensions: config.embeddings?.dimensions ?? null,
+    batchSize: config.embeddings?.batchSize ?? null,
   };
 }
 
@@ -499,6 +506,7 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
         connectionId: options.connectionId,
         mode,
         detectRelationships: options.detectRelationships,
+        ...(options.stages ? { stages: options.stages } : {}),
         connector,
         ...(enrichmentSnapshot ? { snapshot: enrichmentSnapshot } : {}),
         context: {
@@ -517,11 +525,10 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
               driver,
             }),
         syncId: record.syncId,
-        providerIdentity: localScanProviderIdentity(
-          options.project.config.scan.enrichment,
-          options.project.config.llm,
-          options.project.config.scan.relationships,
-        ),
+        loadPriorDescriptions: (enrichedSnapshot) =>
+          loadOnDiskDescriptionUpdates(options.project, options.connectionId, enrichedSnapshot),
+        llmIdentity: localScanLlmIdentity(options.project.config.llm),
+        embeddingIdentity: localScanEmbeddingIdentity(options.project.config.scan.enrichment),
         relationshipSettings: options.project.config.scan.relationships,
         now: options.now,
         onCheckpoint: async (checkpoint) => {

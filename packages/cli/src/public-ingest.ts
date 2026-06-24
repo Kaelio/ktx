@@ -20,7 +20,7 @@ import {
 import { createAggregateProgressPort } from './progress-port-adapter.js';
 import { resolvePublicIngestRuntimeRequirements } from './runtime-requirements.js';
 import type { KtxScanArgs, KtxScanDeps } from './scan.js';
-import type { KtxTableRef } from './context/scan/types.js';
+import type { KtxScanEnrichmentStage, KtxTableRef } from './context/scan/types.js';
 import { profileMark } from './startup-profile.js';
 import { isDemoConnection } from './telemetry/demo-detect.js';
 import { emitProjectStackSnapshot, emitTelemetryEvent, reportException } from './telemetry/index.js';
@@ -46,6 +46,7 @@ export type KtxPublicIngestArgs =
     queryHistory?: KtxPublicIngestQueryHistoryFlag;
     queryHistoryWindowDays?: number;
     scanMode?: Extract<KtxScanArgs, { command: 'run' }>['mode'];
+    stages?: KtxScanEnrichmentStage[];
     detectRelationships?: boolean;
     cliVersion?: string;
     runtimeInstallPolicy?: KtxManagedPythonInstallPolicy;
@@ -123,6 +124,7 @@ interface KtxPublicContextBuildArgs {
   queryHistory?: KtxPublicIngestQueryHistoryFlag;
   queryHistoryWindowDays?: number;
   scanMode?: Extract<KtxScanArgs, { command: 'run' }>['mode'];
+  stages?: KtxScanEnrichmentStage[];
   detectRelationships?: boolean;
   cliVersion?: string;
   runtimeInstallPolicy?: KtxManagedPythonInstallPolicy;
@@ -973,6 +975,7 @@ async function runIngestTargetSteps(
       mode: 'enriched',
       detectRelationships: target.detectRelationships === true,
       dryRun: false,
+      ...(args.stages ? { stages: args.stages } : {}),
       ...(args.cliVersion ? { cliVersion: args.cliVersion } : {}),
       ...(args.runtimeInstallPolicy ? { runtimeInstallPolicy: args.runtimeInstallPolicy } : {}),
     };
@@ -1152,6 +1155,7 @@ export async function runKtxPublicIngest(
           ...(args.queryHistory ? { queryHistory: args.queryHistory } : {}),
           ...(args.queryHistoryWindowDays !== undefined ? { queryHistoryWindowDays: args.queryHistoryWindowDays } : {}),
           ...(args.scanMode ? { scanMode: args.scanMode } : {}),
+          ...(args.stages ? { stages: args.stages } : {}),
           ...(args.detectRelationships !== undefined ? { detectRelationships: args.detectRelationships } : {}),
           ...(args.cliVersion ? { cliVersion: args.cliVersion } : {}),
           ...(args.runtimeInstallPolicy ? { runtimeInstallPolicy: args.runtimeInstallPolicy } : {}),

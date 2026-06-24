@@ -142,6 +142,31 @@ export class SqliteLocalScanEnrichmentStateStore implements KtxScanEnrichmentSta
     return parsed.status === 'completed' ? parsed : null;
   }
 
+  async findLatestCompletedStage(input: {
+    connectionId: string;
+    stage: KtxScanEnrichmentStage;
+  }): Promise<KtxScanEnrichmentCompletedStage | null> {
+    const row = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM local_scan_enrichment_stages
+        WHERE connection_id = ?
+          AND stage = ?
+          AND status = 'completed'
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `,
+      )
+      .get(input.connectionId, input.stage) as StageRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+    const parsed = parseStageRow(row);
+    return parsed.status === 'completed' ? parsed : null;
+  }
+
   async saveCompletedStage<TOutput = unknown>(
     input: Omit<KtxScanEnrichmentCompletedStage<TOutput>, 'status' | 'errorMessage'>,
   ): Promise<void> {

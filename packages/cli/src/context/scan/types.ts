@@ -385,6 +385,8 @@ type KtxScanWarningCode =
   | 'scan_enrichment_backend_not_configured'
   | 'relationship_validation_failed'
   | 'relationship_detection_partial'
+  | 'enrichment_stage_skipped'
+  | 'enrichment_stage_stale'
   | 'relationship_llm_invalid_reference'
   | 'relationship_llm_proposal_failed'
   | 'credential_redacted'
