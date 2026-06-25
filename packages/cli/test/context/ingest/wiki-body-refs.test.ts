@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { findInvalidWikiBodyRefs, parseWikiBodyRefs } from '../../../src/context/ingest/wiki-body-refs.js';
+import {
+  findInvalidWikiBodyRefIssues,
+  findInvalidWikiBodyRefs,
+  parseWikiBodyRefs,
+} from '../../../src/context/ingest/wiki-body-refs.js';
 
 const sources = [
   {
@@ -31,10 +35,32 @@ describe('wiki body refs', () => {
     ].join('\n');
 
     expect(parseWikiBodyRefs(body)).toEqual([
-      { kind: 'sl_entity', connectionId: null, sourceName: 'mart_account_segments', entityName: 'total_contract_arr' },
-      { kind: 'sl_source', connectionId: null, sourceName: 'mart_account_segments' },
-      { kind: 'sl_entity', connectionId: 'warehouse', sourceName: 'mart_account_segments', entityName: 'segment' },
-      { kind: 'table', connectionId: null, tableRef: 'analytics.mart_account_segments' },
+      {
+        kind: 'sl_entity',
+        connectionId: null,
+        sourceName: 'mart_account_segments',
+        entityName: 'total_contract_arr',
+        rawToken: 'mart_account_segments.total_contract_arr',
+      },
+      {
+        kind: 'sl_source',
+        connectionId: null,
+        sourceName: 'mart_account_segments',
+        rawToken: 'source:mart_account_segments',
+      },
+      {
+        kind: 'sl_entity',
+        connectionId: 'warehouse',
+        sourceName: 'mart_account_segments',
+        entityName: 'segment',
+        rawToken: 'warehouse/mart_account_segments.segment',
+      },
+      {
+        kind: 'table',
+        connectionId: null,
+        tableRef: 'analytics.mart_account_segments',
+        rawToken: 'table:analytics.mart_account_segments',
+      },
     ]);
   });
 
@@ -148,6 +174,43 @@ describe('wiki body refs', () => {
       'account-segments: unknown semantic-layer source missing_source',
       'account-segments: unknown semantic-layer source warehouse/missing_source',
       'account-segments: unknown raw table analytics.missing_table',
+    ]);
+  });
+
+  it('returns structured body ref issues with raw tokens', async () => {
+    const issues = await findInvalidWikiBodyRefIssues({
+      pageKey: 'revenue',
+      body: '`orders.missing_measure`\n`source:missing_source`\n`table:analytics.missing_table`',
+      visibleConnectionIds: ['warehouse'],
+      loadSources: async () => [
+        { name: 'orders', columns: [{ name: 'id', type: 'number' }], measures: [], segments: [], joins: [] },
+      ] as never,
+      tableExists: async () => false,
+    });
+
+    expect(issues).toEqual([
+      {
+        kind: 'missing_wiki_body_sl_entity',
+        pageKey: 'revenue',
+        rawToken: 'orders.missing_measure',
+        sourceName: 'orders',
+        entityName: 'missing_measure',
+        message: 'revenue: unknown semantic-layer entity orders.missing_measure',
+      },
+      {
+        kind: 'missing_wiki_body_sl_source',
+        pageKey: 'revenue',
+        rawToken: 'source:missing_source',
+        sourceName: 'missing_source',
+        message: 'revenue: unknown semantic-layer source missing_source',
+      },
+      {
+        kind: 'missing_wiki_body_table',
+        pageKey: 'revenue',
+        rawToken: 'table:analytics.missing_table',
+        tableRef: 'analytics.missing_table',
+        message: 'revenue: unknown raw table analytics.missing_table',
+      },
     ]);
   });
 });

@@ -19,7 +19,11 @@ import type { KnowledgeWikiService } from '../../context/wiki/knowledge-wiki.ser
 import { findDanglingWikiRefsForActions } from '../wiki/wiki-ref-validation.js';
 import { actionTargetConnectionId } from './action-identity.js';
 import { NOTION_DEFAULT_MAX_KNOWLEDGE_CREATES_PER_RUN } from './adapters/notion/types.js';
-import { validateFinalIngestArtifacts, validateProvenanceRawPaths } from './artifact-gates.js';
+import {
+  formatFinalArtifactGateFindings,
+  validateFinalIngestArtifacts,
+  validateProvenanceRawPaths,
+} from './artifact-gates.js';
 import { selectRelevantCanonicalPins } from './canonical-pins.js';
 import { finalGateRepairPaths, repairFinalGateFailure } from './final-gate-repair.js';
 import {
@@ -1938,7 +1942,7 @@ export class IngestBundleRunner {
               slDisallowed: wu.slDisallowed === true,
               allowedTargetConnectionIds: new Set(slConnectionIds),
               validateAppliedTree: async (touchedPaths) => {
-                await validateFinalIngestArtifacts({
+                const gate = await validateFinalIngestArtifacts({
                   connectionIds: slConnectionIds,
                   changedWikiPageKeys: this.wikiPageKeysFromPaths(touchedPaths),
                   touchedSlSources: await this.touchedSlSourcesFromPaths(
@@ -1968,6 +1972,9 @@ export class IngestBundleRunner {
                       tableRef,
                     ),
                 });
+                if (!gate.ok) {
+                  throw new Error(formatFinalArtifactGateFindings(gate.findings));
+                }
               },
               resolveTextualConflict: async (context) => {
                 emitStageProgress('integration', 81, `Resolving text conflict for ${context.unitKey}`);
@@ -2746,7 +2753,7 @@ export class IngestBundleRunner {
       activeFailureDetails = finalArtifactGateTraceData;
       emitStageProgress('final_gates', 89, 'Running final artifact gates');
       const runFinalArtifactGates = async () => {
-        await validateFinalIngestArtifacts({
+        const gate = await validateFinalIngestArtifacts({
           connectionIds: repairConnectionIds,
           changedWikiPageKeys: finalChangedWikiPageKeys,
           touchedSlSources: finalTouchedSlSources,
@@ -2772,6 +2779,9 @@ export class IngestBundleRunner {
               tableRef,
             ),
         });
+        if (!gate.ok) {
+          throw new Error(formatFinalArtifactGateFindings(gate.findings));
+        }
       };
       try {
         await traceTimed(
