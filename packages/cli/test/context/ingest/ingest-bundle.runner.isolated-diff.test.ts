@@ -714,6 +714,104 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
+  it('recomputes a stale cached patch and reports recomputed metadata', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [{ unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] }],
+      });
+      let currentSession: any = null;
+      let agentAttempt = 0;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        return {
+          toRuntimeTools: vi.fn(() => {
+            currentSession = toolSession;
+            return {};
+          }),
+        };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        agentAttempt += 1;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        const detail = agentAttempt === 1 ? 'cached first output' : 'fresh recompute output';
+        const body = agentAttempt === 1 ? 'orders cached' : 'orders recomputed';
+        await writeFile(
+          join(root, 'wiki/global/orders.md'),
+          `---\nsummary: orders\nusage_mode: auto\n---\n\n${body}\n`,
+          'utf-8',
+        );
+        currentSession.actions.push({
+          target: 'wiki',
+          type: agentAttempt === 1 ? 'created' : 'updated',
+          key: 'orders',
+          detail,
+        });
+        await currentSession.gitService.commitFiles(
+          ['wiki/global/orders.md'],
+          `wu orders ${agentAttempt}`,
+          'ktx Test',
+          'system@ktx.local',
+        );
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [['models/orders.sql', 'orders-hash']], 'dbt');
+
+      await expect(
+        runner.run({
+          jobId: 'job-stale-cache-1',
+          connectionId: 'warehouse',
+          sourceKey: 'dbt',
+          trigger: 'upload',
+          bundleRef: { kind: 'upload', uploadId: 'upload' },
+        }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(1);
+
+      await writeFile(
+        join(runtime.configDir, 'wiki/global/orders.md'),
+        '---\nsummary: orders\nusage_mode: auto\n---\n\noperator drift\n',
+        'utf-8',
+      );
+      await runtime.git.commitFiles(['wiki/global/orders.md'], 'manual drift', 'ktx Test', 'system@ktx.local');
+
+      await expect(
+        runner.run({
+          jobId: 'job-stale-cache-2',
+          connectionId: 'warehouse',
+          sourceKey: 'dbt',
+          trigger: 'upload',
+          bundleRef: { kind: 'upload', uploadId: 'upload' },
+        }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
+      await expect(readFile(join(runtime.configDir, 'wiki/global/orders.md'), 'utf-8')).resolves.toContain(
+        'orders recomputed',
+      );
+
+      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-stale-cache-2/trace.jsonl'), 'utf-8');
+      expect(trace).toContain('work_unit_cache_hit');
+      expect(trace).toContain('work_unit_cache_stale_recompute');
+
+      const reportCreate = vi.mocked(deps.reports.create).mock.calls.at(-1)?.[0] as any;
+      expect(reportCreate.body.workUnits).toContainEqual(
+        expect.objectContaining({
+          unitKey: 'orders',
+          actions: [expect.objectContaining({ type: 'updated', detail: 'fresh recompute output' })],
+        }),
+      );
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
   it.each(['notion', 'lookml', 'looker', 'dbt', 'metricflow'] as const)(
     'routes %s direct writes through isolated child worktrees',
     async (sourceKey) => {
