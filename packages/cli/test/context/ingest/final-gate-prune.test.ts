@@ -1,8 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { KtxFileStorePort } from '../../../src/context/core/file-store.js';
 import { pruneFinalGateFindings } from '../../../src/context/ingest/final-gate-prune.js';
+import { slSourceFilePath } from '../../../src/context/sl/source-files.js';
 import { KnowledgeWikiService } from '../../../src/context/wiki/knowledge-wiki.service.js';
 
 describe('final gate prune', () => {
@@ -18,6 +20,54 @@ describe('final gate prune', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  function tempFileStore(): KtxFileStorePort {
+    const absolute = (path: string) => join(tempDir, path);
+    const walk = async (root: string): Promise<string[]> => {
+      const { readdir, stat } = await import('node:fs/promises');
+      const entries = await readdir(root).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') {
+          return [];
+        }
+        throw error;
+      });
+      const files: string[] = [];
+      for (const entry of entries) {
+        const path = join(root, entry);
+        const info = await stat(path);
+        if (info.isDirectory()) {
+          files.push(...(await walk(path)));
+        } else {
+          files.push(path);
+        }
+      }
+      return files;
+    };
+
+    return {
+      writeFile: async (path, content) => {
+        await mkdir(dirname(absolute(path)), { recursive: true });
+        await writeFile(absolute(path), content, 'utf-8');
+        return { success: true, commitHash: null, path };
+      },
+      readFile: async (path) => ({ content: await readFile(absolute(path), 'utf-8') }),
+      deleteFile: async (path) => {
+        await unlink(absolute(path)).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') {
+            throw error;
+          }
+        });
+        return { success: true, commitHash: null, path };
+      },
+      listFiles: async (path) => {
+        const root = absolute(path);
+        const files = await walk(root);
+        return { files: files.map((file) => file.slice(tempDir.length + 1).replaceAll('\\', '/')).sort() };
+      },
+      getFileHistory: vi.fn(),
+      forWorktree: vi.fn(),
+    };
+  }
+
   it('drops invalid sources and prunes dangling joins from surviving sources', async () => {
     await writeFile(
       join(tempDir, 'semantic-layer/warehouse/orders.yaml'),
@@ -32,6 +82,7 @@ describe('final gate prune', () => {
 
     const result = await pruneFinalGateFindings({
       workdir: tempDir,
+      semanticLayerFiles: tempFileStore(),
       findings: [
         { kind: 'invalid_source', connectionId: 'warehouse', sourceName: 'bad', errors: ['dry run failed'] },
         {
@@ -64,6 +115,70 @@ describe('final gate prune', () => {
     ]);
   });
 
+  it('resolves semantic-layer source files by declared source name before pruning or dropping', async () => {
+    const ordersPath = slSourceFilePath('warehouse', 'ORDERS');
+    const customersPath = slSourceFilePath('warehouse', 'CUSTOMERS');
+    await mkdir(dirname(join(tempDir, ordersPath)), { recursive: true });
+    await writeFile(
+      join(tempDir, ordersPath),
+      [
+        'name: ORDERS',
+        'grain: [ORDER_ID]',
+        'columns: [{name: ORDER_ID, type: number}, {name: CUSTOMER_ID, type: number}]',
+        'joins:',
+        '  - to: CUSTOMERS',
+        '    on: ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID',
+        'measures: []',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    await writeFile(
+      join(tempDir, customersPath),
+      'name: CUSTOMERS\ngrain: [CUSTOMER_ID]\ncolumns: [{name: CUSTOMER_ID, type: number}]\njoins: []\nmeasures: []\n',
+      'utf-8',
+    );
+
+    const result = await pruneFinalGateFindings({
+      workdir: tempDir,
+      semanticLayerFiles: tempFileStore(),
+      findings: [
+        {
+          kind: 'invalid_source',
+          connectionId: 'warehouse',
+          sourceName: 'CUSTOMERS',
+          errors: ['dry run failed'],
+        },
+        {
+          kind: 'missing_join_target',
+          ownerConnectionId: 'warehouse',
+          ownerSourceName: 'ORDERS',
+          targetSourceName: 'CUSTOMERS',
+          message: 'join target "CUSTOMERS" does not exist',
+        },
+      ],
+      droppedSources: [],
+      trace: { event: vi.fn() } as never,
+      author: { name: 'ktx Test', email: 'system@ktx.local' },
+    });
+
+    await expect(readFile(join(tempDir, customersPath), 'utf-8')).rejects.toThrow();
+    await expect(readFile(join(tempDir, ordersPath), 'utf-8')).resolves.not.toContain('to: CUSTOMERS');
+    await expect(readFile(join(tempDir, 'semantic-layer/warehouse/CUSTOMERS.yaml'), 'utf-8')).rejects.toThrow();
+    await expect(readFile(join(tempDir, 'semantic-layer/warehouse/ORDERS.yaml'), 'utf-8')).rejects.toThrow();
+    expect(result.droppedSources).toEqual([
+      { connectionId: 'warehouse', sourceName: 'CUSTOMERS', reason: 'dry run failed' },
+    ]);
+    expect(result.prunedReferences).toEqual([
+      {
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/ORDERS',
+        removedRef: 'CUSTOMERS',
+        absentTarget: 'CUSTOMERS',
+      },
+    ]);
+  });
+
   it('prunes wiki refs, wiki sl_refs, and body ref tokens from owning pages', async () => {
     await writeFile(
       join(tempDir, 'wiki/global/revenue.md'),
@@ -88,6 +203,7 @@ describe('final gate prune', () => {
 
     const result = await pruneFinalGateFindings({
       workdir: tempDir,
+      semanticLayerFiles: tempFileStore(),
       findings: [
         { kind: 'missing_wiki_ref', pageKey: 'revenue', targetPageKey: 'missing-page', message: 'revenue -> missing-page' },
         {
