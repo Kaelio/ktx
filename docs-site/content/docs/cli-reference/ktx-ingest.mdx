@@ -180,6 +180,21 @@ notion         skipped          skipped        done           done
 Use `--json` when a script or agent needs the selected plan and per-target
 results.
 
+## Final validation pruning
+
+At the end of a context-source ingest, **ktx** validates the composed semantic
+layer and wiki before saving it. If the final validation finds dangling
+references, **ktx** removes the reference instead of failing accepted work. This
+can remove joins that point at missing semantic sources, wiki `refs`, wiki
+`sl_refs`, and inline wiki body references. If a generated semantic source is
+invalid, **ktx** drops that source from the final save.
+
+The stored ingest report records these changes as `finalGatePrunedReferences`
+and `finalGateDroppedSources`. The trace emits `final_gate_reference_pruned`,
+`final_gate_source_dropped`, `final_gate_prune_committed`, and
+`final_gate_prune_finished` events when pruning runs. If validation still fails
+after pruning, the ingest fails and the report keeps the final validation error.
+
 ## Inspect context-source ingest traces
 
 Context-source ingest writes persistent JSONL traces for postmortem debugging.
