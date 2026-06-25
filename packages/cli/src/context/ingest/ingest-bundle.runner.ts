@@ -2828,6 +2828,7 @@ export class IngestBundleRunner {
         emitStageProgress('final_gates', 89, 'Pruning final artifact gates');
         const firstPrune = await pruneFinalGateFindings({
           workdir: sessionWorktree.workdir,
+          semanticLayerFiles: sessionWorktree.config,
           findings: firstGate.findings,
           droppedSources: [],
           trace: runTrace,
@@ -2846,6 +2847,7 @@ export class IngestBundleRunner {
         if (!secondGate.ok) {
           const secondPrune = await pruneFinalGateFindings({
             workdir: sessionWorktree.workdir,
+            semanticLayerFiles: sessionWorktree.config,
             findings: secondGate.findings.filter((finding) => finding.kind !== 'invalid_source'),
             droppedSources: finalGateDroppedSources,
             trace: runTrace,

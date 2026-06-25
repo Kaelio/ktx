@@ -1,11 +1,17 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import YAML from 'yaml';
+import type { KtxFileStorePort } from '../core/file-store.js';
+import { resolveSlSourceFile } from '../sl/source-files.js';
 import type { KnowledgeWikiService } from '../wiki/knowledge-wiki.service.js';
 import type { FinalArtifactGateFinding } from './artifact-gates.js';
 import type { IngestTraceWriter } from './ingest-trace.js';
 
 type FinalGatePrunedReferenceKind = 'join' | 'wiki_ref' | 'wiki_sl_ref' | 'wiki_body_ref';
+type SemanticLayerFileStore = Pick<KtxFileStorePort, 'readFile' | 'writeFile' | 'deleteFile' | 'listFiles'>;
+
+interface ResolvedYamlSource {
+  path: string;
+  source: Record<string, unknown>;
+}
 
 export interface FinalGatePrunedReference {
   kind: FinalGatePrunedReferenceKind;
@@ -27,6 +33,7 @@ export interface FinalGatePruneResult {
 
 interface PruneInput {
   workdir: string;
+  semanticLayerFiles: SemanticLayerFileStore;
   findings: FinalArtifactGateFinding[];
   droppedSources: FinalGateDroppedSource[];
   trace: IngestTraceWriter;
@@ -34,38 +41,35 @@ interface PruneInput {
   wikiService?: KnowledgeWikiService;
 }
 
-function sourcePath(connectionId: string, sourceName: string): string {
-  return `semantic-layer/${connectionId}/${sourceName}.yaml`;
-}
-
-async function readYamlSource(
-  workdir: string,
+async function resolveYamlSource(
+  fileStore: SemanticLayerFileStore,
   connectionId: string,
   sourceName: string,
-): Promise<Record<string, unknown> | null> {
-  try {
-    return YAML.parse(await readFile(join(workdir, sourcePath(connectionId, sourceName)), 'utf-8')) as Record<
-      string,
-      unknown
-    >;
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-      return null;
-    }
-    throw error;
+): Promise<ResolvedYamlSource | null> {
+  const file = await resolveSlSourceFile(fileStore, connectionId, sourceName);
+  if (!file) {
+    return null;
   }
+  const parsed = YAML.parse(file.content);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${file.path}: expected semantic-layer source YAML object`);
+  }
+  return { path: file.path, source: parsed as Record<string, unknown> };
 }
 
-async function writeYamlSource(
-  workdir: string,
-  connectionId: string,
-  sourceName: string,
-  source: Record<string, unknown>,
-): Promise<void> {
-  await writeFile(
-    join(workdir, sourcePath(connectionId, sourceName)),
-    YAML.stringify(source, { indent: 2, lineWidth: 0, version: '1.1' }),
-    'utf-8',
+async function writeYamlSource(input: {
+  fileStore: SemanticLayerFileStore;
+  path: string;
+  source: Record<string, unknown>;
+  author: { name: string; email: string };
+}): Promise<void> {
+  await input.fileStore.writeFile(
+    input.path,
+    YAML.stringify(input.source, { indent: 2, lineWidth: 0, version: '1.1' }),
+    input.author.name,
+    input.author.email,
+    `Prune dangling joins from ${input.path}`,
+    { skipLock: true },
   );
 }
 
@@ -108,7 +112,20 @@ export async function pruneFinalGateFindings(input: PruneInput): Promise<FinalGa
     if (droppedKey.has(key)) {
       continue;
     }
-    await rm(join(input.workdir, sourcePath(finding.connectionId, finding.sourceName)), { force: true });
+    const file = await resolveSlSourceFile(input.semanticLayerFiles, finding.connectionId, finding.sourceName);
+    if (!file) {
+      continue;
+    }
+    const deleted = await input.semanticLayerFiles.deleteFile(
+      file.path,
+      input.author.name,
+      input.author.email,
+      `Drop invalid source ${finding.connectionId}:${finding.sourceName}`,
+      { skipLock: true },
+    );
+    if (!deleted) {
+      continue;
+    }
     const dropped = {
       connectionId: finding.connectionId,
       sourceName: finding.sourceName,
@@ -123,18 +140,27 @@ export async function pruneFinalGateFindings(input: PruneInput): Promise<FinalGa
     if (finding.kind !== 'missing_join_target') {
       continue;
     }
-    const source = await readYamlSource(input.workdir, finding.ownerConnectionId, finding.ownerSourceName);
-    if (!source || !Array.isArray(source.joins)) {
+    const resolved = await resolveYamlSource(
+      input.semanticLayerFiles,
+      finding.ownerConnectionId,
+      finding.ownerSourceName,
+    );
+    if (!resolved || !Array.isArray(resolved.source.joins)) {
       continue;
     }
-    const nextJoins = source.joins.filter(
+    const nextJoins = resolved.source.joins.filter(
       (entry) => !(entry && typeof entry === 'object' && 'to' in entry && entry.to === finding.targetSourceName),
     );
-    if (nextJoins.length === source.joins.length) {
+    if (nextJoins.length === resolved.source.joins.length) {
       continue;
     }
-    source.joins = nextJoins;
-    await writeYamlSource(input.workdir, finding.ownerConnectionId, finding.ownerSourceName, source);
+    resolved.source.joins = nextJoins;
+    await writeYamlSource({
+      fileStore: input.semanticLayerFiles,
+      path: resolved.path,
+      source: resolved.source,
+      author: input.author,
+    });
     const record = {
       kind: 'join' as const,
       artifact: `semantic-layer/${finding.ownerConnectionId}/${finding.ownerSourceName}`,
