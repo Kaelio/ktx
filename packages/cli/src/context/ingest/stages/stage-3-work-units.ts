@@ -3,7 +3,11 @@ import { isAbortError } from '../../core/abort.js';
 import type { AgentRunnerPort, KtxRuntimeToolSet, RunLoopMetrics } from '../../../context/llm/runtime-port.js';
 import type { CaptureSession, MemoryAction } from '../../../context/memory/types.js';
 import { listTouchedSlSources, type TouchedSlSource } from '../../../context/tools/touched-sl-sources.js';
-import { formatInvalidWuSources, type WuValidationResult } from './validate-wu-sources.js';
+import {
+  formatInvalidWuSources,
+  hasBlockingWuSourceIssue,
+  type WuValidationResult,
+} from './validate-wu-sources.js';
 import type { WorkUnit } from '../types.js';
 
 const MAX_WORK_UNIT_PROMPT_CHARS = 240_000;
@@ -140,19 +144,14 @@ export async function executeWorkUnit(deps: WorkUnitExecutionDeps, wu: WorkUnit)
     return failWithReset(`${toolFailureCount} tool call(s) failed during WorkUnit ${wu.unitKey}`);
   }
 
-  const danglingWikiRefs = (await deps.validateWikiRefs?.(deps.sessionActions)) ?? [];
-  if (danglingWikiRefs.length > 0) {
-    return failWithReset(`wiki references target missing page(s): ${danglingWikiRefs.join(', ')}`);
-  }
+  await deps.validateWikiRefs?.(deps.sessionActions);
 
   const touched = listTouchedSlSources(deps.captureSession.touchedSlSources);
   if (touched.length > 0) {
     const validation = await deps.validateTouchedSources(touched);
-    if (validation.invalidSources.length > 0) {
-      // Spec: invalid SL writes reset the session worktree to the WU's pre-state, WU is marked failed,
-      // its files are absent from the Stage Index. Per-source surgical revert is the
-      // memory-agent pattern — NOT the bundle-ingest pattern.
-      return failWithReset(`sl_validate failed for: ${formatInvalidWuSources(validation.invalidSources)}`);
+    const blockingInvalidSources = validation.invalidSources.filter(hasBlockingWuSourceIssue);
+    if (blockingInvalidSources.length > 0) {
+      return failWithReset(`sl_validate failed for: ${formatInvalidWuSources(blockingInvalidSources)}`);
     }
   }
 

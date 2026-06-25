@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
 import { GitService } from '../../../src/context/core/git.service.js';
 import { SessionWorktreeService } from '../../../src/context/core/session-worktree.service.js';
@@ -47,26 +48,30 @@ function rootOfConfig(configService: unknown, fallback: string): string {
   return typeof rootDir === 'string' ? rootDir : fallback;
 }
 
-async function loadSourcesFromRoot(root: string) {
-  const raw = await readFile(join(root, 'semantic-layer/warehouse/mart_account_segments.yaml'), 'utf-8').catch(
-    () => '',
+async function loadSourcesFromRoot(root: string, connectionId = 'warehouse') {
+  const dir = join(root, 'semantic-layer', connectionId);
+  const entries = await readdir(dir).catch(() => []);
+  const sources = await Promise.all(
+    entries
+      .filter((entry) => entry.endsWith('.yaml') || entry.endsWith('.yml'))
+      .sort()
+      .map(async (entry) => {
+        const parsed = YAML.parse(await readFile(join(dir, entry), 'utf-8')) as Record<string, unknown> | null;
+        return parsed && typeof parsed.name === 'string'
+          ? {
+              name: parsed.name,
+              grain: Array.isArray(parsed.grain) ? parsed.grain : [],
+              columns: Array.isArray(parsed.columns) ? parsed.columns : [],
+              joins: Array.isArray(parsed.joins) ? parsed.joins : [],
+              measures: Array.isArray(parsed.measures) ? parsed.measures : [],
+              segments: Array.isArray(parsed.segments) ? parsed.segments : [],
+              table: parsed.table,
+            }
+          : null;
+      }),
   );
-  const hasCents = raw.includes('total_contract_arr_cents');
-  const hasDollars = raw.includes('total_contract_arr');
   return {
-    sources:
-      hasCents || hasDollars
-        ? [
-            {
-              name: 'mart_account_segments',
-              grain: ['account_id'],
-              columns: [{ name: 'account_id', type: 'string' }],
-              joins: [],
-              measures: [{ name: hasCents ? 'total_contract_arr_cents' : 'total_contract_arr', expr: 'sum(contract_arr)' }],
-              table: 'analytics.mart_account_segments',
-            },
-          ]
-        : [],
+    sources: sources.filter((source): source is NonNullable<typeof source> => source !== null),
     loadErrors: [],
   };
 }
@@ -186,7 +191,7 @@ function makeDeps(
   };
   const wikiService = makeWikiService(runtime.configDir);
   const semanticLayerService: any = {
-    loadAllSources: vi.fn(async () => loadSourcesFromRoot(runtime.configDir)),
+    loadAllSources: vi.fn(async (connectionId: string) => loadSourcesFromRoot(runtime.configDir, connectionId)),
     listFilesForConnection: vi.fn().mockResolvedValue(['mart_account_segments.yaml']),
     readSourceFile: vi.fn((connectionId: string, sourceName: string) =>
       readSourceFileFromRoot(runtime.configDir, connectionId, sourceName),
@@ -194,7 +199,7 @@ function makeDeps(
   };
   semanticLayerService.forWorktree = vi.fn((workdir: string) => ({
     ...semanticLayerService,
-    loadAllSources: vi.fn(async () => loadSourcesFromRoot(workdir)),
+    loadAllSources: vi.fn(async (connectionId: string) => loadSourcesFromRoot(workdir, connectionId)),
     listFilesForConnection: vi.fn().mockResolvedValue(['mart_account_segments.yaml']),
     readSourceFile: vi.fn((connectionId: string, sourceName: string) =>
       readSourceFileFromRoot(workdir, connectionId, sourceName),

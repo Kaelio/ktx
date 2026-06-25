@@ -21,6 +21,7 @@ import { actionTargetConnectionId } from './action-identity.js';
 import { NOTION_DEFAULT_MAX_KNOWLEDGE_CREATES_PER_RUN } from './adapters/notion/types.js';
 import {
   formatFinalArtifactGateFindings,
+  isFinalArtifactGateFindingPruneable,
   validateFinalIngestArtifacts,
   validateProvenanceRawPaths,
 } from './artifact-gates.js';
@@ -1979,7 +1980,14 @@ export class IngestBundleRunner {
                     ),
                 });
                 if (!gate.ok) {
-                  throw new Error(formatFinalArtifactGateFindings(gate.findings));
+                  const blocking = gate.findings.filter((finding) => !isFinalArtifactGateFindingPruneable(finding));
+                  if (blocking.length > 0) {
+                    throw new Error(formatFinalArtifactGateFindings(blocking));
+                  }
+                  await runTrace.event('debug', 'integration', 'patch_semantic_gate_deferred_to_final_prune', {
+                    unitKey: outcomeForIntegration.unitKey,
+                    findings: gate.findings,
+                  });
                 }
               },
               resolveTextualConflict: async (context) => {
@@ -2635,6 +2643,22 @@ export class IngestBundleRunner {
           ...finalizationTouchedSources.map((source) => source.connectionId),
         ]),
       ].sort();
+      const preWikiSlRefRepairSha = await sessionWorktree.git.revParseHead();
+      const preWikiSlRefRepairPaths =
+        preReconciliationSha && preWikiSlRefRepairSha && preReconciliationSha !== preWikiSlRefRepairSha
+          ? (await sessionWorktree.git.diffNameStatus(preReconciliationSha, preWikiSlRefRepairSha)).map(
+              (entry) => entry.path,
+            )
+          : [];
+      const wikiPageKeysForFinalPrune = this.uniqueWikiPageKeys([
+        ...(isolatedDiffEnabled ? projectionChangedWikiPageKeys : []),
+        ...workUnitOutcomes
+          .flatMap((outcome) => outcome.patchTouchedPaths ?? [])
+          .flatMap((path) => this.wikiPageKeysFromPaths([path])),
+        ...this.wikiPageKeysFromActions(reconcileActions),
+        ...finalizationChangedWikiPageKeys,
+        ...preWikiSlRefRepairPaths.flatMap((path) => this.wikiPageKeysFromPaths([path])),
+      ]);
       activePhase = 'wiki_sl_ref_repair';
       emitStageProgress('wiki_sl_ref_repair', 88, 'Repairing wiki semantic-layer references');
       wikiSlRefRepairResult = await traceTimed(
@@ -2648,6 +2672,7 @@ export class IngestBundleRunner {
             semanticLayerService: this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
             configService: sessionWorktree.config,
             connectionIds: repairConnectionIds,
+            deferGlobalPageKeys: wikiPageKeysForFinalPrune,
           }),
       );
       await runTrace.event('debug', 'wiki_sl_ref_repair', 'wiki_sl_refs_repaired', {

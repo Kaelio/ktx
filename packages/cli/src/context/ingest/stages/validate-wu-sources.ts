@@ -23,6 +23,16 @@ export function formatInvalidWuSources(invalid: InvalidWuSource[]): string {
   return invalid.map((entry) => `${entry.source} (${entry.errors.join('; ')})`).join(', ');
 }
 
+export function hasBlockingWuSourceIssue(source: InvalidWuSource): boolean {
+  const issues =
+    source.issues ??
+    source.errors.map((message) => ({
+      kind: 'source_validation' as const,
+      message,
+    }));
+  return issues.some((issue) => issue.kind === 'source_validation');
+}
+
 type LoadedSource = Awaited<ReturnType<SlValidationDeps['semanticLayerService']['loadAllSources']>>['sources'][number];
 
 function uniqueTouchedSources(sources: TouchedSlSource[]): TouchedSlSource[] {

@@ -150,6 +150,23 @@ export function formatFinalArtifactGateFindings(findings: FinalArtifactGateFindi
   return `final artifact gates failed:\n${errors.join('\n')}`;
 }
 
+export function isFinalArtifactGateFindingPruneable(finding: FinalArtifactGateFinding): boolean {
+  switch (finding.kind) {
+    case 'invalid_source':
+    case 'missing_join_target':
+    case 'missing_wiki_ref':
+    case 'missing_wiki_sl_ref':
+    case 'missing_wiki_body_sl_entity':
+    case 'missing_wiki_body_sl_source':
+    case 'missing_wiki_body_table':
+      return true;
+    default: {
+      const exhaustive: never = finding;
+      return exhaustive;
+    }
+  }
+}
+
 export async function validateFinalIngestArtifacts(input: FinalArtifactGateInput): Promise<FinalArtifactGateResult> {
   // Join-neighbor expansion happens inside validateTouchedSources so work-unit
   // validation and this gate check the same set — a source that passes one
