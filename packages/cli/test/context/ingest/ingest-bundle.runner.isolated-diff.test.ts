@@ -714,6 +714,149 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
+  it('prunes a missing sibling join, then self-heals from the cached owner patch without rerunning it', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+
+      let currentSession: any = null;
+      let customersAttempt = 0;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'semantic-layer/warehouse'), { recursive: true });
+        if (unitKey === 'orders') {
+          await writeFile(
+            join(root, 'semantic-layer/warehouse/orders.yaml'),
+            [
+              'name: orders',
+              'grain: [order_id]',
+              'columns: [{name: order_id, type: string}, {name: customer_id, type: string}]',
+              'joins:',
+              '  - to: customers',
+              '    on: orders.customer_id = customers.customer_id',
+              'measures: []',
+              '',
+            ].join('\n'),
+            'utf-8',
+          );
+          addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'orders');
+          currentSession.actions.push({
+            target: 'sl',
+            type: 'created',
+            key: 'orders',
+            detail: 'orders with customer join',
+            targetConnectionId: 'warehouse',
+            rawPaths: ['models/orders.sql'],
+          });
+          await currentSession.gitService.commitFiles(
+            ['semantic-layer/warehouse/orders.yaml'],
+            'wu orders',
+            'ktx Test',
+            'system@ktx.local',
+          );
+          return { stopReason: 'natural' };
+        }
+
+        customersAttempt += 1;
+        if (customersAttempt === 1) {
+          return { stopReason: 'error', error: new Error('provider disconnected') };
+        }
+        await writeFile(
+          join(root, 'semantic-layer/warehouse/customers.yaml'),
+          'name: customers\ngrain: [customer_id]\ncolumns: [{name: customer_id, type: string}]\njoins: []\nmeasures: []\n',
+          'utf-8',
+        );
+        addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'customers');
+        currentSession.actions.push({
+          target: 'sl',
+          type: 'created',
+          key: 'customers',
+          detail: 'customers source',
+          targetConnectionId: 'warehouse',
+          rawPaths: ['models/customers.sql'],
+        });
+        await currentSession.gitService.commitFiles(
+          ['semantic-layer/warehouse/customers.yaml'],
+          'wu customers',
+          'ktx Test',
+          'system@ktx.local',
+        );
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(
+        runner,
+        runtime,
+        [
+          ['models/orders.sql', 'orders-hash'],
+          ['models/customers.sql', 'customers-hash'],
+        ],
+        'dbt',
+      );
+
+      const first = await runner.run({
+        jobId: 'job-join-prune-1',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+      expect(first.commitSha).toBeTruthy();
+      expect(first.failedWorkUnits).toEqual(['customers']);
+      expect(first.finalGatePrunedReferences).toContainEqual({
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'customers',
+        absentTarget: 'customers',
+      });
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/orders.yaml'), 'utf-8')).resolves.not.toContain(
+        'to: customers',
+      );
+
+      const second = await runner.run({
+        jobId: 'job-join-prune-2',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+      expect(second.failedWorkUnits).toEqual([]);
+      expect(second.finalGatePrunedReferences ?? []).toEqual([]);
+      expect(workUnitRunLoopCalls(deps).map(([params]: any[]) => params.telemetryTags.unitKey)).toEqual([
+        'orders',
+        'customers',
+        'customers',
+      ]);
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/orders.yaml'), 'utf-8')).resolves.toContain(
+        'to: customers',
+      );
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/customers.yaml'), 'utf-8')).resolves.toContain(
+        'name: customers',
+      );
+      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-join-prune-2/trace.jsonl'), 'utf-8');
+      expect(trace).toContain('work_unit_cache_hit');
+      expect(trace).toContain('work_unit_cache_replayed');
+      expect(trace).not.toContain('work_unit_cache_stale_recompute');
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('recomputes a stale cached patch and reports recomputed metadata', async () => {
     const runtime = await makeRealGitRuntime();
     try {
@@ -1228,7 +1371,7 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
-  it('rejects Notion-style changed wiki pages with invalid sl_refs', async () => {
+  it('prunes direct missing wiki sl_refs instead of rejecting the work unit', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       const { deps, adapter } = makeDeps(runtime);
@@ -1241,9 +1384,16 @@ describe('IngestBundleRunner isolated diff path', () => {
         return { toRuntimeTools: vi.fn(() => ({})) };
       });
       deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
         const root = rootOfConfig(currentSession.configService, runtime.configDir);
         await mkdir(join(root, 'wiki/global'), { recursive: true });
-        await writeFile(join(root, 'wiki/global/notion-page.md'), '---\nsummary: Notion page\nusage_mode: auto\nsl_refs:\n  - missing_source\n---\n\nBody\n');
+        await writeFile(
+          join(root, 'wiki/global/notion-page.md'),
+          '---\nsummary: Notion page\nusage_mode: auto\nsl_refs:\n  - missing_source\n---\n\nBody\n',
+          'utf-8',
+        );
         currentSession.actions.push({ target: 'wiki', type: 'created', key: 'notion-page', detail: 'Notion page' });
         await currentSession.gitService.commitFiles(['wiki/global/notion-page.md'], 'wu notion', 'ktx Test', 'system@ktx.local');
         return { stopReason: 'natural' };
@@ -1251,15 +1401,24 @@ describe('IngestBundleRunner isolated diff path', () => {
       const runner = new IngestBundleRunner(deps);
       await mockStageRawFiles(runner, runtime, [['pages/notion.json', 'h1']]);
 
-      await expect(
-        runner.run({
-          jobId: 'job-invalid-slrefs',
-          connectionId: 'warehouse',
-          sourceKey: 'metabase',
-          trigger: 'upload',
-          bundleRef: { kind: 'upload', uploadId: 'upload' },
-        }),
-      ).rejects.toThrow(/isolated diff semantic conflict in notion-page/);
+      const result = await runner.run({
+        jobId: 'job-invalid-slrefs',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+
+      expect(result.commitSha).toBeTruthy();
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_sl_ref',
+        artifact: 'wiki/global/notion-page',
+        removedRef: 'missing_source',
+        absentTarget: 'missing_source',
+      });
+      await expect(readFile(join(runtime.configDir, 'wiki/global/notion-page.md'), 'utf-8')).resolves.not.toContain(
+        'missing_source',
+      );
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
