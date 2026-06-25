@@ -945,8 +945,9 @@ describe('IngestBundleRunner isolated diff path', () => {
       );
 
       const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-stale-cache-2/trace.jsonl'), 'utf-8');
-      expect(trace).toContain('work_unit_cache_hit');
-      expect(trace).toContain('work_unit_cache_stale_recompute');
+      expect(trace).toContain('work_unit_cache_unsafe_drift');
+      expect(trace).not.toContain('work_unit_cache_hit');
+      expect(trace).not.toContain('work_unit_cache_stale_recompute');
 
       const reportCreate = vi.mocked(deps.reports.create).mock.calls.at(-1)?.[0] as any;
       expect(reportCreate.body.workUnits).toContainEqual(

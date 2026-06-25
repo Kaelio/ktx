@@ -231,7 +231,7 @@ async function writeCachedFile(workdir: string, file: IngestWorkUnitCachedArtifa
 }
 
 function cacheFileCanReplayFromCurrentBase(file: IngestWorkUnitCachedArtifactFile, currentBase64: string | null): boolean {
-  if (currentBase64 === file.beforeBase64) {
+  if (currentBase64 === file.beforeBase64 || currentBase64 === file.afterBase64) {
     return true;
   }
   const current = decodeBase64(currentBase64);
