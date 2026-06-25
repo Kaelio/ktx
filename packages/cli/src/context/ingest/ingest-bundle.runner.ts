@@ -1256,13 +1256,6 @@ export class IngestBundleRunner {
         agentRunner: this.deps.agentRunner,
         validateTouchedSources: (touched) =>
           validateWuTouchedSources({ ...slValidationDeps, slValidator: this.deps.slValidator }, touched),
-        validateWikiRefs: (actions) =>
-          findDanglingWikiRefsForActions({
-            wikiService: input.scopedWikiService,
-            scope: 'GLOBAL',
-            scopeId: null,
-            actions,
-          }),
         resetHardTo: (targetSha) => input.worktree.git.resetHardTo(targetSha),
         buildSystemPrompt: () => systemPrompt,
         buildUserPrompt: (wuInner) =>

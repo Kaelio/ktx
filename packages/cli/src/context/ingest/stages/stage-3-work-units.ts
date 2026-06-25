@@ -16,7 +16,6 @@ const MAX_WORK_UNIT_PROMPT_CHARS = 240_000;
 export interface WorkUnitExecutionDeps {
   sessionWorktreeGit: { revParseHead(): Promise<string | null> };
   agentRunner: AgentRunnerPort;
-  validateWikiRefs?: (actions: MemoryAction[]) => Promise<string[]>;
   validateTouchedSources: (touched: TouchedSlSource[]) => Promise<WuValidationResult>;
   resetHardTo: (targetSha: string) => Promise<void>;
   buildSystemPrompt: (wu: WorkUnit) => string;
@@ -145,8 +144,6 @@ export async function executeWorkUnit(deps: WorkUnitExecutionDeps, wu: WorkUnit)
   if (toolFailureCount > 0) {
     return failWithReset(`${toolFailureCount} tool call(s) failed during WorkUnit ${wu.unitKey}`);
   }
-
-  await deps.validateWikiRefs?.(deps.sessionActions);
 
   const touched = listTouchedSlSources(deps.captureSession.touchedSlSources);
   if (touched.length > 0) {
