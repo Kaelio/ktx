@@ -8,6 +8,7 @@ import {
   hasBlockingWuSourceIssue,
   type WuValidationResult,
 } from './validate-wu-sources.js';
+import type { IngestWorkUnitCachedArtifactFile } from '../work-unit-cache.js';
 import type { WorkUnit } from '../types.js';
 
 const MAX_WORK_UNIT_PROMPT_CHARS = 240_000;
@@ -44,6 +45,7 @@ export interface WorkUnitOutcome {
   slDisallowedReason?: 'lookml_connection_mismatch';
   patchPath?: string;
   patchTouchedPaths?: string[];
+  artifactFiles?: IngestWorkUnitCachedArtifactFile[];
   childWorktreePath?: string;
   /** Timing and token metrics for the work-unit agent loop, used for ingest profiling. */
   metrics?: RunLoopMetrics;

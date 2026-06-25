@@ -2,7 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { computeIngestWorkUnitInputHash } from '../../../src/context/ingest/work-unit-cache.js';
+import {
+  computeIngestWorkUnitInputHash,
+  isPruneShapedCachedReplayBase,
+} from '../../../src/context/ingest/work-unit-cache.js';
 import type { WorkUnit } from '../../../src/context/ingest/types.js';
 
 describe('ingest work-unit cache', () => {
@@ -118,5 +121,61 @@ describe('ingest work-unit cache', () => {
     });
 
     expect(hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('recognizes a semantic-layer file that differs only by pruned joins', () => {
+    const output = [
+      'name: orders',
+      'grain: [order_id]',
+      'columns: [{name: order_id, type: string}, {name: customer_id, type: string}]',
+      'joins:',
+      '  - to: customers',
+      '    on: orders.customer_id = customers.customer_id',
+      'measures: []',
+      '',
+    ].join('\n');
+    const current = [
+      'name: orders',
+      'grain: [order_id]',
+      'columns: [{name: order_id, type: string}, {name: customer_id, type: string}]',
+      'joins: []',
+      'measures: []',
+      '',
+    ].join('\n');
+
+    expect(isPruneShapedCachedReplayBase('semantic-layer/warehouse/orders.yaml', current, output)).toBe(true);
+    expect(isPruneShapedCachedReplayBase('semantic-layer/warehouse/orders.yaml', current.replace('order_id', 'id'), output)).toBe(
+      false,
+    );
+  });
+
+  it('recognizes a wiki page that differs only by pruned refs and inline body refs', () => {
+    const output = [
+      '---',
+      'summary: Revenue',
+      'usage_mode: auto',
+      'refs:',
+      '  - missing-page',
+      'sl_refs:',
+      '  - missing_source',
+      '---',
+      '',
+      'Revenue uses [[missing-page]], `source:missing_source`, and `orders.missing_measure`.',
+      '',
+    ].join('\n');
+    const current = [
+      '---',
+      'summary: Revenue',
+      'usage_mode: auto',
+      'refs: []',
+      'sl_refs: []',
+      '---',
+      '',
+      'Revenue uses, and.',
+      '',
+    ].join('\n');
+
+    expect(isPruneShapedCachedReplayBase('wiki/global/revenue.md', current, output)).toBe(true);
+    expect(isPruneShapedCachedReplayBase('wiki/global/revenue.md', current.replace('Revenue', 'ARR'), output)).toBe(false);
   });
 });

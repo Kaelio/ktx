@@ -5,6 +5,7 @@ import type { IngestSessionWorktree, IngestSessionWorktreePort } from '../ports.
 import type { WorkUnit } from '../types.js';
 import type { IngestTraceWriter } from '../ingest-trace.js';
 import type { WorkUnitOutcome } from '../stages/stage-3-work-units.js';
+import { captureIngestWorkUnitCachedArtifactFiles } from '../work-unit-cache.js';
 import { parsePatchTouchedPaths } from './git-patch.js';
 
 export interface RunIsolatedWorkUnitInput {
@@ -88,17 +89,25 @@ export async function runIsolatedWorkUnit(input: RunIsolatedWorkUnitInput): Prom
     await child.git.writeBinaryNoRenamePatch(input.ingestionBaseSha, 'HEAD', patchPath);
     const patch = await readFile(patchPath, 'utf-8');
     const touched = parsePatchTouchedPaths(patch);
+    const patchTouchedPaths = touched.map((entry) => entry.path);
+    const artifactFiles = await captureIngestWorkUnitCachedArtifactFiles({
+      git: child.git,
+      workdir: child.workdir,
+      baseSha: input.ingestionBaseSha,
+      patchTouchedPaths,
+    });
     cleanupOutcome = 'success';
     await input.trace.event('debug', 'work_unit', 'work_unit_patch_collected', {
       unitKey: input.workUnit.unitKey,
       patchPath,
-      touchedPaths: touched.map((entry) => entry.path),
+      touchedPaths: patchTouchedPaths,
       patchBytes: Buffer.byteLength(patch),
     });
     return {
       ...outcome,
       patchPath,
-      patchTouchedPaths: touched.map((entry) => entry.path),
+      patchTouchedPaths,
+      artifactFiles,
       childWorktreePath: child.workdir,
     };
   } catch (error) {

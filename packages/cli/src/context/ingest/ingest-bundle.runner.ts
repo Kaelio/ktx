@@ -79,6 +79,7 @@ import {
   computeIngestWorkUnitPromptFingerprint,
   INGEST_WORK_UNIT_CACHE_NAMESPACE,
   ingestWorkUnitCacheScopeKey,
+  materializeCachedWorkUnitReplayPatch,
   type IngestWorkUnitCachePayload,
 } from './work-unit-cache.js';
 import { createEmitArtifactResolutionTool } from './tools/emit-artifact-resolution.tool.js';
@@ -255,6 +256,7 @@ export class IngestBundleRunner {
     unit: WorkUnit;
     unitIndex: number;
     patchDir: string;
+    ingestionBaseSha: string;
     promptFingerprint: string;
     modelRole: KtxModelRole;
     trace: IngestTraceWriter;
@@ -283,7 +285,36 @@ export class IngestBundleRunner {
 
     await mkdir(input.patchDir, { recursive: true });
     const patchPath = join(input.patchDir, workUnitPatchFileName(input.unitIndex, input.unit.unitKey));
-    await writeFile(patchPath, cached.output.patch, 'utf-8');
+    if (cached.output.schemaVersion !== 2 || !Array.isArray(cached.output.artifactFiles)) {
+      await this.deps.contentCache.deleteResult({
+        namespace: INGEST_WORK_UNIT_CACHE_NAMESPACE,
+        scopeKey: ingestWorkUnitCacheScopeKey(input),
+        inputHash,
+      });
+      return { cacheInputHash: inputHash, cacheHit: false };
+    }
+    const materialized = await materializeCachedWorkUnitReplayPatch({
+      sessionWorktreeService: this.deps.sessionWorktreeService,
+      baseSha: input.ingestionBaseSha,
+      jobId: input.runId,
+      unitKey: input.unit.unitKey,
+      patchPath,
+      artifactFiles: cached.output.artifactFiles,
+      author: this.deps.storage.systemGitAuthor,
+      trace: input.trace,
+    });
+    if (materialized === 'unsafe_drift') {
+      await this.deps.contentCache.deleteResult({
+        namespace: INGEST_WORK_UNIT_CACHE_NAMESPACE,
+        scopeKey: ingestWorkUnitCacheScopeKey(input),
+        inputHash,
+      });
+      await input.trace.event('debug', 'work_unit', 'work_unit_cache_unsafe_drift', {
+        unitKey: input.unit.unitKey,
+        inputHash,
+      });
+      return { cacheInputHash: inputHash, cacheHit: false };
+    }
     await input.trace.event('debug', 'work_unit', 'work_unit_cache_hit', {
       unitKey: input.unit.unitKey,
       inputHash,
@@ -306,6 +337,7 @@ export class IngestBundleRunner {
       slDisallowedReason: cached.output.slDisallowedReason,
       patchPath,
       patchTouchedPaths: cached.output.patchTouchedPaths,
+      artifactFiles: cached.output.artifactFiles,
       cacheInputHash: inputHash,
       cacheHit: true,
     };
@@ -329,9 +361,11 @@ export class IngestBundleRunner {
       scopeKey: ingestWorkUnitCacheScopeKey(input),
       inputHash: input.inputHash,
       output: {
+        schemaVersion: 2,
         unitKey: input.outcome.unitKey,
         patch,
         patchTouchedPaths: input.outcome.patchTouchedPaths ?? [],
+        artifactFiles: input.outcome.artifactFiles ?? [],
         actions: input.outcome.actions,
         touchedSlSources: input.outcome.touchedSlSources,
         slDisallowed: input.outcome.slDisallowed,
@@ -1839,6 +1873,7 @@ export class IngestBundleRunner {
                     unit: wu,
                     unitIndex: index,
                     patchDir,
+                    ingestionBaseSha,
                     promptFingerprint: workUnitPromptFingerprint,
                     modelRole: workUnitModelRole,
                     trace: runTrace,
