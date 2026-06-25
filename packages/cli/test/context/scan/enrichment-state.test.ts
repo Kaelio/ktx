@@ -228,8 +228,8 @@ describe('scan enrichment state', () => {
     ]);
   });
 
-  it('recreates the resume cache when an older primary key shape is found', async () => {
-    const dbPath = join(tempDir, 'legacy.sqlite');
+  it('uses the shared content-result cache and ignores the obsolete scan-specific table', async () => {
+    const dbPath = join(tempDir, 'shared.sqlite');
     const legacy = new Database(dbPath);
     legacy.exec(`
       CREATE TABLE local_scan_enrichment_stages (
@@ -243,7 +243,7 @@ describe('scan enrichment state', () => {
         output_json TEXT,
         error_message TEXT,
         updated_at TEXT NOT NULL,
-        PRIMARY KEY (run_id, stage)
+        PRIMARY KEY (connection_id, stage, input_hash)
       );
       INSERT INTO local_scan_enrichment_stages
         VALUES ('old-run', 'descriptions', 'hash', 'warehouse', 'sync', 'enriched', 'completed', 'null', NULL, '2026-01-01T00:00:00.000Z');
@@ -251,8 +251,6 @@ describe('scan enrichment state', () => {
     legacy.close();
 
     const recreated = new SqliteLocalScanEnrichmentStateStore({ dbPath });
-    // The legacy row is dropped with the old table; the new key shape is in
-    // force, so a fresh save + lookup round-trips cleanly.
     await recreated.saveCompletedStage({
       runId: 'new-run',
       connectionId: 'warehouse',
@@ -261,12 +259,39 @@ describe('scan enrichment state', () => {
       stage: 'descriptions',
       inputHash: 'hash',
       output: ['fresh'],
-      updatedAt: '2026-02-01T00:00:00.000Z',
+      updatedAt: '2026-06-25T00:00:00.000Z',
     });
+
     await expect(
       recreated.findCompletedStage({ connectionId: 'warehouse', stage: 'descriptions', inputHash: 'hash' }),
     ).resolves.toMatchObject({ runId: 'new-run', output: ['fresh'] });
     await expect(recreated.listRunStages('old-run')).resolves.toEqual([]);
+  });
+
+  it('lists scan stages through the shared cache metadata', async () => {
+    await store.saveCompletedStage({
+      runId: 'scan-run-shared',
+      connectionId: 'warehouse',
+      syncId: 'sync-shared',
+      mode: 'enriched',
+      stage: 'relationships',
+      inputHash: 'relationship-hash',
+      output: { accepted: [] },
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    });
+
+    await expect(store.listRunStages('scan-run-shared')).resolves.toEqual([
+      expect.objectContaining({
+        runId: 'scan-run-shared',
+        connectionId: 'warehouse',
+        syncId: 'sync-shared',
+        mode: 'enriched',
+        stage: 'relationships',
+        inputHash: 'relationship-hash',
+        status: 'completed',
+        output: { accepted: [] },
+      }),
+    ]);
   });
 
   it('summarizes resumed, completed, and failed stages for reports', () => {
