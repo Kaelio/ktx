@@ -416,3 +416,48 @@ run." This spec delivers both — resume via the content-keyed WU cache, and
 partial commit via deterministic dangling-edge pruning. Unlike specs 19/20 this
 gap was surfaced by a real user on a real warehouse, not by the benchmark; the
 fix is generic production hygiene for any large ingest.
+
+## Implementation notes
+
+Shipped on branch `write-feature-spec-wiki` (squash-merge target). All 12
+requirements and every acceptance criterion are covered by committed code and
+tests; the full `@kaelio/ktx` package suite is green.
+
+What was built and where:
+
+- **Shared content-keyed durability primitive** — `context/cache/content-result-cache.ts`
+  + `sqlite-content-result-cache.ts` (`SqliteContentResultCache`, `local_content_results`).
+  Scan was migrated onto it in the same change (`context/scan/sqlite-local-enrichment-state-store.ts`
+  is now a thin adapter; the old `local_scan_enrichment_stages` table is dropped),
+  so no second copy exists (D3 / req 11).
+- **Content-keyed WU cache + replay** — `context/ingest/work-unit-cache.ts`
+  (`computeIngestWorkUnitInputHash` over raw/dependency bytes + source identity +
+  CLI version + prompt fingerprint + model role; success-only `saveSuccessfulWorkUnitCache`).
+  Replay/recompute and stale-recompute state refresh wrap the WU loop in
+  `ingest-bundle.runner.ts` (D1/D2/D4 / reqs 1–4).
+- **Non-fatal final gate** — `artifact-gates.ts` `validateFinalIngestArtifacts`
+  returns structured findings; `context/ingest/final-gate-prune.ts` deterministically
+  drops self-invalid sources and prunes dangling edges in a single pass, then a
+  confirm gate runs before squash (D5/D6 / reqs 5–8). `finalGatePrunedReferences`
+  / `finalGateDroppedSources` are recorded in the report + trace and surface as a
+  `partial` outcome (D7 / req 10). `repairFinalGateFailure` and its tests are
+  deleted (req 9).
+
+Deviations / decisions worth noting (all preserve spec intent):
+
+- **Cache stores artifact content snapshots (payload schema v2), not just a raw
+  git patch.** Replay materializes the owner's artifacts against the *current*
+  base, so a ref pruned in one run because a sibling failed is restored for free
+  on a later run once the sibling exists — without re-running the owner's agent
+  loop (D2/D6 / req 7 self-heal). A drifted/stale snapshot degrades to recompute.
+- **Final-gate prune/drop resolves sources through the canonical
+  `resolveSlSourceFile` resolver**, not a derived `semantic-layer/<conn>/<name>.yaml`
+  path, so it works for uppercase / hash-derived source filenames (not only
+  lowercase demo names).
+- **`executeWorkUnit` defers pruneable cross-artifact findings** (missing join
+  target / wiki ref / sl_ref) to the final gate instead of soft-failing the WU;
+  only intrinsic `source_validation` failures remain fatal at the WU level. This
+  is what lets a sibling-failed WU's owner survive to be pruned rather than be
+  excluded upstream (reqs 5–7, "no cascade").
+- The raw report record keeps `status: 'completed'`; partial completion is derived
+  by `ingestReportOutcome` from the populated prune/drop fields.
