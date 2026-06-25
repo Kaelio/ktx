@@ -15,6 +15,7 @@ import { createLocalKtxLlmRuntimeFromConfig } from '../../context/llm/local-conf
 import { KtxIngestEmbeddingPortAdapter } from '../../context/llm/embedding-port.js';
 import { createRateLimitGovernorConfig, RateLimitGovernor } from '../../context/llm/rate-limit-governor.js';
 import { RuntimeAgentRunner, type AgentRunnerPort, type KtxLlmRuntimePort, type KtxRuntimeToolSet } from '../../context/llm/runtime-port.js';
+import { getKtxCliPackageInfo } from '../../cli-runtime.js';
 import type { KtxEmbeddingProvider } from '../../llm/types.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { ktxLocalStateDbPath } from '../../context/project/local-state-db.js';
@@ -54,6 +55,7 @@ import { WikiWriteTool } from '../../context/wiki/tools/wiki-write.tool.js';
 import { CandidateDedupService } from '../../context/ingest/context-candidates/candidate-dedup.service.js';
 import { ContextCandidateCarryforwardService } from '../../context/ingest/context-candidates/context-candidate-carryforward.service.js';
 import { CuratorPaginationService } from '../../context/ingest/context-candidates/curator-pagination.service.js';
+import { SqliteContentResultCache } from '../cache/sqlite-content-result-cache.js';
 import { createEmitHistoricSqlEvidenceTool } from './adapters/historic-sql/evidence-tool.js';
 import { ContextEvidenceIndexService } from '../../context/ingest/context-evidence/context-evidence-index.service.js';
 import { SqliteContextEvidenceStore } from '../../context/ingest/context-evidence/sqlite-context-evidence-store.js';
@@ -657,6 +659,7 @@ export function createLocalBundleIngestRuntime(
   mkdirSync(join(options.project.projectDir, '.ktx/cache/local-ingest'), { recursive: true });
   const store = new SqliteBundleIngestStore({ dbPath });
   const contextStore = new SqliteContextEvidenceStore({ dbPath });
+  const contentCache = new SqliteContentResultCache({ dbPath });
   const embeddingProvider = options.embeddingProvider ?? null;
   if (!embeddingProvider && options.project.config.ingest.embeddings.backend !== 'none') {
     // Embedding-dependent stages (CandidateDedup clustering, ContextEvidenceIndex
@@ -711,6 +714,7 @@ export function createLocalBundleIngestRuntime(
     provenance: store,
     reports: store,
     canonicalPins: store,
+    contentCache,
     registry,
     diffSetService: new DiffSetService(store),
     sessionWorktreeService: new SessionWorktreeService({
@@ -724,6 +728,7 @@ export function createLocalBundleIngestRuntime(
     storage,
     settings: {
       memoryIngestionModel: options.project.config.llm.models.default ?? 'local-ingest-model',
+      cliVersion: getKtxCliPackageInfo().version,
       probeRowCount: 0,
       workUnitMaxConcurrency: options.project.config.ingest.workUnits.maxConcurrency,
       workUnitStepBudget: options.project.config.ingest.workUnits.stepBudget,

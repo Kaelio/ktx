@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GitService } from '../../../src/context/core/git.service.js';
 import { SessionWorktreeService } from '../../../src/context/core/session-worktree.service.js';
 import { LocalGitFileStore } from '../../../src/context/project/local-git-file-store.js';
+import { SqliteContentResultCache } from '../../../src/context/cache/sqlite-content-result-cache.js';
 import { addTouchedSlSource } from '../../../src/context/tools/touched-sl-sources.js';
 import { IngestBundleRunner } from '../../../src/context/ingest/ingest-bundle.runner.js';
 import type { IngestBundleRunnerDeps } from '../../../src/context/ingest/ports.js';
@@ -107,6 +108,12 @@ function legacySharedTraceEvent(): string {
   return ['shared', 'worktree', 'path', 'enabled'].join('_');
 }
 
+function workUnitRunLoopCalls(deps: IngestBundleRunnerDeps) {
+  return vi
+    .mocked(deps.agentRunner.runLoop)
+    .mock.calls.filter(([params]: any[]) => params.telemetryTags?.operationName === 'ingest-bundle-wu');
+}
+
 function makeWikiService(root: string) {
   return {
     listPageKeys: vi.fn(async (scope: string) => (scope === 'GLOBAL' ? listGlobalWikiPageKeys(root) : [])),
@@ -203,6 +210,7 @@ function makeDeps(
     },
     reports: { create: vi.fn().mockResolvedValue({ id: 'report-1' }), findByJobId: vi.fn().mockResolvedValue(null), markSuperseded: vi.fn() },
     canonicalPins: { listPins: vi.fn().mockResolvedValue([]) },
+    contentCache: new SqliteContentResultCache({ dbPath: join(runtime.homeDir, 'cache.sqlite') }),
     registry: { get: vi.fn().mockReturnValue(adapter), register: vi.fn(), has: vi.fn(), list: vi.fn() },
     diffSetService: {
       compute: vi.fn().mockResolvedValue({ added: ['cards/wiki.json', 'cards/source.json'], modified: [], deleted: [], unchanged: [] }),
@@ -221,6 +229,7 @@ function makeDeps(
     },
     settings: {
       memoryIngestionModel: 'test',
+      cliVersion: '0.0.0-test',
       probeRowCount: 1,
       ingestTraceLevel: 'trace',
       ...settings,
@@ -256,10 +265,14 @@ async function mockStageRawFiles(
   (runner as any).resolveStagedDir = vi.fn().mockResolvedValue(join(runtime.homeDir, 'stage'));
   (runner as any).stageRawFilesStage1 = vi.fn(async ({ worktreeRoot }: any) => {
     const rawDir = join(worktreeRoot, 'raw-sources/warehouse', sourceKey, 's');
+    const stagedDir = join(runtime.homeDir, 'stage');
     await mkdir(rawDir, { recursive: true });
-    for (const [rawPath] of hashes) {
+    for (const [rawPath, rawHash] of hashes) {
+      await mkdir(join(stagedDir, rawPath.split('/').slice(0, -1).join('/')), { recursive: true });
       await mkdir(join(rawDir, rawPath.split('/').slice(0, -1).join('/')), { recursive: true });
-      await writeFile(join(rawDir, rawPath), '{}');
+      const content = JSON.stringify({ rawHash });
+      await writeFile(join(stagedDir, rawPath), content);
+      await writeFile(join(rawDir, rawPath), content);
     }
     return { currentHashes: new Map(hashes), rawDirInWorktree: `raw-sources/warehouse/${sourceKey}/s` };
   });
@@ -551,6 +564,151 @@ describe('IngestBundleRunner isolated diff path', () => {
       expect(trace).toContain('work_unit_failed_before_patch');
       expect(trace).toContain('patch_accepted');
       expect(trace).not.toContain(legacySharedTraceEvent());
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('replays completed work units on a second identical run without an agent loop', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        await writeFile(
+          join(root, `wiki/global/${unitKey}.md`),
+          `---\nsummary: ${unitKey}\nusage_mode: auto\n---\n\n${unitKey}\n`,
+          'utf-8',
+        );
+        currentSession.actions.push({ target: 'wiki', type: 'created', key: unitKey, detail: unitKey });
+        await currentSession.gitService.commitFiles([`wiki/global/${unitKey}.md`], `wu ${unitKey}`, 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [
+        ['models/orders.sql', 'orders-hash'],
+        ['models/customers.sql', 'customers-hash'],
+      ], 'dbt');
+
+      await expect(
+        runner.run({ jobId: 'job-resume-1', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
+
+      await expect(
+        runner.run({ jobId: 'job-resume-2', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
+
+      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-resume-2/trace.jsonl'), 'utf-8');
+      expect(trace).toContain('work_unit_cache_hit');
+      expect(trace.match(/work_unit_cache_replayed/g)).toHaveLength(2);
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('recomputes only the changed work unit after an input byte changes', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        await writeFile(
+          join(root, `wiki/global/${unitKey}.md`),
+          `---\nsummary: ${unitKey}\nusage_mode: auto\n---\n\n${unitKey}\n`,
+          'utf-8',
+        );
+        currentSession.actions.push({ target: 'wiki', type: 'updated', key: unitKey, detail: unitKey });
+        await currentSession.gitService.commitFiles([`wiki/global/${unitKey}.md`], `wu ${unitKey}`, 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [
+        ['models/orders.sql', 'orders-hash'],
+        ['models/customers.sql', 'customers-hash'],
+      ], 'dbt');
+      await runner.run({ jobId: 'job-input-1', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } });
+
+      await mockStageRawFiles(runner, runtime, [
+        ['models/orders.sql', 'orders-hash-changed'],
+        ['models/customers.sql', 'customers-hash'],
+      ], 'dbt');
+      await runner.run({ jobId: 'job-input-2', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } });
+
+      const wuCalls = workUnitRunLoopCalls(deps);
+      expect(wuCalls).toHaveLength(3);
+      const secondRunUnitKeys = wuCalls.slice(2).map(([params]: any[]) => params.telemetryTags.unitKey);
+      expect(secondRunUnitKeys).toEqual(['orders']);
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not cache failed work units and retries them on the next run', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [{ unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] }],
+      });
+      let currentSession: any = null;
+      let attempt = 0;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return { stopReason: 'error', error: new Error('provider disconnected') };
+        }
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        await writeFile(join(root, 'wiki/global/orders.md'), '---\nsummary: orders\nusage_mode: auto\n---\n\norders\n', 'utf-8');
+        currentSession.actions.push({ target: 'wiki', type: 'created', key: 'orders', detail: 'orders' });
+        await currentSession.gitService.commitFiles(['wiki/global/orders.md'], 'wu orders', 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [['models/orders.sql', 'orders-hash']], 'dbt');
+
+      await expect(
+        runner.run({ jobId: 'job-failed-cache-1', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: ['orders'] });
+      await expect(
+        runner.run({ jobId: 'job-failed-cache-2', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }

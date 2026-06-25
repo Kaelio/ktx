@@ -6,6 +6,7 @@ import { type KtxLogger, noopLogger } from '../../context/core/config.js';
 import type { RateLimitWaitState } from '../../context/llm/rate-limit-governor.js';
 import { createRuntimeToolDescriptorFromAiTool } from '../../context/llm/runtime-tools.js';
 import type { KtxRuntimeToolSet } from '../../context/llm/runtime-port.js';
+import type { KtxModelRole } from '../../llm/types.js';
 import type { CaptureSession, MemoryAction } from '../../context/memory/types.js';
 import type { SemanticLayerService } from '../../context/sl/semantic-layer.service.js';
 import { isSlYamlPath, slSourceFilePath, slSourceNameForFile, sourceNameFromPath } from '../../context/sl/source-files.js';
@@ -30,7 +31,7 @@ import { FileIngestTraceWriter, ingestTracePathForJob, type IngestTraceWriter, t
 import { formatIngestProfile, formatIngestProfileJson, readIngestProfile, resolveIngestProfileMode } from './ingest-profile.js';
 import { integrateWorkUnitPatch } from './isolated-diff/patch-integrator.js';
 import { resolveTextualConflict } from './isolated-diff/textual-conflict-resolver.js';
-import { runIsolatedWorkUnit } from './isolated-diff/work-unit-executor.js';
+import { runIsolatedWorkUnit, workUnitPatchFileName } from './isolated-diff/work-unit-executor.js';
 import { sanitizeMemoryFlowError } from './memory-flow/live-buffer.js';
 import type { CanonicalPin } from './canonical-pins.js';
 import type { MemoryFlowEvent, MemoryFlowEventSink, MemoryFlowPlannedWorkUnit } from './memory-flow/types.js';
@@ -64,6 +65,13 @@ import { runReconciliationStage4 } from './stages/stage-4-reconciliation.js';
 import type { StageIndex } from './stages/stage-index.types.js';
 import { validateWuTouchedSources } from './stages/validate-wu-sources.js';
 import { assertSemanticLayerTargetPathsAllowed } from './semantic-layer-target-policy.js';
+import {
+  computeIngestWorkUnitInputHash,
+  computeIngestWorkUnitPromptFingerprint,
+  INGEST_WORK_UNIT_CACHE_NAMESPACE,
+  ingestWorkUnitCacheScopeKey,
+  type IngestWorkUnitCachePayload,
+} from './work-unit-cache.js';
 import { createEmitArtifactResolutionTool } from './tools/emit-artifact-resolution.tool.js';
 import { createEmitConflictResolutionTool } from './tools/emit-conflict-resolution.tool.js';
 import { createEmitEvictionDecisionTool } from './tools/emit-eviction-decision.tool.js';
@@ -212,12 +220,121 @@ interface ProvenancePlan {
   diagnostics: ProvenanceRowDiagnostic[];
 }
 
+type CachedWorkUnitOutcome = WorkUnitOutcome & {
+  cacheInputHash: string;
+  cacheHit: true;
+};
+
+function isCachedWorkUnitOutcome(outcome: WorkUnitOutcome | CachedWorkUnitOutcome): outcome is CachedWorkUnitOutcome {
+  return 'cacheHit' in outcome && outcome.cacheHit === true;
+}
+
 export class IngestBundleRunner {
   private readonly logger: KtxLogger;
   private readonly chainByConnection = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: IngestBundleRunnerDeps) {
     this.logger = deps.logger ?? noopLogger;
+  }
+
+  private async cachedWorkUnitOutcome(input: {
+    runId: string;
+    syncId: string;
+    connectionId: string;
+    sourceKey: string;
+    stagedDir: string;
+    unit: WorkUnit;
+    unitIndex: number;
+    patchDir: string;
+    promptFingerprint: string;
+    modelRole: KtxModelRole;
+    trace: IngestTraceWriter;
+  }): Promise<CachedWorkUnitOutcome | { cacheInputHash: string; cacheHit: false }> {
+    const inputHash = await computeIngestWorkUnitInputHash({
+      stagedDir: input.stagedDir,
+      connectionId: input.connectionId,
+      sourceKey: input.sourceKey,
+      unit: input.unit,
+      cliVersion: this.deps.settings.cliVersion,
+      promptFingerprint: input.promptFingerprint,
+      modelRole: input.modelRole,
+    });
+    const cached = await this.deps.contentCache.findCompletedResult<IngestWorkUnitCachePayload>({
+      namespace: INGEST_WORK_UNIT_CACHE_NAMESPACE,
+      scopeKey: ingestWorkUnitCacheScopeKey(input),
+      inputHash,
+    });
+    if (!cached) {
+      await input.trace.event('trace', 'work_unit', 'work_unit_cache_miss', {
+        unitKey: input.unit.unitKey,
+        inputHash,
+      });
+      return { cacheInputHash: inputHash, cacheHit: false };
+    }
+
+    await mkdir(input.patchDir, { recursive: true });
+    const patchPath = join(input.patchDir, workUnitPatchFileName(input.unitIndex, input.unit.unitKey));
+    await writeFile(patchPath, cached.output.patch, 'utf-8');
+    await input.trace.event('debug', 'work_unit', 'work_unit_cache_hit', {
+      unitKey: input.unit.unitKey,
+      inputHash,
+      producerRunId: cached.runId,
+      patchBytes: Buffer.byteLength(cached.output.patch),
+    });
+    await input.trace.event('debug', 'work_unit', 'work_unit_cache_replayed', {
+      unitKey: input.unit.unitKey,
+      patchPath,
+      inputHash,
+    });
+    return {
+      unitKey: input.unit.unitKey,
+      status: 'success',
+      preSha: '',
+      postSha: '',
+      actions: cached.output.actions,
+      touchedSlSources: cached.output.touchedSlSources,
+      slDisallowed: cached.output.slDisallowed,
+      slDisallowedReason: cached.output.slDisallowedReason,
+      patchPath,
+      patchTouchedPaths: cached.output.patchTouchedPaths,
+      cacheInputHash: inputHash,
+      cacheHit: true,
+    };
+  }
+
+  private async saveSuccessfulWorkUnitCache(input: {
+    runId: string;
+    syncId: string;
+    connectionId: string;
+    sourceKey: string;
+    inputHash: string;
+    outcome: WorkUnitOutcome;
+  }): Promise<void> {
+    if (input.outcome.status !== 'success' || !input.outcome.patchPath) {
+      return;
+    }
+    const patch = await readFile(input.outcome.patchPath, 'utf-8');
+    await this.deps.contentCache.saveCompletedResult<IngestWorkUnitCachePayload>({
+      runId: input.runId,
+      namespace: INGEST_WORK_UNIT_CACHE_NAMESPACE,
+      scopeKey: ingestWorkUnitCacheScopeKey(input),
+      inputHash: input.inputHash,
+      output: {
+        unitKey: input.outcome.unitKey,
+        patch,
+        patchTouchedPaths: input.outcome.patchTouchedPaths ?? [],
+        actions: input.outcome.actions,
+        touchedSlSources: input.outcome.touchedSlSources,
+        slDisallowed: input.outcome.slDisallowed,
+        slDisallowedReason: input.outcome.slDisallowedReason,
+      },
+      metadata: {
+        syncId: input.syncId,
+        connectionId: input.connectionId,
+        sourceKey: input.sourceKey,
+      },
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   async run(job: IngestBundleJob, ctx?: IngestJobContext): Promise<IngestBundleResult> {
@@ -1514,6 +1631,16 @@ export class IngestBundleRunner {
       const wuSkills = await this.deps.skillsRegistry.listSkills(wuSkillNames, 'memory_agent');
       const skillsPrompt = this.deps.skillsRegistry.buildSkillsPrompt(wuSkills, 'memory_agent');
       const canonicalPins = await this.deps.canonicalPins.listPins(slConnectionIds);
+      const workUnitModelRole = 'candidateExtraction' as const;
+      const workUnitPromptFingerprint = computeIngestWorkUnitPromptFingerprint({
+        cliVersion: this.deps.settings.cliVersion,
+        baseFraming,
+        skillsPrompt,
+        canonicalPins,
+        sourceKey: job.sourceKey,
+        connectionId: job.connectionId,
+        skillNames: wuSkillNames,
+      });
 
       const workUnitOutcomes: WorkUnitOutcome[] = [];
       const failedWorkUnits: string[] = [];
@@ -1643,79 +1770,105 @@ export class IngestBundleRunner {
           await stage3?.updateProgress(1.0, '0 of 0 work units complete');
         }
 
+        const runFreshIsolatedWorkUnit = async (wu: WorkUnit, index: number): Promise<WorkUnitOutcome> =>
+          runIsolatedWorkUnit({
+            unitIndex: index,
+            ingestionBaseSha,
+            sessionWorktreeService: this.deps.sessionWorktreeService,
+            patchDir,
+            trace: runTrace,
+            workUnit: wu,
+            abortSignal: ctx?.abortSignal,
+            afterSuccess: (child) => copyTransientIngestEvidence(child.workdir, sessionWorktree.workdir),
+            run: async (child) => {
+              const scopedWikiService = this.deps.wikiService.forWorktree(child.workdir);
+              const scopedSemanticLayerService = this.deps.semanticLayerService.forWorktree(child.workdir);
+              return this.runWorkUnitInWorktree({
+                job,
+                syncId,
+                wu,
+                worktree: child,
+                stagedDir,
+                contextReport,
+                ingestToolMetadata,
+                slConnectionIds,
+                wikiIndex,
+                slIndex,
+                priorProvenance: await this.deps.provenance.findLatestArtifactsForRawPaths(
+                  job.connectionId,
+                  job.sourceKey,
+                  wu.rawFiles,
+                ),
+                scopedWikiService,
+                scopedSemanticLayerService,
+                baseFraming,
+                skillsPrompt,
+                canonicalPins,
+                workUnitSettings,
+                transcriptDir,
+                transcriptSummaries,
+                recordTranscriptEntry,
+                stageIndex,
+                includeContextEvidenceTools: adapter.evidenceIndexing === 'documents' && !!contextReport,
+                currentTableExists: (tableRef) =>
+                  this.tableRefExistsInSemanticLayer(scopedSemanticLayerService, slConnectionIds, tableRef),
+                abortSignal: ctx?.abortSignal,
+                memoryFlow,
+                wuSkillNames,
+              });
+            },
+          });
+
         try {
           await Promise.all(
             workUnits.map((wu, index) =>
               limitWorkUnit(() =>
                 this.withRateLimitWorkSlot(ctx?.abortSignal, async () => {
-                const outcome = await runIsolatedWorkUnit({
-                  unitIndex: index,
-                  ingestionBaseSha,
-                  sessionWorktreeService: this.deps.sessionWorktreeService,
-                  patchDir,
-                  trace: runTrace,
-                  workUnit: wu,
-                  abortSignal: ctx?.abortSignal,
-                  afterSuccess: (child) => copyTransientIngestEvidence(child.workdir, sessionWorktree.workdir),
-                  run: async (child) => {
-                    const scopedWikiService = this.deps.wikiService.forWorktree(child.workdir);
-                    const scopedSemanticLayerService = this.deps.semanticLayerService.forWorktree(child.workdir);
-                    return this.runWorkUnitInWorktree({
-                      job,
-                      syncId,
-                      wu,
-                      worktree: child,
-                      stagedDir,
-                      contextReport,
-                      ingestToolMetadata,
-                      slConnectionIds,
-                      wikiIndex,
-                      slIndex,
-                      priorProvenance: await this.deps.provenance.findLatestArtifactsForRawPaths(
-                        job.connectionId,
-                        job.sourceKey,
-                        wu.rawFiles,
-                      ),
-                      scopedWikiService,
-                      scopedSemanticLayerService,
-                      baseFraming,
-                      skillsPrompt,
-                      canonicalPins,
-                      workUnitSettings,
-                      transcriptDir,
-                      transcriptSummaries,
-                      recordTranscriptEntry,
-                      stageIndex,
-                      includeContextEvidenceTools: adapter.evidenceIndexing === 'documents' && !!contextReport,
-                      currentTableExists: (tableRef) =>
-                        this.tableRefExistsInSemanticLayer(scopedSemanticLayerService, slConnectionIds, tableRef),
-                      abortSignal: ctx?.abortSignal,
-                      memoryFlow,
-                      wuSkillNames,
-                    });
-                  },
-                });
-                workUnitOutcomesByIndex[index] = outcome;
-                for (const action of outcome.actions) {
-                  memoryFlow?.emit({
-                    type: 'candidate_action',
-                    unitKey: outcome.unitKey,
-                    target: action.target,
-                    action: action.type,
-                    key: action.key,
+                  const cached = await this.cachedWorkUnitOutcome({
+                    runId: createdRunRow.id,
+                    syncId,
+                    connectionId: job.connectionId,
+                    sourceKey: job.sourceKey,
+                    stagedDir,
+                    unit: wu,
+                    unitIndex: index,
+                    patchDir,
+                    promptFingerprint: workUnitPromptFingerprint,
+                    modelRole: workUnitModelRole,
+                    trace: runTrace,
                   });
-                }
-                memoryFlow?.emit({
-                  type: 'work_unit_finished',
-                  unitKey: outcome.unitKey,
-                  status: outcome.status,
-                  ...(outcome.reason ? { reason: outcome.reason } : {}),
-                });
-                completedWorkUnits += 1;
-                await stage3?.updateProgress(
-                  completedWorkUnits / workUnits.length,
-                  `${completedWorkUnits} of ${workUnits.length} work units complete`,
-                );
+                  const outcome = cached.cacheHit ? cached : await runFreshIsolatedWorkUnit(wu, index);
+                  if (!cached.cacheHit) {
+                    await this.saveSuccessfulWorkUnitCache({
+                      runId: createdRunRow.id,
+                      syncId,
+                      connectionId: job.connectionId,
+                      sourceKey: job.sourceKey,
+                      inputHash: cached.cacheInputHash,
+                      outcome,
+                    });
+                  }
+                  workUnitOutcomesByIndex[index] = outcome;
+                  for (const action of outcome.actions) {
+                    memoryFlow?.emit({
+                      type: 'candidate_action',
+                      unitKey: outcome.unitKey,
+                      target: action.target,
+                      action: action.type,
+                      key: action.key,
+                    });
+                  }
+                  memoryFlow?.emit({
+                    type: 'work_unit_finished',
+                    unitKey: outcome.unitKey,
+                    status: outcome.status,
+                    ...(outcome.reason ? { reason: outcome.reason } : {}),
+                  });
+                  completedWorkUnits += 1;
+                  await stage3?.updateProgress(
+                    completedWorkUnits / workUnits.length,
+                    `${completedWorkUnits} of ${workUnits.length} work units complete`,
+                  );
                 }),
               ),
             ),
@@ -1757,155 +1910,198 @@ export class IngestBundleRunner {
           if (!wu) {
             continue;
           }
-          const integrationFailureDetails = {
-            unitKey: outcome.unitKey,
-            patchPath: outcome.patchPath,
-            allowedTargetConnectionIds: slConnectionIds,
-          };
-          activeFailureDetails = integrationFailureDetails;
-          emitStageProgress(
-            'integration',
-            80,
-            `Integrating ${integratedPatchCount + 1}/${integrablePatchCount} patches: ${outcome.unitKey}`,
-          );
-          const integration = await integrateWorkUnitPatch({
-            unitKey: outcome.unitKey,
-            patchPath: outcome.patchPath,
-            integrationGit: sessionWorktree.git,
-            trace: runTrace,
-            author: this.deps.storage.systemGitAuthor,
-            slDisallowed: wu.slDisallowed === true,
-            allowedTargetConnectionIds: new Set(slConnectionIds),
-            validateAppliedTree: async (touchedPaths) => {
-              await validateFinalIngestArtifacts({
-                connectionIds: slConnectionIds,
-                changedWikiPageKeys: this.wikiPageKeysFromPaths(touchedPaths),
-                touchedSlSources: await this.touchedSlSourcesFromPaths(
-                  sessionWorktree,
-                  touchedPaths,
-                  await sessionWorktree.git.revParseHead(),
-                ),
-                wikiService: this.deps.wikiService.forWorktree(sessionWorktree.workdir),
-                semanticLayerService: this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
-                validateTouchedSources: (touched) =>
-                  validateWuTouchedSources(
-                    {
-                      semanticLayerService: this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
-                      connections: this.deps.connections,
-                      configService: sessionWorktree.config,
-                      gitService: sessionWorktree.git,
-                      slSourcesRepository: this.deps.slSourcesRepository,
-                      probeRowCount: this.deps.settings.probeRowCount,
-                      slValidator: this.deps.slValidator,
-                    },
-                    touched,
+          let outcomeForIntegration: WorkUnitOutcome | CachedWorkUnitOutcome = outcome;
+          let recomputedCachedPatch = false;
+          while (true) {
+            const patchPath = outcomeForIntegration.patchPath;
+            if (!patchPath) {
+              activeFailureDetails = undefined;
+              break;
+            }
+            const integrationFailureDetails = {
+              unitKey: outcomeForIntegration.unitKey,
+              patchPath,
+              allowedTargetConnectionIds: slConnectionIds,
+            };
+            activeFailureDetails = integrationFailureDetails;
+            emitStageProgress(
+              'integration',
+              80,
+              `Integrating ${integratedPatchCount + 1}/${integrablePatchCount} patches: ${outcomeForIntegration.unitKey}`,
+            );
+            const integration = await integrateWorkUnitPatch({
+              unitKey: outcomeForIntegration.unitKey,
+              patchPath,
+              integrationGit: sessionWorktree.git,
+              trace: runTrace,
+              author: this.deps.storage.systemGitAuthor,
+              slDisallowed: wu.slDisallowed === true,
+              allowedTargetConnectionIds: new Set(slConnectionIds),
+              validateAppliedTree: async (touchedPaths) => {
+                await validateFinalIngestArtifacts({
+                  connectionIds: slConnectionIds,
+                  changedWikiPageKeys: this.wikiPageKeysFromPaths(touchedPaths),
+                  touchedSlSources: await this.touchedSlSourcesFromPaths(
+                    sessionWorktree,
+                    touchedPaths,
+                    await sessionWorktree.git.revParseHead(),
                   ),
-                tableExists: (connectionId, tableRef) =>
-                  this.tableRefExistsInSemanticLayer(
-                    this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
-                    [connectionId],
-                    tableRef,
-                  ),
+                  wikiService: this.deps.wikiService.forWorktree(sessionWorktree.workdir),
+                  semanticLayerService: this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
+                  validateTouchedSources: (touched) =>
+                    validateWuTouchedSources(
+                      {
+                        semanticLayerService: this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
+                        connections: this.deps.connections,
+                        configService: sessionWorktree.config,
+                        gitService: sessionWorktree.git,
+                        slSourcesRepository: this.deps.slSourcesRepository,
+                        probeRowCount: this.deps.settings.probeRowCount,
+                        slValidator: this.deps.slValidator,
+                      },
+                      touched,
+                    ),
+                  tableExists: (connectionId, tableRef) =>
+                    this.tableRefExistsInSemanticLayer(
+                      this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
+                      [connectionId],
+                      tableRef,
+                    ),
+                });
+              },
+              resolveTextualConflict: async (context) => {
+                emitStageProgress('integration', 81, `Resolving text conflict for ${context.unitKey}`);
+                const result = await resolveTextualConflict({
+                  agentRunner: this.deps.agentRunner,
+                  workdir: sessionWorktree.workdir,
+                  unitKey: context.unitKey,
+                  patchPath: context.patchPath,
+                  touchedPaths: context.touchedPaths,
+                  trace: runTrace,
+                  reason: context.reason,
+                  verify: context.verify,
+                  maxAttempts: 2,
+                  stepBudget: 12,
+                  abortSignal: ctx?.abortSignal,
+                });
+                emitStageProgress(
+                  'integration',
+                  82,
+                  result.status === 'repaired'
+                    ? `Resolved text conflict for ${context.unitKey}`
+                    : `Text conflict resolver failed for ${context.unitKey}`,
+                );
+                return result;
+              },
+              repairGateFailure: async (context) => {
+                emitStageProgress('integration', 82, `Repairing semantic gate for ${context.unitKey}`);
+                const result = await repairFinalGateFailure({
+                  agentRunner: this.deps.agentRunner,
+                  workdir: sessionWorktree.workdir,
+                  gateError: context.reason,
+                  allowedPaths: context.touchedPaths,
+                  trace: runTrace,
+                  repairKind: 'patch_semantic_gate',
+                  verify: context.verify,
+                  maxAttempts: 2,
+                  stepBudget: 16,
+                  abortSignal: ctx?.abortSignal,
+                });
+                emitStageProgress(
+                  'integration',
+                  83,
+                  result.status === 'repaired'
+                    ? `Repaired semantic gate for ${context.unitKey}`
+                    : `Semantic gate repair failed for ${context.unitKey}`,
+                );
+                return result;
+              },
+            });
+            if (integration.textualResolution) {
+              isolatedDiffSummary.resolverAttempts += integration.textualResolution.attempts;
+              if (integration.textualResolution.status === 'repaired') {
+                isolatedDiffSummary.textualConflicts += 1;
+                isolatedDiffSummary.resolverRepairs += 1;
+              } else {
+                isolatedDiffSummary.resolverFailures += 1;
+              }
+            }
+            if (integration.gateRepair) {
+              isolatedDiffSummary.gateRepairAttempts += integration.gateRepair.attempts;
+              if (integration.gateRepair.status === 'repaired') {
+                isolatedDiffSummary.semanticConflicts += 1;
+                isolatedDiffSummary.gateRepairs += 1;
+              } else {
+                isolatedDiffSummary.gateRepairFailures += 1;
+              }
+            }
+            if (
+              integration.status !== 'accepted' &&
+              isCachedWorkUnitOutcome(outcomeForIntegration) &&
+              !recomputedCachedPatch
+            ) {
+              await this.deps.contentCache.deleteResult({
+                namespace: INGEST_WORK_UNIT_CACHE_NAMESPACE,
+                scopeKey: ingestWorkUnitCacheScopeKey({ connectionId: job.connectionId, sourceKey: job.sourceKey }),
+                inputHash: outcomeForIntegration.cacheInputHash,
               });
-            },
-            resolveTextualConflict: async (context) => {
-              emitStageProgress('integration', 81, `Resolving text conflict for ${context.unitKey}`);
-              const result = await resolveTextualConflict({
-                agentRunner: this.deps.agentRunner,
-                workdir: sessionWorktree.workdir,
-                unitKey: context.unitKey,
-                patchPath: context.patchPath,
-                touchedPaths: context.touchedPaths,
-                trace: runTrace,
-                reason: context.reason,
-                verify: context.verify,
-                maxAttempts: 2,
-                stepBudget: 12,
-                abortSignal: ctx?.abortSignal,
+              await runTrace.event('debug', 'integration', 'work_unit_cache_stale_recompute', {
+                unitKey: outcomeForIntegration.unitKey,
+                inputHash: outcomeForIntegration.cacheInputHash,
+                reason: integration.reason,
               });
-              emitStageProgress(
-                'integration',
-                82,
-                result.status === 'repaired'
-                  ? `Resolved text conflict for ${context.unitKey}`
-                  : `Text conflict resolver failed for ${context.unitKey}`,
-              );
-              return result;
-            },
-            repairGateFailure: async (context) => {
-              emitStageProgress('integration', 82, `Repairing semantic gate for ${context.unitKey}`);
-              const result = await repairFinalGateFailure({
-                agentRunner: this.deps.agentRunner,
-                workdir: sessionWorktree.workdir,
-                gateError: context.reason,
-                allowedPaths: context.touchedPaths,
-                trace: runTrace,
-                repairKind: 'patch_semantic_gate',
-                verify: context.verify,
-                maxAttempts: 2,
-                stepBudget: 16,
-                abortSignal: ctx?.abortSignal,
+              const recomputed = await runFreshIsolatedWorkUnit(wu, index);
+              workUnitOutcomesByIndex[index] = recomputed;
+              await this.saveSuccessfulWorkUnitCache({
+                runId: createdRunRow.id,
+                syncId,
+                connectionId: job.connectionId,
+                sourceKey: job.sourceKey,
+                inputHash: outcomeForIntegration.cacheInputHash,
+                outcome: recomputed,
               });
-              emitStageProgress(
-                'integration',
-                83,
-                result.status === 'repaired'
-                  ? `Repaired semantic gate for ${context.unitKey}`
-                  : `Semantic gate repair failed for ${context.unitKey}`,
-              );
-              return result;
-            },
-          });
-          if (integration.textualResolution) {
-            isolatedDiffSummary.resolverAttempts += integration.textualResolution.attempts;
-            if (integration.textualResolution.status === 'repaired') {
+              if (recomputed.status !== 'success' || !recomputed.patchPath) {
+                activeFailureDetails = undefined;
+                break;
+              }
+              outcomeForIntegration = recomputed;
+              recomputedCachedPatch = true;
+              continue;
+            }
+            if (integration.status === 'textual_conflict') {
               isolatedDiffSummary.textualConflicts += 1;
-              isolatedDiffSummary.resolverRepairs += 1;
-            } else {
-              isolatedDiffSummary.resolverFailures += 1;
+              await this.deps.runs.markFailed(runRow.id);
+              cleanupOutcome = 'conflict';
+              activeFailureDetails = {
+                ...integrationFailureDetails,
+                touchedPaths: integration.touchedPaths,
+                reason: integration.reason,
+              };
+              throw new Error(`isolated diff textual conflict in ${outcomeForIntegration.unitKey}: ${integration.reason}`);
             }
-          }
-          if (integration.gateRepair) {
-            isolatedDiffSummary.gateRepairAttempts += integration.gateRepair.attempts;
-            if (integration.gateRepair.status === 'repaired') {
+            if (integration.status === 'semantic_conflict') {
               isolatedDiffSummary.semanticConflicts += 1;
-              isolatedDiffSummary.gateRepairs += 1;
-            } else {
-              isolatedDiffSummary.gateRepairFailures += 1;
+              await this.deps.runs.markFailed(runRow.id);
+              cleanupOutcome = 'conflict';
+              activeFailureDetails = {
+                ...integrationFailureDetails,
+                touchedPaths: integration.touchedPaths,
+                reason: integration.reason,
+              };
+              throw new Error(`isolated diff semantic conflict in ${outcomeForIntegration.unitKey}: ${integration.reason}`);
             }
+            activeFailureDetails = undefined;
+            if (integration.touchedPaths.length > 0) {
+              isolatedDiffSummary.acceptedPatches += 1;
+              integratedPatchCount += 1;
+            }
+            emitStageProgress(
+              'integration',
+              83,
+              `Integrated ${integratedPatchCount}/${integrablePatchCount} patches`,
+            );
+            break;
           }
-          if (integration.status === 'textual_conflict') {
-            isolatedDiffSummary.textualConflicts += 1;
-            await this.deps.runs.markFailed(runRow.id);
-            cleanupOutcome = 'conflict';
-            activeFailureDetails = {
-              ...integrationFailureDetails,
-              touchedPaths: integration.touchedPaths,
-              reason: integration.reason,
-            };
-            throw new Error(`isolated diff textual conflict in ${outcome.unitKey}: ${integration.reason}`);
-          }
-          if (integration.status === 'semantic_conflict') {
-            isolatedDiffSummary.semanticConflicts += 1;
-            await this.deps.runs.markFailed(runRow.id);
-            cleanupOutcome = 'conflict';
-            activeFailureDetails = {
-              ...integrationFailureDetails,
-              touchedPaths: integration.touchedPaths,
-              reason: integration.reason,
-            };
-            throw new Error(`isolated diff semantic conflict in ${outcome.unitKey}: ${integration.reason}`);
-          }
-          activeFailureDetails = undefined;
-          if (integration.touchedPaths.length > 0) {
-            isolatedDiffSummary.acceptedPatches += 1;
-            integratedPatchCount += 1;
-          }
-          emitStageProgress(
-            'integration',
-            83,
-            `Integrated ${integratedPatchCount}/${integrablePatchCount} patches`,
-          );
         }
 
       }

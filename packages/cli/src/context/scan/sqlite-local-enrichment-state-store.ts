@@ -30,7 +30,7 @@ function metadataFor(input: {
   syncId: string;
   mode: KtxScanMode;
   stage: KtxScanEnrichmentStage;
-}): ScanStageMetadata {
+}): Record<string, unknown> {
   return {
     connectionId: input.connectionId,
     syncId: input.syncId,

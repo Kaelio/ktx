@@ -19,7 +19,7 @@ export interface RunIsolatedWorkUnitInput {
   afterSuccess?(child: IngestSessionWorktree): Promise<void>;
 }
 
-function patchFileName(unitIndex: number, unitKey: string): string {
+export function workUnitPatchFileName(unitIndex: number, unitKey: string): string {
   const safeKey = unitKey.replace(/[^a-zA-Z0-9_.-]+/g, '-');
   return `${String(unitIndex).padStart(4, '0')}-${safeKey}.patch`;
 }
@@ -84,7 +84,7 @@ export async function runIsolatedWorkUnit(input: RunIsolatedWorkUnitInput): Prom
 
     await input.afterSuccess?.(child);
     await mkdir(input.patchDir, { recursive: true });
-    const patchPath = join(input.patchDir, patchFileName(input.unitIndex, input.workUnit.unitKey));
+    const patchPath = join(input.patchDir, workUnitPatchFileName(input.unitIndex, input.workUnit.unitKey));
     await child.git.writeBinaryNoRenamePatch(input.ingestionBaseSha, 'HEAD', patchPath);
     const patch = await readFile(patchPath, 'utf-8');
     const touched = parsePatchTouchedPaths(patch);
