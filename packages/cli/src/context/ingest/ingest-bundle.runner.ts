@@ -1040,6 +1040,52 @@ export class IngestBundleRunner {
     );
   }
 
+  private markFinalGateDroppedSourceWorkUnits(input: {
+    stageIndex: StageIndex;
+    workUnitOutcomes: WorkUnitOutcome[];
+    failedWorkUnits: string[];
+    droppedSources: FinalGateDroppedSource[];
+    fallbackConnectionId: string;
+  }): void {
+    const unitFailures = new Map<string, string[]>();
+    for (const dropped of input.droppedSources) {
+      for (const workUnit of input.stageIndex.workUnits) {
+        const producedByAction = workUnit.actions.some(
+          (action) =>
+            action.target === 'sl' &&
+            action.key === dropped.sourceName &&
+            actionTargetConnectionId(action, input.fallbackConnectionId) === dropped.connectionId,
+        );
+        const producedByTouchedSource = workUnit.touchedSlSources.some(
+          (source) => source.connectionId === dropped.connectionId && source.sourceName === dropped.sourceName,
+        );
+        if (!producedByAction && !producedByTouchedSource) {
+          continue;
+        }
+        const reasons = unitFailures.get(workUnit.unitKey) ?? [];
+        reasons.push(`${dropped.connectionId}:${dropped.sourceName} (${dropped.reason})`);
+        unitFailures.set(workUnit.unitKey, reasons);
+      }
+    }
+
+    for (const [unitKey, reasons] of unitFailures) {
+      const reason = `final artifact gate dropped invalid source(s): ${reasons.join(', ')}`;
+      const reportWorkUnit = input.stageIndex.workUnits.find((workUnit) => workUnit.unitKey === unitKey);
+      if (reportWorkUnit) {
+        reportWorkUnit.status = 'failed';
+        reportWorkUnit.reason = reason;
+      }
+      const outcome = input.workUnitOutcomes.find((workUnit) => workUnit.unitKey === unitKey);
+      if (outcome) {
+        outcome.status = 'failed';
+        outcome.reason = reason;
+      }
+      if (!input.failedWorkUnits.includes(unitKey)) {
+        input.failedWorkUnits.push(unitKey);
+      }
+    }
+  }
+
   private finalGateActionOrigins(input: {
     stageIndex: StageIndex;
     reconcileActions: MemoryAction[];
@@ -2870,6 +2916,13 @@ export class IngestBundleRunner {
         await runTrace.event('info', 'final_gates', 'final_gate_prune_finished', {
           prunedReferences: finalGatePrunedReferences,
           droppedSources: finalGateDroppedSources,
+        });
+        this.markFinalGateDroppedSourceWorkUnits({
+          stageIndex,
+          workUnitOutcomes,
+          failedWorkUnits,
+          droppedSources: finalGateDroppedSources,
+          fallbackConnectionId: job.connectionId,
         });
       }
       activeFailureDetails = undefined;

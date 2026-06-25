@@ -7,6 +7,7 @@ import { GitService } from '../../../src/context/core/git.service.js';
 import { SessionWorktreeService } from '../../../src/context/core/session-worktree.service.js';
 import { LocalGitFileStore } from '../../../src/context/project/local-git-file-store.js';
 import { SqliteContentResultCache } from '../../../src/context/cache/sqlite-content-result-cache.js';
+import { slSourceFilePath } from '../../../src/context/sl/source-files.js';
 import { addTouchedSlSource } from '../../../src/context/tools/touched-sl-sources.js';
 import { IngestBundleRunner } from '../../../src/context/ingest/ingest-bundle.runner.js';
 import type { IngestBundleRunnerDeps } from '../../../src/context/ingest/ports.js';
@@ -989,6 +990,81 @@ describe('IngestBundleRunner isolated diff path', () => {
       await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/products.yaml'), 'utf-8')).resolves.toContain(
         'name: products',
       );
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('drops an intrinsically invalid uppercase source at the final gate and reports the producing work unit', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [{ unitKey: 'signed-up', rawFiles: ['models/signed_up.sql'], peerFileIndex: [], dependencyPaths: [] }],
+      });
+
+      const sourceName = 'SIGNED_UP';
+      const sourcePath = slSourceFilePath('warehouse', sourceName);
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      let signedUpValidationCount = 0;
+      deps.slValidator.validateSingleSource = vi.fn(
+        async (_validationDeps: any, _connectionId: string, validatedSourceName: string) => {
+          if (validatedSourceName === sourceName) {
+            signedUpValidationCount += 1;
+            if (signedUpValidationCount > 1) {
+              return { errors: ['intrinsic final validation failed'], warnings: [] };
+            }
+          }
+          return { errors: [], warnings: [] };
+        },
+      ) as never;
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'semantic-layer/warehouse'), { recursive: true });
+        await writeFile(
+          join(root, sourcePath),
+          'name: SIGNED_UP\ngrain: [USER_ID]\ncolumns: [{name: USER_ID, type: string}]\njoins: []\nmeasures: []\n',
+          'utf-8',
+        );
+        addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', sourceName);
+        currentSession.actions.push({
+          target: 'sl',
+          type: 'created',
+          key: sourceName,
+          detail: 'uppercase signed up source',
+          targetConnectionId: 'warehouse',
+          rawPaths: ['models/signed_up.sql'],
+        });
+        await currentSession.gitService.commitFiles([sourcePath], 'wu signed up', 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [['models/signed_up.sql', 'signed-up-hash']], 'dbt');
+
+      const result = await runner.run({
+        jobId: 'job-final-gate-intrinsic-drop',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+
+      expect(result.commitSha).toBeTruthy();
+      expect(result.failedWorkUnits).toEqual(['signed-up']);
+      expect(result.finalGateDroppedSources).toContainEqual({
+        connectionId: 'warehouse',
+        sourceName,
+        reason: 'intrinsic final validation failed',
+      });
+      await expect(readFile(join(runtime.configDir, sourcePath), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
