@@ -1883,24 +1883,29 @@ export class IngestBundleRunner {
           throw error;
         }
 
-        workUnitOutcomes.push(
-          ...workUnitOutcomesByIndex.filter((outcome): outcome is WorkUnitOutcome => Boolean(outcome)),
-        );
-        failedWorkUnits.push(
-          ...workUnitOutcomes.filter((outcome) => outcome.status === 'failed').map((outcome) => outcome.unitKey),
-        );
-        latestWorkUnits = workUnitOutcomes;
-        latestFailedWorkUnits = failedWorkUnits;
-        stageIndex.workUnits = workUnitOutcomes.map((o) => ({
-          unitKey: o.unitKey,
-          rawFiles: workUnits.find((w) => w.unitKey === o.unitKey)?.rawFiles ?? [],
-          status: o.status,
-          reason: o.reason,
-          actions: o.actions,
-          touchedSlSources: o.touchedSlSources,
-          slDisallowed: o.slDisallowed,
-          slDisallowedReason: o.slDisallowedReason,
-        }));
+        const refreshWorkUnitState = () => {
+          workUnitOutcomes.length = 0;
+          workUnitOutcomes.push(
+            ...workUnitOutcomesByIndex.filter((outcome): outcome is WorkUnitOutcome => Boolean(outcome)),
+          );
+          failedWorkUnits.length = 0;
+          failedWorkUnits.push(
+            ...workUnitOutcomes.filter((outcome) => outcome.status === 'failed').map((outcome) => outcome.unitKey),
+          );
+          latestWorkUnits = workUnitOutcomes;
+          latestFailedWorkUnits = failedWorkUnits;
+          stageIndex.workUnits = workUnitOutcomes.map((o) => ({
+            unitKey: o.unitKey,
+            rawFiles: workUnits.find((w) => w.unitKey === o.unitKey)?.rawFiles ?? [],
+            status: o.status,
+            reason: o.reason,
+            actions: o.actions,
+            touchedSlSources: o.touchedSlSources,
+            slDisallowed: o.slDisallowed,
+            slDisallowedReason: o.slDisallowedReason,
+          }));
+        };
+        refreshWorkUnitState();
 
         activePhase = 'integration';
         const integrablePatchCount = workUnitOutcomesByIndex.filter(
@@ -2036,6 +2041,7 @@ export class IngestBundleRunner {
                 inputHash: outcomeForIntegration.cacheInputHash,
                 outcome: recomputed,
               });
+              refreshWorkUnitState();
               if (recomputed.status !== 'success' || !recomputed.patchPath) {
                 activeFailureDetails = undefined;
                 break;
