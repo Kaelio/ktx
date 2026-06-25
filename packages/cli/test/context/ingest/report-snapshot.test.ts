@@ -106,6 +106,26 @@ describe('parseIngestReportSnapshot', () => {
     expect(snapshot.body.toolTranscripts).toHaveLength(1);
   });
 
+  it('parses final gate prune and drop arrays', () => {
+    const report: any = validReportSnapshot();
+    report.body.finalGatePrunedReferences = [
+      {
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'customers',
+        absentTarget: 'customers',
+      },
+    ] as never;
+    report.body.finalGateDroppedSources = [
+      { connectionId: 'warehouse', sourceName: 'bad', reason: 'dry run failed' },
+    ] as never;
+
+    const snapshot = parseIngestReportSnapshot(report);
+
+    expect(snapshot.body.finalGatePrunedReferences).toEqual(report.body.finalGatePrunedReferences);
+    expect(snapshot.body.finalGateDroppedSources).toEqual(report.body.finalGateDroppedSources);
+  });
+
   it('parses target-aware actions and touched source objects', () => {
     const report = validReportSnapshot();
     report.body.workUnits[0] = {
@@ -302,47 +322,4 @@ describe('parseIngestReportSnapshot', () => {
     });
   });
 
-  it('parses isolated-diff gate repair counters', () => {
-    const snapshot = parseIngestReportSnapshot({
-      id: 'report-1',
-      runId: 'run-1',
-      jobId: 'job-1',
-      connectionId: 'warehouse',
-      sourceKey: 'metabase',
-      createdAt: '2026-05-18T00:00:00.000Z',
-      body: {
-        status: 'completed',
-        syncId: 'sync-1',
-        diffSummary: { added: 1, modified: 0, deleted: 0, unchanged: 0 },
-        commitSha: 'abc123',
-        isolatedDiff: {
-          enabled: true,
-          acceptedPatches: 1,
-          textualConflicts: 0,
-          semanticConflicts: 1,
-          gateRepairAttempts: 1,
-          gateRepairs: 1,
-          gateRepairFailures: 0,
-        },
-        workUnits: [],
-        failedWorkUnits: [],
-        reconciliationSkipped: true,
-        conflictsResolved: [],
-        evictionsApplied: [],
-        unmappedFallbacks: [],
-        evictionInputs: [],
-        unresolvedCards: [],
-        supersededBy: null,
-        overrideOf: null,
-        provenanceRows: [],
-        toolTranscripts: [],
-      },
-    });
-
-    expect(snapshot.body.isolatedDiff).toMatchObject({
-      gateRepairAttempts: 1,
-      gateRepairs: 1,
-      gateRepairFailures: 0,
-    });
-  });
 });

@@ -25,12 +25,16 @@ import {
   validateProvenanceRawPaths,
 } from './artifact-gates.js';
 import { selectRelevantCanonicalPins } from './canonical-pins.js';
-import { finalGateRepairPaths, repairFinalGateFailure } from './final-gate-repair.js';
 import {
   compareFinalizationDeclarations,
   deriveFinalizationTouchedSources,
   deriveFinalizationWikiPageKeys,
 } from './finalization-scope.js';
+import {
+  pruneFinalGateFindings,
+  type FinalGateDroppedSource,
+  type FinalGatePrunedReference,
+} from './final-gate-prune.js';
 import { FileIngestTraceWriter, ingestTracePathForJob, type IngestTraceWriter, traceTimed } from './ingest-trace.js';
 import { formatIngestProfile, formatIngestProfileJson, readIngestProfile, resolveIngestProfileMode } from './ingest-profile.js';
 import { integrateWorkUnitPatch } from './isolated-diff/patch-integrator.js';
@@ -1681,9 +1685,6 @@ export class IngestBundleRunner {
         resolverAttempts: 0,
         resolverRepairs: 0,
         resolverFailures: 0,
-        gateRepairAttempts: 0,
-        gateRepairs: 0,
-        gateRepairFailures: 0,
       };
       latestIsolatedDiffSummary = isolatedDiffSummary;
 
@@ -2000,29 +2001,6 @@ export class IngestBundleRunner {
                 );
                 return result;
               },
-              repairGateFailure: async (context) => {
-                emitStageProgress('integration', 82, `Repairing semantic gate for ${context.unitKey}`);
-                const result = await repairFinalGateFailure({
-                  agentRunner: this.deps.agentRunner,
-                  workdir: sessionWorktree.workdir,
-                  gateError: context.reason,
-                  allowedPaths: context.touchedPaths,
-                  trace: runTrace,
-                  repairKind: 'patch_semantic_gate',
-                  verify: context.verify,
-                  maxAttempts: 2,
-                  stepBudget: 16,
-                  abortSignal: ctx?.abortSignal,
-                });
-                emitStageProgress(
-                  'integration',
-                  83,
-                  result.status === 'repaired'
-                    ? `Repaired semantic gate for ${context.unitKey}`
-                    : `Semantic gate repair failed for ${context.unitKey}`,
-                );
-                return result;
-              },
             });
             if (integration.textualResolution) {
               isolatedDiffSummary.resolverAttempts += integration.textualResolution.attempts;
@@ -2031,15 +2009,6 @@ export class IngestBundleRunner {
                 isolatedDiffSummary.resolverRepairs += 1;
               } else {
                 isolatedDiffSummary.resolverFailures += 1;
-              }
-            }
-            if (integration.gateRepair) {
-              isolatedDiffSummary.gateRepairAttempts += integration.gateRepair.attempts;
-              if (integration.gateRepair.status === 'repaired') {
-                isolatedDiffSummary.semanticConflicts += 1;
-                isolatedDiffSummary.gateRepairs += 1;
-              } else {
-                isolatedDiffSummary.gateRepairFailures += 1;
               }
             }
             if (
@@ -2752,11 +2721,13 @@ export class IngestBundleRunner {
       activePhase = 'final_gates';
       activeFailureDetails = finalArtifactGateTraceData;
       emitStageProgress('final_gates', 89, 'Running final artifact gates');
-      const runFinalArtifactGates = async () => {
-        const gate = await validateFinalIngestArtifacts({
+      let finalGatePrunedReferences: FinalGatePrunedReference[] = [];
+      let finalGateDroppedSources: FinalGateDroppedSource[] = [];
+      const runFinalArtifactGates = async (touchedSources = finalTouchedSlSources) =>
+        validateFinalIngestArtifacts({
           connectionIds: repairConnectionIds,
           changedWikiPageKeys: finalChangedWikiPageKeys,
-          touchedSlSources: finalTouchedSlSources,
+          touchedSlSources: touchedSources,
           wikiService: this.deps.wikiService.forWorktree(sessionWorktree.workdir),
           semanticLayerService: this.deps.semanticLayerService.forWorktree(sessionWorktree.workdir),
           validateTouchedSources: (touched) =>
@@ -2779,73 +2750,65 @@ export class IngestBundleRunner {
               tableRef,
             ),
         });
-        if (!gate.ok) {
-          throw new Error(formatFinalArtifactGateFindings(gate.findings));
-        }
-      };
-      try {
-        await traceTimed(
-          runTrace,
-          'final_gates',
-          'final_artifact_gates',
-          finalArtifactGateTraceData,
-          runFinalArtifactGates,
-        );
-      } catch (error) {
-        const gateError = this.errorMessage(error);
-        const repairPaths = finalGateRepairPaths({
-          changedWikiPageKeys: finalChangedWikiPageKeys,
-          touchedSlSourcePaths: await this.touchedSlSourcePaths(sessionWorktree.workdir, finalTouchedSlSources),
-        });
-        emitStageProgress('final_gates', 89, 'Repairing final artifact gates');
-        const gateRepair = await repairFinalGateFailure({
-          agentRunner: this.deps.agentRunner,
+
+      const firstGate = await traceTimed(
+        runTrace,
+        'final_gates',
+        'final_artifact_gates',
+        finalArtifactGateTraceData,
+        () => runFinalArtifactGates(),
+      );
+      if (!firstGate.ok) {
+        emitStageProgress('final_gates', 89, 'Pruning final artifact gates');
+        const firstPrune = await pruneFinalGateFindings({
           workdir: sessionWorktree.workdir,
-          gateError,
-          allowedPaths: repairPaths,
+          findings: firstGate.findings,
+          droppedSources: [],
           trace: runTrace,
-          repairKind: 'final_artifact_gate',
-          verify: async () => {
-            try {
-              await runFinalArtifactGates();
-              return { ok: true };
-            } catch (verifyError) {
-              return { ok: false, reason: this.errorMessage(verifyError) };
-            }
-          },
-          maxAttempts: 2,
-          stepBudget: 16,
-          abortSignal: ctx?.abortSignal,
+          author: this.deps.storage.systemGitAuthor,
+          wikiService: this.deps.wikiService.forWorktree(sessionWorktree.workdir),
         });
-
-        isolatedDiffSummary.gateRepairAttempts += gateRepair.attempts;
-        if (gateRepair.status === 'failed') {
-          isolatedDiffSummary.gateRepairFailures += 1;
-          activeFailureDetails = {
-            ...finalArtifactGateTraceData,
-            gateRepair,
-            gateError,
-          };
-          throw new Error(`${gateError}\ngate repair failed: ${gateRepair.reason}`);
-        }
-
-        // The repair loop re-ran the gates via `verify` before reporting
-        // success, so a repaired status here means the tree already passed.
-        isolatedDiffSummary.gateRepairs += 1;
-
-        const repairCommit = await sessionWorktree.git.commitFiles(
-          gateRepair.changedPaths,
-          `ingest(${job.sourceKey}): repair final gates syncId=${syncId}`,
-          this.deps.storage.systemGitAuthor.name,
-          this.deps.storage.systemGitAuthor.email,
+        finalGateDroppedSources = firstPrune.droppedSources;
+        finalGatePrunedReferences = firstPrune.prunedReferences;
+        const droppedKeys = new Set(
+          finalGateDroppedSources.map((source) => `${source.connectionId}:${source.sourceName}`),
         );
-        if (!repairCommit.created) {
-          isolatedDiffSummary.gateRepairFailures += 1;
-          throw new Error('final gate repair produced no committable changes');
+        const touchedAfterDrop = finalTouchedSlSources.filter(
+          (source) => !droppedKeys.has(`${source.connectionId}:${source.sourceName}`),
+        );
+        const secondGate = await runFinalArtifactGates(touchedAfterDrop);
+        if (!secondGate.ok) {
+          const secondPrune = await pruneFinalGateFindings({
+            workdir: sessionWorktree.workdir,
+            findings: secondGate.findings.filter((finding) => finding.kind !== 'invalid_source'),
+            droppedSources: finalGateDroppedSources,
+            trace: runTrace,
+            author: this.deps.storage.systemGitAuthor,
+            wikiService: this.deps.wikiService.forWorktree(sessionWorktree.workdir),
+          });
+          finalGateDroppedSources = secondPrune.droppedSources;
+          finalGatePrunedReferences = [...finalGatePrunedReferences, ...secondPrune.prunedReferences];
         }
-        await runTrace.event('debug', 'final_gates', 'final_gate_repair_committed', {
-          commitSha: repairCommit.commitHash,
-          repairedPaths: gateRepair.changedPaths,
+        const pruneTouchedPaths = await sessionWorktree.git.changedPaths();
+        if (pruneTouchedPaths.length > 0) {
+          const pruneCommit = await sessionWorktree.git.commitFiles(
+            pruneTouchedPaths,
+            `ingest(${job.sourceKey}): prune final gate findings syncId=${syncId}`,
+            this.deps.storage.systemGitAuthor.name,
+            this.deps.storage.systemGitAuthor.email,
+          );
+          await runTrace.event('debug', 'final_gates', 'final_gate_prune_committed', {
+            commitSha: pruneCommit.created ? pruneCommit.commitHash : null,
+            touchedPaths: pruneTouchedPaths,
+          });
+        }
+        const confirmGate = await runFinalArtifactGates(touchedAfterDrop);
+        if (!confirmGate.ok) {
+          throw new Error(`final artifact gates still failed after prune:\n${formatFinalArtifactGateFindings(confirmGate.findings)}`);
+        }
+        await runTrace.event('info', 'final_gates', 'final_gate_prune_finished', {
+          prunedReferences: finalGatePrunedReferences,
+          droppedSources: finalGateDroppedSources,
         });
       }
       activeFailureDetails = undefined;
@@ -3072,6 +3035,8 @@ export class IngestBundleRunner {
         provenanceRows: reportProvenanceRows,
         toolTranscripts: reportToolTranscripts,
         finalization: finalizationOutcome,
+        finalGatePrunedReferences,
+        finalGateDroppedSources,
         wikiSlRefRepairs: wikiSlRefRepairResult.repairs,
         wikiSlRefRepairWarnings: wikiSlRefRepairResult.warnings,
         ...(reportMemoryFlow ? { memoryFlow: reportMemoryFlow } : {}),
@@ -3183,6 +3148,8 @@ export class IngestBundleRunner {
         failedWorkUnits,
         artifactsWritten: provenanceRows.filter((r) => r.actionType !== 'skipped').length,
         commitSha,
+        finalGatePrunedReferences,
+        finalGateDroppedSources,
       };
     } finally {
       await this.deps.sessionWorktreeService.cleanup(sessionWorktree, cleanupOutcome);
