@@ -862,6 +862,138 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
+  it('prunes a failed sibling join without pruning a valid surviving join', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'products', rawFiles: ['models/products.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'semantic-layer/warehouse'), { recursive: true });
+
+        if (unitKey === 'orders') {
+          await writeFile(
+            join(root, 'semantic-layer/warehouse/orders.yaml'),
+            [
+              'name: orders',
+              'grain: [order_id]',
+              'columns: [{name: order_id, type: string}, {name: customer_id, type: string}, {name: product_id, type: string}]',
+              'joins:',
+              '  - to: customers',
+              '    on: orders.customer_id = customers.customer_id',
+              '  - to: products',
+              '    on: orders.product_id = products.product_id',
+              'measures: []',
+              '',
+            ].join('\n'),
+            'utf-8',
+          );
+          addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'orders');
+          currentSession.actions.push({
+            target: 'sl',
+            type: 'created',
+            key: 'orders',
+            detail: 'orders with customer and product joins',
+            targetConnectionId: 'warehouse',
+            rawPaths: ['models/orders.sql'],
+          });
+          await currentSession.gitService.commitFiles(
+            ['semantic-layer/warehouse/orders.yaml'],
+            'wu orders',
+            'ktx Test',
+            'system@ktx.local',
+          );
+          return { stopReason: 'natural' };
+        }
+
+        if (unitKey === 'customers') {
+          return { stopReason: 'error', error: new Error('provider disconnected') };
+        }
+
+        await writeFile(
+          join(root, 'semantic-layer/warehouse/products.yaml'),
+          'name: products\ngrain: [product_id]\ncolumns: [{name: product_id, type: string}]\njoins: []\nmeasures: []\n',
+          'utf-8',
+        );
+        addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'products');
+        currentSession.actions.push({
+          target: 'sl',
+          type: 'created',
+          key: 'products',
+          detail: 'products source',
+          targetConnectionId: 'warehouse',
+          rawPaths: ['models/products.sql'],
+        });
+        await currentSession.gitService.commitFiles(
+          ['semantic-layer/warehouse/products.yaml'],
+          'wu products',
+          'ktx Test',
+          'system@ktx.local',
+        );
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(
+        runner,
+        runtime,
+        [
+          ['models/orders.sql', 'orders-hash'],
+          ['models/customers.sql', 'customers-hash'],
+          ['models/products.sql', 'products-hash'],
+        ],
+        'dbt',
+      );
+
+      const result = await runner.run({
+        jobId: 'job-join-prune-no-cascade',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+
+      expect(result.commitSha).toBeTruthy();
+      expect(result.failedWorkUnits).toEqual(['customers']);
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'customers',
+        absentTarget: 'customers',
+      });
+      expect(result.finalGatePrunedReferences).not.toContainEqual({
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'products',
+        absentTarget: 'products',
+      });
+      const ordersYaml = await readFile(join(runtime.configDir, 'semantic-layer/warehouse/orders.yaml'), 'utf-8');
+      expect(ordersYaml).not.toContain('to: customers');
+      expect(ordersYaml).toContain('to: products');
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/products.yaml'), 'utf-8')).resolves.toContain(
+        'name: products',
+      );
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('recomputes a stale cached patch and reports recomputed metadata', async () => {
     const runtime = await makeRealGitRuntime();
     try {
