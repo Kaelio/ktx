@@ -615,14 +615,18 @@ export class MemoryAgentService {
         : sources
             .map((s) => {
               const measureCount = s.measures.length;
+              const segmentCount = s.segments?.length ?? 0;
               const joinCount = s.joins?.length ?? 0;
-              const header = `${s.name} [measures=${measureCount}, joins=${joinCount}]`;
-              if (measureCount === 0 && joinCount === 0) {
+              const header = `${s.name} [measures=${measureCount}, segments=${segmentCount}, joins=${joinCount}]`;
+              if (measureCount === 0 && segmentCount === 0 && joinCount === 0) {
                 return `${header} — candidate for enrichment`;
               }
               const parts: string[] = [header];
               if (measureCount > 0) {
                 parts.push(`  measures: ${s.measures.map((m) => `${s.name}.${m.name}`).join(', ')}`);
+              }
+              if (segmentCount > 0) {
+                parts.push(`  segments: ${(s.segments ?? []).map((seg) => seg.name).join(', ')}`);
               }
               if (joinCount > 0) {
                 parts.push(`  joins: ${(s.joins ?? []).map((j) => `→ ${j.to} (${j.relationship})`).join(', ')}`);
