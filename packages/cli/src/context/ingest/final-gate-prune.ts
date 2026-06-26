@@ -1,6 +1,6 @@
 import YAML from 'yaml';
 import type { KtxFileStorePort } from '../core/file-store.js';
-import { resolveSlSourceFile } from '../sl/source-files.js';
+import { listSlSourceFiles, resolveSlSourceFile, slSourceNameForFile } from '../sl/source-files.js';
 import type { KnowledgeWikiService } from '../wiki/knowledge-wiki.service.js';
 import type { FinalArtifactGateFinding } from './artifact-gates.js';
 import type { IngestTraceWriter } from './ingest-trace.js';
@@ -99,6 +99,53 @@ function wikiBodyAbsentTarget(finding: FinalArtifactGateFinding): string {
   return '';
 }
 
+/** Remove every join whose target matches `shouldRemove`, write the file back, and
+ *  emit one pruned-reference record per distinct removed target. */
+async function pruneJoinsFromSource(input: {
+  fileStore: SemanticLayerFileStore;
+  connectionId: string;
+  ownerSourceName: string;
+  resolved: ResolvedYamlSource;
+  shouldRemove: (target: string) => boolean;
+  author: { name: string; email: string };
+  trace: IngestTraceWriter;
+}): Promise<FinalGatePrunedReference[]> {
+  if (!Array.isArray(input.resolved.source.joins)) {
+    return [];
+  }
+  const removed = new Set<string>();
+  const nextJoins = input.resolved.source.joins.filter((entry) => {
+    const to = entry && typeof entry === 'object' && 'to' in entry ? (entry as { to: unknown }).to : undefined;
+    if (typeof to === 'string' && input.shouldRemove(to)) {
+      removed.add(to);
+      return false;
+    }
+    return true;
+  });
+  if (removed.size === 0) {
+    return [];
+  }
+  input.resolved.source.joins = nextJoins;
+  await writeYamlSource({
+    fileStore: input.fileStore,
+    path: input.resolved.path,
+    source: input.resolved.source,
+    author: input.author,
+  });
+  const records: FinalGatePrunedReference[] = [];
+  for (const target of removed) {
+    const record = {
+      kind: 'join' as const,
+      artifact: `semantic-layer/${input.connectionId}/${input.ownerSourceName}`,
+      removedRef: target,
+      absentTarget: target,
+    };
+    records.push(record);
+    await input.trace.event('info', 'final_gates', 'final_gate_reference_pruned', record);
+  }
+  return records;
+}
+
 export async function pruneFinalGateFindings(input: PruneInput): Promise<FinalGatePruneResult> {
   const droppedSources = [...input.droppedSources];
   const prunedReferences: FinalGatePrunedReference[] = [];
@@ -136,6 +183,41 @@ export async function pruneFinalGateFindings(input: PruneInput): Promise<FinalGa
     await input.trace.event('info', 'final_gates', 'final_gate_source_dropped', dropped);
   }
 
+  // A dropped node can leave a join dangling on any owner — including sources
+  // untouched by this run, which the touched-scoped gate (and the confirm gate
+  // after it) never revisit. Prune those edges directly (D5), or the committed
+  // orphan join breaks every SL query on the connection.
+  const droppedByConnection = new Map<string, Set<string>>();
+  for (const dropped of droppedSources) {
+    const names = droppedByConnection.get(dropped.connectionId) ?? new Set<string>();
+    names.add(dropped.sourceName);
+    droppedByConnection.set(dropped.connectionId, names);
+  }
+  for (const [connectionId, droppedNames] of droppedByConnection) {
+    for (const file of await listSlSourceFiles(input.semanticLayerFiles, connectionId)) {
+      let parsed: unknown;
+      try {
+        parsed = YAML.parse(file.content);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        continue;
+      }
+      prunedReferences.push(
+        ...(await pruneJoinsFromSource({
+          fileStore: input.semanticLayerFiles,
+          connectionId,
+          ownerSourceName: slSourceNameForFile(file.path, file.content),
+          resolved: { path: file.path, source: parsed as Record<string, unknown> },
+          shouldRemove: (target) => droppedNames.has(target),
+          author: input.author,
+          trace: input.trace,
+        })),
+      );
+    }
+  }
+
   for (const finding of input.findings) {
     if (finding.kind !== 'missing_join_target') {
       continue;
@@ -145,30 +227,20 @@ export async function pruneFinalGateFindings(input: PruneInput): Promise<FinalGa
       finding.ownerConnectionId,
       finding.ownerSourceName,
     );
-    if (!resolved || !Array.isArray(resolved.source.joins)) {
+    if (!resolved) {
       continue;
     }
-    const nextJoins = resolved.source.joins.filter(
-      (entry) => !(entry && typeof entry === 'object' && 'to' in entry && entry.to === finding.targetSourceName),
+    prunedReferences.push(
+      ...(await pruneJoinsFromSource({
+        fileStore: input.semanticLayerFiles,
+        connectionId: finding.ownerConnectionId,
+        ownerSourceName: finding.ownerSourceName,
+        resolved,
+        shouldRemove: (target) => target === finding.targetSourceName,
+        author: input.author,
+        trace: input.trace,
+      })),
     );
-    if (nextJoins.length === resolved.source.joins.length) {
-      continue;
-    }
-    resolved.source.joins = nextJoins;
-    await writeYamlSource({
-      fileStore: input.semanticLayerFiles,
-      path: resolved.path,
-      source: resolved.source,
-      author: input.author,
-    });
-    const record = {
-      kind: 'join' as const,
-      artifact: `semantic-layer/${finding.ownerConnectionId}/${finding.ownerSourceName}`,
-      removedRef: finding.targetSourceName,
-      absentTarget: finding.targetSourceName,
-    };
-    prunedReferences.push(record);
-    await input.trace.event('info', 'final_gates', 'final_gate_reference_pruned', record);
   }
 
   const wikiFindings = input.findings.filter(

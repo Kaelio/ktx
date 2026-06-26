@@ -319,7 +319,7 @@ export class IngestBundleRunner {
       unitKey: input.unit.unitKey,
       inputHash,
       producerRunId: cached.runId,
-      patchBytes: Buffer.byteLength(cached.output.patch),
+      artifactFileCount: cached.output.artifactFiles.length,
     });
     await input.trace.event('debug', 'work_unit', 'work_unit_cache_replayed', {
       unitKey: input.unit.unitKey,
@@ -354,7 +354,6 @@ export class IngestBundleRunner {
     if (input.outcome.status !== 'success' || !input.outcome.patchPath) {
       return;
     }
-    const patch = await readFile(input.outcome.patchPath, 'utf-8');
     await this.deps.contentCache.saveCompletedResult<IngestWorkUnitCachePayload>({
       runId: input.runId,
       namespace: INGEST_WORK_UNIT_CACHE_NAMESPACE,
@@ -363,7 +362,6 @@ export class IngestBundleRunner {
       output: {
         schemaVersion: 2,
         unitKey: input.outcome.unitKey,
-        patch,
         patchTouchedPaths: input.outcome.patchTouchedPaths ?? [],
         artifactFiles: input.outcome.artifactFiles ?? [],
         actions: input.outcome.actions,

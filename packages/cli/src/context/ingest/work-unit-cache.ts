@@ -22,8 +22,9 @@ export interface IngestWorkUnitCachedArtifactFile {
 export interface IngestWorkUnitCachePayload {
   schemaVersion: 2;
   unitKey: string;
-  patch: string;
   patchTouchedPaths: string[];
+  // Replay re-derives the patch from these before/after snapshots; the diff text
+  // itself is never stored, so the payload carries each touched file only once.
   artifactFiles: IngestWorkUnitCachedArtifactFile[];
   actions: MemoryAction[];
   touchedSlSources: TouchedSlSource[];

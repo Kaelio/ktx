@@ -115,6 +115,50 @@ describe('final gate prune', () => {
     ]);
   });
 
+  it('prunes a dangling join from an untouched sibling that points at a dropped source', async () => {
+    // The gate only flags joins owned by re-ingested (touched) sources, so a
+    // pre-existing sibling joining to a just-dropped source produces no
+    // missing_join_target finding. The drop must still prune that edge (D5),
+    // or the committed orphan join breaks every SL query on the connection.
+    await writeFile(
+      join(tempDir, 'semantic-layer/warehouse/orders.yaml'),
+      'name: orders\ngrain: [id]\ncolumns: [{name: id, type: number}]\njoins:\n  - to: customers\n    on: orders.customer_id = customers.id\nmeasures: []\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(tempDir, 'semantic-layer/warehouse/customers.yaml'),
+      'name: customers\ngrain: [id]\ncolumns: [{name: id, type: number}]\njoins: []\nmeasures: []\n',
+      'utf-8',
+    );
+
+    const result = await pruneFinalGateFindings({
+      workdir: tempDir,
+      semanticLayerFiles: tempFileStore(),
+      findings: [
+        { kind: 'invalid_source', connectionId: 'warehouse', sourceName: 'customers', errors: ['dry run failed'] },
+      ],
+      droppedSources: [],
+      trace: { event: vi.fn() } as never,
+      author: { name: 'ktx Test', email: 'system@ktx.local' },
+    });
+
+    await expect(readFile(join(tempDir, 'semantic-layer/warehouse/customers.yaml'), 'utf-8')).rejects.toThrow();
+    await expect(readFile(join(tempDir, 'semantic-layer/warehouse/orders.yaml'), 'utf-8')).resolves.not.toContain(
+      'customers',
+    );
+    expect(result.droppedSources).toEqual([
+      { connectionId: 'warehouse', sourceName: 'customers', reason: 'dry run failed' },
+    ]);
+    expect(result.prunedReferences).toEqual([
+      {
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'customers',
+        absentTarget: 'customers',
+      },
+    ]);
+  });
+
   it('resolves semantic-layer source files by declared source name before pruning or dropping', async () => {
     const ordersPath = slSourceFilePath('warehouse', 'ORDERS');
     const customersPath = slSourceFilePath('warehouse', 'CUSTOMERS');
