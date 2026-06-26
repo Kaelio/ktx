@@ -31,6 +31,31 @@ describe('MemoryAgentService.detectCaptureSignals', () => {
     expect(result.sl).toBe(false);
   });
 
+  it('fires sl on assistant SQL for external_ingest despite a short boilerplate user message', () => {
+    // `ktx ingest --file` keeps the content in assistantMessage and uses a fixed boilerplate
+    // user message, so the substantive-turn gate must come from the deliberate submission itself.
+    const result = detectCaptureSignals({
+      userId: 'u',
+      chatId: 'c',
+      userMessage: 'Ingest external text artifact "verified_pairs.md" into ktx memory.',
+      assistantMessage: 'Q: total claims completed?\nSQL: SELECT COUNT(DISTINCT Claim_No_Date) FROM dimJob_Details',
+      sourceType: 'external_ingest',
+    });
+    expect(result.sl).toBe(true);
+    expect(result.reasons).toContain('sql aggregate in assistant message');
+  });
+
+  it('keeps the substantive-turn gate for non-ingest source types with a short user message', () => {
+    const result = detectCaptureSignals({
+      userId: 'u',
+      chatId: 'c',
+      userMessage: 'Ingest external text artifact "verified_pairs.md" into ktx memory.',
+      assistantMessage: 'SELECT COUNT(DISTINCT Claim_No_Date) FROM dimJob_Details',
+      sourceType: 'research',
+    });
+    expect(result.sl).toBe(false);
+  });
+
   it('fires sl on definition keywords in user message regardless of length', () => {
     const result = detectCaptureSignals({
       userId: 'u',
