@@ -6,8 +6,8 @@ import { type NotionBotInfo, NotionClient } from './context/ingest/adapters/noti
 import { parseGdriveConnectionConfig, resolveGdriveServiceAccountKey } from './context/connections/gdrive-config.js';
 import { createLocalLookerCredentialResolver } from './context/ingest/adapters/looker/local-looker.adapter.js';
 import { metabaseRuntimeConfigFromLocalConnection } from './context/ingest/adapters/metabase/local-metabase.adapter.js';
-import { createGoogleDocsClients } from './context/ingest/adapters/gdrive/gdrive-client.js';
-import { GDRIVE_DOC_MIME_TYPE, gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
+import { createGoogleDocsClients, verifyGdriveFolderAndCountDocs } from './context/ingest/adapters/gdrive/gdrive-client.js';
+import { gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
 import { testRepoConnection } from './context/ingest/repo-fetch.js';
 import { federatedConnectionListing } from './context/connections/federation.js';
 import { getDriverRegistration } from './context/connections/drivers.js';
@@ -36,7 +36,7 @@ type LookerTestPort = Pick<LookerClient, 'testConnection'>;
 type NotionTestPort = Pick<NotionClient, 'retrieveBotUser'>;
 type GdriveTestPort = Pick<
   ReturnType<typeof createGoogleDocsClients>['drive'],
-  'listFiles'
+  'listFiles' | 'getFile'
 >;
 type TestRepoConnection = typeof testRepoConnection;
 
@@ -217,12 +217,7 @@ async function testGdriveConnection(
   }
   const parsed = parseGdriveConnectionConfig(connection);
   const client = await createClient(project, connectionId);
-  const result = await client.listFiles({
-    q: `'${parsed.folder_id}' in parents and trashed = false`,
-  });
-  return {
-    docs: result.files.filter((file) => file.mimeType === GDRIVE_DOC_MIME_TYPE).length,
-  };
+  return { docs: await verifyGdriveFolderAndCountDocs(client, parsed.folder_id) };
 }
 
 interface GitConnectionFields {

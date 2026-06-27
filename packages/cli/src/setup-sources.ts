@@ -11,8 +11,9 @@ import { resolveNotionConnectionAuthToken } from './context/connections/notion-c
 import { resolveKtxConfigReference } from './context/core/config-reference.js';
 import {
   createGoogleDocsClients,
+  verifyGdriveFolderAndCountDocs,
 } from './context/ingest/adapters/gdrive/gdrive-client.js';
-import { GDRIVE_DOC_MIME_TYPE, gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
+import { gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
 import { cloneOrPull, testRepoConnection } from './context/ingest/repo-fetch.js';
 import { DEFAULT_METABASE_CLIENT_CONFIG, MetabaseClient } from './context/ingest/adapters/metabase/client.js';
 import { discoverMetabaseDatabases, type DiscoveredMetabaseDatabase } from './context/ingest/adapters/metabase/mapping.js';
@@ -716,10 +717,7 @@ async function defaultValidateGdrive(connection: KtxProjectConnectionConfig): Pr
   const config = parseGdriveConnectionConfig(connection);
   const keyText = await resolveGdriveServiceAccountKey(config.service_account_key_ref);
   const clients = createGoogleDocsClients(gdriveServiceAccountKeySchema.parse(JSON.parse(keyText)));
-  const result = await clients.drive.listFiles({
-    q: `'${config.folder_id}' in parents and trashed = false`,
-  });
-  const docs = result.files.filter((file) => file.mimeType === GDRIVE_DOC_MIME_TYPE).length;
+  const docs = await verifyGdriveFolderAndCountDocs(clients.drive, config.folder_id);
   return { ok: true, detail: `docs=${docs}` };
 }
 

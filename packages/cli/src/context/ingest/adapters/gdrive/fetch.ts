@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { createGoogleDocsClients } from './gdrive-client.js';
+import { createGoogleDocsClients, driveFolderChildrenQuery } from './gdrive-client.js';
 import { normalizeGoogleDocToMarkdown } from './normalize.js';
 import type { GdriveFileRecord, GdriveManifest, GdrivePullConfig } from './types.js';
-import { GDRIVE_DOC_MIME_TYPE, GDRIVE_SOURCE_KEY } from './types.js';
+import { GDRIVE_DOC_MIME_TYPE, GDRIVE_FOLDER_MIME_TYPE, GDRIVE_SOURCE_KEY } from './types.js';
 
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
@@ -39,32 +39,52 @@ function gdriveDocDirName(title: string, fileId: string): string {
   return `${compactSegment(title)}-${shortHash(fileId)}`;
 }
 
+interface GdriveDocRecord {
+  file: GdriveFileRecord;
+  drivePath: string[];
+  folderId: string;
+}
+
+interface GdriveSkippedFile {
+  externalId: string;
+  reason: string;
+}
+
+interface ListFolderResult {
+  docs: GdriveDocRecord[];
+  skipped: GdriveSkippedFile[];
+}
+
 async function listFolderFiles(
   drive: ReturnType<typeof createGoogleDocsClients>['drive'],
   folderId: string,
   recursive: boolean,
   parents: string[] = [],
-): Promise<Array<{ file: GdriveFileRecord; drivePath: string[]; folderId: string }>> {
-  const q = `'${folderId}' in parents and trashed = false`;
-  const records: Array<{ file: GdriveFileRecord; drivePath: string[]; folderId: string }> = [];
+): Promise<ListFolderResult> {
+  const q = driveFolderChildrenQuery(folderId);
+  const docs: GdriveDocRecord[] = [];
+  const skipped: GdriveSkippedFile[] = [];
   let pageToken: string | undefined;
   do {
     const page = await drive.listFiles({ q, pageToken });
     for (const file of page.files) {
-      if (file.mimeType === 'application/vnd.google-apps.folder') {
+      if (file.mimeType === GDRIVE_FOLDER_MIME_TYPE) {
         if (recursive) {
-          records.push(...(await listFolderFiles(drive, file.id, true, [...parents, file.name])));
+          const nested = await listFolderFiles(drive, file.id, true, [...parents, file.name]);
+          docs.push(...nested.docs);
+          skipped.push(...nested.skipped);
         }
         continue;
       }
       if (file.mimeType !== GDRIVE_DOC_MIME_TYPE) {
+        skipped.push({ externalId: file.id, reason: `unsupported mime type: ${file.mimeType}` });
         continue;
       }
-      records.push({ file, drivePath: parents, folderId });
+      docs.push({ file, drivePath: parents, folderId });
     }
     pageToken = page.nextPageToken ?? undefined;
   } while (pageToken);
-  return records;
+  return { docs, skipped };
 }
 
 export async function fetchGdriveSnapshot(params: {
@@ -74,7 +94,7 @@ export async function fetchGdriveSnapshot(params: {
 }): Promise<GdriveManifest> {
   await mkdir(params.stagedDir, { recursive: true });
   const clients = createGoogleDocsClients(params.key);
-  const docs = await listFolderFiles(clients.drive, params.config.folderId, params.config.recursive);
+  const { docs, skipped } = await listFolderFiles(clients.drive, params.config.folderId, params.config.recursive);
 
   for (const { file, drivePath, folderId } of docs) {
     const document = await clients.docs.getDocument(file.id);
@@ -101,8 +121,11 @@ export async function fetchGdriveSnapshot(params: {
     recursive: params.config.recursive,
     fetchedAt: new Date().toISOString(),
     fileCount: docs.length,
-    skipped: [],
-    warnings: [],
+    skipped,
+    warnings:
+      skipped.length > 0
+        ? [`Skipped ${skipped.length} non-Google-Doc file(s); only Google Docs are ingested in v1.`]
+        : [],
   };
   await writeJson(join(params.stagedDir, 'manifest.json'), manifest);
   return manifest;

@@ -6,7 +6,7 @@ import {
   gdriveConnectionToPullConfig,
   parseGdriveConnectionConfig,
   resolveGdriveServiceAccountKey,
-} from './gdrive-config.js';
+} from '../../../src/context/connections/gdrive-config.js';
 
 describe('standalone gdrive connection config', () => {
   let tempDir: string;

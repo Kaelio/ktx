@@ -22,7 +22,8 @@ const listFiles = vi.fn(async () => ({
   nextPageToken: null,
 }));
 
-vi.mock('../../../../../src/context/ingest/adapters/gdrive/gdrive-client.js', () => ({
+vi.mock('../../../../../src/context/ingest/adapters/gdrive/gdrive-client.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../../src/context/ingest/adapters/gdrive/gdrive-client.js')>()),
   createGoogleDocsClients: vi.fn(() => ({
     drive: { listFiles },
     docs: { getDocument },
@@ -80,5 +81,43 @@ describe('fetchGdriveSnapshot', () => {
     await expect(
       readFile(join(stagedDir, 'docs', 'herness-and-enterprise-a-7913523027', 'page.md'), 'utf-8'),
     ).resolves.toContain('# Herness and Enterprise Agent Operating Framework for Connected Systems');
+  });
+
+  it('records skipped non-Google-Doc files in the manifest with a summary warning', async () => {
+    stagedDir = await mkdtemp(join(tmpdir(), 'ktx-gdrive-fetch-'));
+    listFiles.mockResolvedValueOnce({
+      files: [
+        {
+          id: 'doc-1',
+          name: 'Doc',
+          mimeType: 'application/vnd.google-apps.document',
+          parents: ['folder-123'],
+          webViewLink: 'https://docs.google.com/document/d/doc-1',
+          modifiedTime: '2026-05-24T01:53:28.347Z',
+        },
+        {
+          id: 'sheet-1',
+          name: 'Sheet',
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+          parents: ['folder-123'],
+          webViewLink: 'https://docs.google.com/spreadsheets/d/sheet-1',
+          modifiedTime: '2026-05-24T01:53:28.347Z',
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    const manifest = await fetchGdriveSnapshot({
+      key: { client_email: 'bot@example.com', private_key: 'secret' }, // pragma: allowlist secret
+      config: { serviceAccountKey: 'unused', folderId: 'folder-123', recursive: false }, // pragma: allowlist secret
+      stagedDir,
+    });
+
+    expect(manifest.fileCount).toBe(1);
+    expect(manifest.skipped).toEqual([
+      { externalId: 'sheet-1', reason: 'unsupported mime type: application/vnd.google-apps.spreadsheet' },
+    ]);
+    expect(manifest.warnings).toHaveLength(1);
+    expect(manifest.warnings[0]).toContain('Skipped 1');
   });
 });

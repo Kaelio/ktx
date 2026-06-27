@@ -438,7 +438,8 @@ connections:
 
 - `gdrive` is knowledge-only in v1; it does not produce semantic layer sources
 - `ktx setup` supports Google Drive configuration, including the service-account key ref, folder id, and recursive crawl flag
-- `ktx connection test <connectionId>` supports `gdrive` and reports the number of Google Docs visible in the configured folder
+- `ktx connection test <connectionId>` supports `gdrive`: it verifies that `folder_id` resolves to a folder the service account can read, then reports the number of Google Docs visible in it. A wrong or unshared `folder_id` fails the test instead of reporting zero docs
+- Only Google Docs are ingested in v1; other file types (Sheets, Slides, PDFs) in the folder are skipped and recorded in the staged manifest
 - The service account must be granted access to the target folder explicitly
 
 ## Common errors

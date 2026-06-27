@@ -5,6 +5,7 @@ const GDRIVE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 export const GDRIVE_SCOPES = [GDRIVE_DRIVE_SCOPE, GDRIVE_DOCS_SCOPE] as const;
 export const GDRIVE_SOURCE_KEY = 'gdrive';
 export const GDRIVE_DOC_MIME_TYPE = 'application/vnd.google-apps.document';
+export const GDRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 export const gdrivePullConfigSchema = z.object({
   serviceAccountKey: z.string().min(1),
