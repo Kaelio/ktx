@@ -1,6 +1,6 @@
 ---
 title: Context Sources
-description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, and Notion.
+description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, and Confluence.
 ---
 
 Context sources feed your existing analytics tooling into **ktx**. During ingestion, **ktx** extracts metadata from each source and uses a reconciliation agent to reconcile it with your existing semantic layer and knowledge base - preserving accepted edits rather than overwriting.
@@ -27,7 +27,7 @@ LookML uses top-level `repoUrl`, and MetricFlow uses nested
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, or `notion` |
+| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, or `confluence` |
 | `source_dir` | For local file sources | Absolute or project-relative source directory |
 | `repo_url` | For Git-hosted dbt sources | Git repository URL |
 | `repoUrl` | For Git-hosted LookML sources | Git repository URL |
@@ -375,6 +375,53 @@ Create an integration at [notion.so/my-integrations](https://www.notion.so/my-in
 - Rate limits apply; large workspaces may require multiple ingestion runs
 - Incremental sync cursors are stored in `.ktx/db.sqlite`; don't add
   `last_successful_cursor` to `ktx.yaml`
+
+---
+
+## Confluence
+
+Ingests pages from Confluence Cloud spaces as wiki context. Uses the Confluence REST API v2 to fetch page content and metadata, then synthesizes durable wiki items from the storage XML.
+
+### What it provides
+
+- Page titles, breadcrumbs, and hierarchy (parent–child relationships)
+- Full page body in Confluence storage XML format
+- Space keys, space names, and page URLs
+- Version metadata for incremental sync
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  my-confluence:
+    driver: confluence
+    base_url: https://yourorg.atlassian.net
+    email: you@yourorg.com
+    api_token_ref: env:CONFLUENCE_API_TOKEN   # or api_token: "<literal token>"
+    space_keys: [ENG, PROD]                   # optional — omit to ingest all global spaces
+```
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| API token | `email` + `api_token_ref: env:CONFLUENCE_API_TOKEN` |
+
+Generate an API token at [id.atlassian.net/manage-profile/security/api-tokens](https://id.atlassian.net/manage-profile/security/api-tokens).
+
+### What gets ingested
+
+- All `current`-status pages in the configured spaces (or all accessible global spaces when `space_keys` is omitted)
+- Each page's full content in Confluence storage XML — the `confluence_synthesize` skill extracts durable wiki candidates from it
+- Ingest is incremental: pages whose version number and timestamp are unchanged since the last run are skipped
+
+### Notes
+
+- `space_keys` is case-insensitive; `ENG` and `eng` both match the same space
+- Large Confluence instances with thousands of pages may take several minutes on the first run; subsequent runs are fast due to incremental sync
+- Raw storage XML is kept in the staged directory; only synthesized wiki items are written to the ktx knowledge base
+
+---
 
 ## Common errors
 
