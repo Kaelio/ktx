@@ -212,6 +212,41 @@ describe('KtxSnowflakeScanConnector', () => {
     expect(resolved.username).toBeUndefined();
   });
 
+  it('resolves PAT config with token_ref', () => {
+    const resolved = snowflakeConnectionConfigFromConfig({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'snowflake',
+        authMethod: 'pat',
+        account: 'acct',
+        warehouse: 'WH',
+        database: 'ANALYTICS',
+        username: 'svc_user',
+        token_ref: 'env:SNOWFLAKE_PAT',
+      },
+      env: { SNOWFLAKE_PAT: 'pat-token-value' }, // pragma: allowlist secret
+    });
+    expect(resolved.authMethod).toBe('pat');
+    expect(resolved.token).toBe('pat-token-value');
+    expect(resolved.username).toBe('svc_user');
+  });
+
+  it('throws when PAT config is missing token and token_ref', () => {
+    expect(() =>
+      snowflakeConnectionConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'snowflake',
+          authMethod: 'pat',
+          account: 'acct',
+          warehouse: 'WH',
+          database: 'ANALYTICS',
+          username: 'svc_user',
+        },
+      }),
+    ).toThrow('connections.warehouse.token_ref');
+  });
+
   it('resolves OAuth config with inline token', () => {
     const resolved = snowflakeConnectionConfigFromConfig({
       connectionId: 'warehouse',
@@ -259,6 +294,23 @@ describe('KtxSnowflakeScanConnector', () => {
         },
       }),
     ).toThrow('connections.warehouse.token_ref');
+  });
+
+  it('resolves externalbrowser config without username or credentials', () => {
+    const resolved = snowflakeConnectionConfigFromConfig({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'snowflake',
+        authMethod: 'externalbrowser',
+        account: 'acct',
+        warehouse: 'WH',
+        database: 'ANALYTICS',
+      },
+    });
+    expect(resolved.authMethod).toBe('externalbrowser');
+    expect(resolved.username).toBeUndefined();
+    expect(resolved.password).toBeUndefined();
+    expect(resolved.privateKey).toBeUndefined();
   });
 
   it('throws when password auth is missing username', () => {

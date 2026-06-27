@@ -33,7 +33,7 @@ import { configureSnowflakeSdkLogger } from './sdk-logger.js';
 
 export interface KtxSnowflakeConnectionConfig {
   driver?: string;
-  authMethod?: 'password' | 'rsa' | 'oauth';
+  authMethod?: 'password' | 'rsa' | 'oauth' | 'pat' | 'externalbrowser';
   account?: string;
   warehouse?: string;
   database?: string;
@@ -51,7 +51,7 @@ export interface KtxSnowflakeConnectionConfig {
 }
 
 export interface KtxSnowflakeResolvedConnectionConfig {
-  authMethod: 'password' | 'rsa' | 'oauth';
+  authMethod: 'password' | 'rsa' | 'oauth' | 'pat' | 'externalbrowser';
   account: string;
   warehouse: string;
   database: string;
@@ -263,9 +263,11 @@ export function snowflakeConnectionConfigFromConfig(input: {
   if (!database) {
     throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.database`);
   }
-  // username is required for password/rsa; optional for oauth (token carries identity).
-  if (authMethod !== 'oauth' && !username) {
-    throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.username`);
+  // username is required for password/rsa; optional for oauth/pat/externalbrowser.
+  if (authMethod === 'password' || authMethod === 'rsa') {
+    if (!username) {
+      throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.username`);
+    }
   }
   assertSafeSnowflakeIdentifier(warehouse, 'warehouse');
   assertSafeSnowflakeIdentifier(database, 'database');
@@ -301,19 +303,18 @@ export function snowflakeConnectionConfigFromConfig(input: {
     if (!resolved.privateKey) {
       throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.privateKey for RSA auth`);
     }
-  } else if (authMethod === 'oauth') {
-    // token_ref is the preferred form; token accepts a literal value.
+  } else if (authMethod === 'oauth' || authMethod === 'pat') {
     const tokenRef = input.connection?.token_ref;
     const token = tokenRef
       ? resolveStringReference(tokenRef as string, env)
       : stringConfigValue(input.connection, 'token', env);
     if (!token) {
       throw new Error(
-        `Native Snowflake connector requires connections.${input.connectionId}.token_ref (or token) for OAuth auth`,
+        `Native Snowflake connector requires connections.${input.connectionId}.token_ref (or token) for ${authMethod} auth`,
       );
     }
     resolved.token = token;
-  } else {
+  } else if (authMethod !== 'externalbrowser') {
     resolved.password = stringConfigValue(input.connection, 'password', env);
     if (!resolved.password) {
       throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.password`);
@@ -509,6 +510,12 @@ class SnowflakeSdkDriver implements KtxSnowflakeDriver {
     }
     if (this.resolved.authMethod === 'oauth') {
       return { ...baseConfig, authenticator: 'OAUTH', token: this.resolved.token };
+    }
+    if (this.resolved.authMethod === 'pat') {
+      return { ...baseConfig, authenticator: 'PROGRAMMATIC_ACCESS_TOKEN', token: this.resolved.token };
+    }
+    if (this.resolved.authMethod === 'externalbrowser') {
+      return { ...baseConfig, authenticator: 'EXTERNALBROWSER' };
     }
     return { ...baseConfig, password: this.resolved.password };
   }

@@ -118,7 +118,7 @@ This helps **ktx** understand how your team actually queries the data.
 
 ## Snowflake
 
-Connects via the Snowflake SDK. Supports multi-schema scanning, password, RSA key pair, and OAuth authentication, and query-history configuration for Snowflake query history.
+Connects via the Snowflake SDK. Supports multi-schema scanning, password, RSA key pair, OAuth token, programmatic access token, and browser-based SSO authentication, and query-history configuration for Snowflake query history.
 
 ### Connection config
 
@@ -148,9 +148,11 @@ single schema, `schema_name: PUBLIC` is accepted as an equivalent shorthand.
 |--------|--------|
 | Password (default) | `password: env:SNOWFLAKE_PASSWORD` |
 | RSA key pair | `authMethod: rsa`, `privateKey: file:~/.ssh/snowflake_key.pem`, optional `passphrase` |
-| OAuth | `authMethod: oauth`, `token_ref: env:SNOWFLAKE_OAUTH_TOKEN` |
+| OAuth token | `authMethod: oauth`, `token_ref: env:SNOWFLAKE_OAUTH_TOKEN` |
+| Programmatic access token | `authMethod: pat`, `token_ref: env:SNOWFLAKE_PAT` |
+| Browser SSO | `authMethod: externalbrowser` — opens a browser window for SSO/MFA login |
 
-For OAuth, `username` is optional — the token carries identity. If your Snowflake account requires it alongside the token (e.g. for auditing), add `username` as normal.
+For `oauth`, `pat`, and `externalbrowser`, `username` is optional — identity is carried by the token or resolved by the IDP.
 
 ```yaml title="ktx.yaml — OAuth example"
 connections:
@@ -164,7 +166,9 @@ connections:
     role: ANALYST
 ```
 
-`token_ref` follows the same reference syntax as other secrets: `env:VAR` reads from an environment variable, `file:/path/to/token` reads from a file (supports `~` expansion). A literal token value can be supplied directly with `token:`, but `token_ref` is preferred.
+`token_ref` follows the same reference syntax as other secrets: `env:VAR` reads from an environment variable, `file:/path/to/token` reads from a file. A literal value can be supplied directly with `token:`, but `token_ref` is preferred.
+
+Browser SSO authentication is interactive — running `ktx connection test` or `ktx setup` will open a browser window to complete the Snowflake SSO flow. Not suitable for headless or CI environments.
 
 ### Features
 
