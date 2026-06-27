@@ -144,6 +144,80 @@ describe('buildProjectStatus embeddings', () => {
     expect(status.embeddings.status).toBe('warn');
     expect(status.verdictReason).toMatch(/embedding credentials missing/);
   });
+
+  // resolveLocalKtxEmbeddingConfig never consults a bare OPENAI_API_KEY, so status
+  // must not show ready when only the env var (not config.openai.api_key) is set.
+  it('reports openai backend with only OPENAI_API_KEY env set as warn', async () => {
+    const project = projectWithConfig(
+      withEmbeddings(baseProjectConfig(), {
+        backend: 'openai',
+        model: 'text-embedding-3-small',
+        dimensions: 1536,
+        openai: {},
+      }),
+    );
+
+    const status = await buildProjectStatus(project, {
+      env: { OPENAI_API_KEY: 'sk-test' }, // pragma: allowlist secret
+      claudeCodeAuthProbe: stubClaudeCodeAuthProbe,
+    });
+
+    expect(status.embeddings.status).toBe('warn');
+    expect(status.verdictReason).toMatch(/embedding credentials missing/);
+  });
+
+  describe('openai file: api_key references', () => {
+    let secretDir: string;
+
+    beforeEach(async () => {
+      secretDir = await mkdtemp(join(tmpdir(), 'ktx-status-secret-'));
+    });
+
+    afterEach(async () => {
+      await rm(secretDir, { recursive: true, force: true });
+    });
+
+    // A file: ref must be read, not trusted as a path; a missing file is not ready.
+    it('reports a missing file: api_key as warn', async () => {
+      const project = projectWithConfig(
+        withEmbeddings(baseProjectConfig(), {
+          backend: 'openai',
+          model: 'text-embedding-3-small',
+          dimensions: 1536,
+          openai: { api_key: `file:${join(secretDir, 'absent')}` }, // pragma: allowlist secret
+        }),
+      );
+
+      const status = await buildProjectStatus(project, {
+        env: {},
+        claudeCodeAuthProbe: stubClaudeCodeAuthProbe,
+      });
+
+      expect(status.embeddings.status).toBe('warn');
+      expect(status.verdictReason).toMatch(/embedding credentials missing/);
+    });
+
+    it('reports a populated file: api_key as ok', async () => {
+      const secretPath = join(secretDir, 'openai-key');
+      await writeFile(secretPath, 'sk-from-file\n', 'utf8'); // pragma: allowlist secret
+      const project = projectWithConfig(
+        withEmbeddings(baseProjectConfig(), {
+          backend: 'openai',
+          model: 'text-embedding-3-small',
+          dimensions: 1536,
+          openai: { api_key: `file:${secretPath}` }, // pragma: allowlist secret
+        }),
+      );
+
+      const status = await buildProjectStatus(project, {
+        env: {},
+        claudeCodeAuthProbe: stubClaudeCodeAuthProbe,
+      });
+
+      expect(status.embeddings.status).toBe('ok');
+      expect(status.embeddings.detail).toBe('key set');
+    });
+  });
 });
 
 function withPostgresQueryHistory(config: KtxProjectConfig): KtxProjectConfig {
@@ -208,6 +282,42 @@ function withMysqlQueryHistory(config: KtxProjectConfig): KtxProjectConfig {
     },
   };
 }
+
+function withGitRepoSources(config: KtxProjectConfig): KtxProjectConfig {
+  return {
+    ...config,
+    connections: {
+      ...config.connections,
+      metrics: {
+        driver: 'metricflow',
+        metricflow: { repoUrl: 'https://github.com/example/metricflow' },
+      } as KtxProjectConfig['connections'][string],
+      looks: {
+        driver: 'lookml',
+        repoUrl: 'https://github.com/example/lookml',
+      } as KtxProjectConfig['connections'][string],
+      local_dbt: {
+        driver: 'dbt',
+        source_dir: '/repo/dbt',
+      } as KtxProjectConfig['connections'][string],
+    },
+  };
+}
+
+describe('buildProjectStatus git-repo connections', () => {
+  it('reports schema-valid metricflow, lookml, and dbt connections as ok', async () => {
+    const project = projectWithConfig(withGitRepoSources(baseProjectConfig()));
+
+    const status = await buildProjectStatus(project, {
+      claudeCodeAuthProbe: stubClaudeCodeAuthProbe,
+    });
+
+    const byName = new Map(status.connections.map((conn) => [conn.name, conn]));
+    expect(byName.get('metrics')).toMatchObject({ driver: 'metricflow', status: 'ok' });
+    expect(byName.get('looks')).toMatchObject({ driver: 'lookml', status: 'ok' });
+    expect(byName.get('local_dbt')).toMatchObject({ driver: 'dbt', status: 'ok' });
+  });
+});
 
 function fakeStatusRunner(
   dialect: 'postgres' | 'snowflake' | 'bigquery',

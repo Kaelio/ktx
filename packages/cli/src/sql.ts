@@ -9,7 +9,7 @@ import type { SqlAnalysisDialect, SqlAnalysisPort } from './context/sql-analysis
 import type { KtxCliIo } from './cli-runtime.js';
 import { type KtxOutputMode, resolveOutputMode } from './io/mode.js';
 import { createKtxCliScanConnector } from './local-scan-connectors.js';
-import { createManagedDaemonSqlAnalysisPort } from './managed-python-http.js';
+import { resolveSqlAnalysisPort } from './managed-python-http.js';
 import { profileMark } from './startup-profile.js';
 import { isDemoConnection } from './telemetry/demo-detect.js';
 import { emitTelemetryEvent, reportException } from './telemetry/index.js';
@@ -140,7 +140,7 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
     const createSqlAnalysis =
       deps.createSqlAnalysis ??
       (() =>
-        createManagedDaemonSqlAnalysisPort({
+        resolveSqlAnalysisPort({
           cliVersion: args.cliVersion,
           projectDir: args.projectDir,
           installPolicy: 'auto',
