@@ -350,7 +350,7 @@ export async function localPullConfigForAdapter(
       apiToken,
       projects: Array.isArray(connection.projects) ? connection.projects.filter((p: unknown) => typeof p === 'string') : [],
       labels: Array.isArray(connection.labels) ? connection.labels.filter((l: unknown) => typeof l === 'string') : [],
-      maxIssuesPerRun: typeof connection.max_issues_per_run === 'number' ? connection.max_issues_per_run : undefined,
+      since: typeof connection.since === 'string' ? connection.since : undefined,
     };
   }
   if (adapter.source === 'metricflow') {

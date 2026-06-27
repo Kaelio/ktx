@@ -218,13 +218,10 @@ const jiraConnectionSchema = z
       .array(z.string().min(1))
       .min(1)
       .describe('Label allowlist — only issues with at least one of these labels are ingested (e.g. ["kb", "decision", "policy"]).'),
-    max_issues_per_run: z
-      .number()
-      .int()
-      .min(1)
-      .max(50000)
+    since: z
+      .string()
       .optional()
-      .describe('Maximum issues fetched per ingest run. Defaults to 500.'),
+      .describe('ISO date (YYYY-MM-DD). When set, only issues updated on or after this date are fetched.'),
   })
   .describe('Jira Cloud context-source connection. Ingests issues filtered by project and label.');
 
