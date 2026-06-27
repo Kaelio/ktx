@@ -38,7 +38,8 @@
     "conventional-changelog-conventionalcommits"
   ],
   "ignore": [
-    ".context/**"
+    ".context/**",
+    "examples/**"
   ],
   "ignoreBinaries": [
     "uv",
