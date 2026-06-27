@@ -1,6 +1,6 @@
 ---
 title: Context Sources
-description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, and Notion.
+description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, and Jira.
 ---
 
 Context sources feed your existing analytics tooling into **ktx**. During ingestion, **ktx** extracts metadata from each source and uses a reconciliation agent to reconcile it with your existing semantic layer and knowledge base - preserving accepted edits rather than overwriting.
@@ -27,7 +27,7 @@ LookML uses top-level `repoUrl`, and MetricFlow uses nested
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, or `notion` |
+| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, or `jira` |
 | `source_dir` | For local file sources | Absolute or project-relative source directory |
 | `repo_url` | For Git-hosted dbt sources | Git repository URL |
 | `repoUrl` | For Git-hosted LookML sources | Git repository URL |
@@ -375,6 +375,73 @@ Create an integration at [notion.so/my-integrations](https://www.notion.so/my-in
 - Rate limits apply; large workspaces may require multiple ingestion runs
 - Incremental sync cursors are stored in `.ktx/db.sqlite`; don't add
   `last_successful_cursor` to `ktx.yaml`
+
+---
+
+## Jira
+
+Ingests issues from Jira Cloud filtered by project key and label allowlist, converting them into durable wiki knowledge. Uses the Jira REST API v3 with Basic auth.
+
+### What it provides
+
+- Issue summaries and descriptions (converted from ADF to Markdown)
+- Status, type, assignee, priority, and label metadata per issue
+- One work unit per project key, processed independently
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  jira-docs:
+    driver: jira
+    base_url: https://yourorg.atlassian.net
+    email: you@yourorg.com
+    api_token_ref: env:JIRA_API_TOKEN
+    projects:
+      - DOCS
+    labels:
+      - kb
+      - decision
+      - policy
+    since: "2024-01-01"
+```
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| Atlassian API token | `email` + `api_token_ref: env:JIRA_API_TOKEN` |
+
+Generate an API token at [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+
+### Configuration options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `base_url` | Yes | Jira Cloud base URL (e.g. `https://yourorg.atlassian.net`) |
+| `email` | Yes | Atlassian account email |
+| `api_token` / `api_token_ref` | Yes | API token or reference. Prefer the `_ref`. |
+| `projects` | Yes | Jira project keys to ingest. At least one required. |
+| `labels` | Yes | Label allowlist — only issues with at least one matching label are fetched. At least one required. |
+| `since` | No | ISO date (`YYYY-MM-DD`). Lower bound for the first full fetch. |
+
+### What gets ingested
+
+- Wiki candidates synthesized from issue summaries and descriptions labeled `kb`, `decision`, or `policy`
+- One wiki candidate per distinct concept — related issues on the same topic are synthesized into a single page
+- Issues in `Open` or `In Progress` status describing planned (not settled) work are skipped
+
+### Incremental fetch
+
+After the first full run, subsequent ingests automatically derive the fetch floor from the highest `updated` timestamp across all existing staged issues. Only issues updated since that point are re-fetched; prior staged files are kept. No cursor configuration is needed.
+
+### Notes
+
+- At least one `projects` key and one `labels` value are required — Jira rejects unbounded JQL queries
+- Issue descriptions are stored in Atlassian Document Format (ADF) and converted to Markdown before staging
+- Jira does not expose warehouse tables, so no semantic-layer sources are written; all output is wiki pages
+
+---
 
 ## Common errors
 

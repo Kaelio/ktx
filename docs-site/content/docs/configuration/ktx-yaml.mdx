@@ -119,6 +119,7 @@ context-source drivers share the map.
 | `dbt` | Context source | `driver`, one of `source_dir` or `repo_url` | `branch`, `path`, `profiles_path`, `target`, `project_name` |
 | `metricflow` | Context source | `driver`, `metricflow.repoUrl` | `metricflow.branch`, `metricflow.path`, `metricflow.auth_token_ref` |
 | `notion` | Context source | `driver`, `auth_token_ref` | `crawl_mode`, `root_*_ids`, `max_*_per_run` |
+| `jira` | Context source | `driver`, `base_url`, `email`, one of `api_token` or `api_token_ref`, `projects`, `labels` | `since` |
 
 ### Warehouse drivers
 
@@ -325,6 +326,34 @@ connections:
 | `max_knowledge_creates_per_run` | Max new wiki pages created per run (0-25). |
 | `max_knowledge_updates_per_run` | Max existing wiki pages updated per run (0-100). |
 
+### Jira
+
+```yaml
+connections:
+  jira-docs:
+    driver: jira
+    base_url: https://yourorg.atlassian.net
+    email: you@yourorg.com
+    api_token_ref: env:JIRA_API_TOKEN
+    projects:
+      - DOCS
+      - ENG
+    labels:
+      - kb
+      - decision
+      - policy
+    since: "2024-01-01"
+```
+
+| Field | Purpose |
+|-------|---------|
+| `base_url` | Jira Cloud base URL (e.g. `https://yourorg.atlassian.net`). |
+| `email` | Atlassian account email used for Basic auth. |
+| `api_token` / `api_token_ref` | Literal Atlassian API token or reference. Prefer the `_ref`. |
+| `projects` | Jira project keys to ingest (e.g. `["DOCS", "ENG"]`). At least one required. |
+| `labels` | Label allowlist — only issues with at least one of these labels are fetched. At least one required. |
+| `since` | ISO date (`YYYY-MM-DD`). Lower bound for the first full fetch. Subsequent runs derive the floor from the `updated` timestamp of existing staged issues. |
+
 ## `setup`
 
 Captured by the setup wizard. The only field **ktx** still reads is
@@ -486,6 +515,7 @@ connector that **ktx** ships locally:
 | `looker` | Looker dashboards and looks via the API. |
 | `metabase` | Metabase cards, dashboards, and database mappings. |
 | `notion` | Notion pages and databases for wiki context. |
+| `jira` | Jira issues filtered by project and label for wiki context. |
 | `fake` | Test/demo connector. Useful in fixtures. |
 
 ### Embeddings
