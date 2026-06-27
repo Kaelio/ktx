@@ -10,7 +10,7 @@ const jiraPullConfigSchema = z.object({
   projects: z.array(z.string().min(1)).min(1, 'At least one project key is required'),
   /** At least one label required to prevent unfiltered exports. */
   labels: z.array(z.string().min(1)).min(1, 'At least one label is required to filter issues'),
-  /** ISO date (YYYY-MM-DD). When set, only issues updated on or after this date are fetched. */
+  /** ISO date (YYYY-MM-DD). Lower bound for the first full fetch. Subsequent runs derive the floor from staged issues. */
   since: z.string().optional(),
 });
 

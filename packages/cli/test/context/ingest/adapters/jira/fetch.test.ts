@@ -13,7 +13,7 @@ const BASE_CONFIG: JiraPullConfig = {
   labels: ['kb'],
 };
 
-const mockIssue = (key: string, labels: string[] = ['kb']) => ({
+const mockIssue = (key: string, updated = '2026-06-01T00:00:00.000Z', labels: string[] = ['kb']) => ({
   id: key,
   key,
   fields: {
@@ -24,7 +24,7 @@ const mockIssue = (key: string, labels: string[] = ['kb']) => ({
     labels,
     project: { key: 'DOCS', name: 'Test Docs' },
     created: '2026-01-01T00:00:00.000Z',
-    updated: '2026-06-01T00:00:00.000Z',
+    updated,
     assignee: null,
     priority: null,
   },
@@ -79,12 +79,44 @@ describe('fetchJiraSnapshot', () => {
     expect(capturedUrls[0]).toContain('updated+%3E%3D+%222025-01-01%22');
   });
 
-  it('evicts stale issues between runs', async () => {
-    // Pre-populate a stale issue
+  it('incremental run: uses max updated from existing issues as JQL floor, keeps existing files', async () => {
+    // Seed a prior issue with a known updated timestamp.
+    const priorUpdated = '2026-05-01T00:00:00.000Z';
     await mkdir(join(stagedDir, 'issues'), { recursive: true });
-    const stalePath = join(stagedDir, 'issues', 'DOCS-OLD.json');
+    const fs = await import('node:fs/promises');
+    const priorIssue = {
+      id: 'DOCS-OLD', key: 'DOCS-OLD', summary: 'Old', description: null,
+      status: 'Done', issuetype: 'Task', labels: ['kb'],
+      project: { key: 'DOCS', name: 'Test Docs' },
+      created: '2026-01-01T00:00:00.000Z', updated: priorUpdated,
+      assignee: null, priority: null,
+      url: 'https://example.atlassian.net/browse/DOCS-OLD',
+    };
+    await fs.writeFile(join(stagedDir, 'issues', 'DOCS-OLD.json'), JSON.stringify(priorIssue), 'utf-8');
+
+    const capturedUrls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      capturedUrls.push(url);
+      return { ok: true, json: async () => makeFetchResponse([mockIssue('DOCS-NEW', '2026-06-01T00:00:00.000Z')]) };
+    });
+
+    await fetchJiraSnapshot({ config: BASE_CONFIG, stagedDir });
+
+    // JQL uses the prior issue's updated timestamp as the since floor.
+    expect(capturedUrls[0]).toContain(encodeURIComponent(priorUpdated));
+
+    // Both the prior issue and the newly fetched one are present.
+    const { access } = await import('node:fs/promises');
+    await expect(access(join(stagedDir, 'issues', 'DOCS-OLD.json'))).resolves.toBeUndefined();
+    await expect(access(join(stagedDir, 'issues', 'DOCS-NEW.json'))).resolves.toBeUndefined();
+  });
+
+  it('full run evicts stale issues when no prior issues exist', async () => {
+    await mkdir(join(stagedDir, 'issues'), { recursive: true });
+    const stalePath = join(stagedDir, 'issues', 'DOCS-STALE.json');
+    // Write a file that is NOT a valid staged issue (no updated field) so it doesn't count as prior state.
     await import('node:fs/promises').then((fs) =>
-      fs.writeFile(stalePath, JSON.stringify(mockIssue('DOCS-OLD')), 'utf-8'),
+      fs.writeFile(stalePath, JSON.stringify({ invalid: true }), 'utf-8'),
     );
 
     vi.stubGlobal('fetch', async () => ({
@@ -119,27 +151,17 @@ describe('fetchJiraSnapshot', () => {
   it('converts ADF description to markdown', async () => {
     const adfDesc = {
       type: 'doc',
-      content: [
-        {
-          type: 'paragraph',
-          content: [{ type: 'text', text: 'Hello world', marks: [{ type: 'strong' }] }],
-        },
-      ],
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello world', marks: [{ type: 'strong' }] }] }],
     };
     const issueWithAdf = {
-      id: 'DOCS-3',
-      key: 'DOCS-3',
+      id: 'DOCS-3', key: 'DOCS-3',
       fields: {
         summary: 'Summary for DOCS-3',
         description: adfDesc as unknown as null,
-        status: { name: 'Done' },
-        issuetype: { name: 'Task' },
-        labels: ['kb'],
+        status: { name: 'Done' }, issuetype: { name: 'Task' }, labels: ['kb'],
         project: { key: 'DOCS', name: 'Test Docs' },
-        created: '2026-01-01T00:00:00.000Z',
-        updated: '2026-06-01T00:00:00.000Z',
-        assignee: null,
-        priority: null,
+        created: '2026-01-01T00:00:00.000Z', updated: '2026-06-01T00:00:00.000Z',
+        assignee: null, priority: null,
       },
     };
     vi.stubGlobal('fetch', async () => ({
