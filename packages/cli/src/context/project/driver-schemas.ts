@@ -196,6 +196,38 @@ const metricflowConnectionSchema = z
   })
   .describe('MetricFlow / SL context-source connection.');
 
+const jiraConnectionSchema = z
+  .looseObject({
+    driver: z.literal('jira'),
+    base_url: z
+      .string()
+      .url()
+      .describe('Jira Cloud base URL (e.g. https://yourorg.atlassian.net).'),
+    email: z.string().min(1).describe('Atlassian account email used for Basic auth.'),
+    api_token: z.string().min(1).optional().describe('Literal Atlassian API token. Prefer api_token_ref.'),
+    api_token_ref: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Reference to Atlassian API token (e.g. env:JIRA_API_TOKEN or file:/path).'),
+    projects: z
+      .array(z.string().min(1))
+      .min(1)
+      .describe('Jira project keys to ingest (e.g. ["DOCS", "ENG"]). At least one required.'),
+    labels: z
+      .array(z.string().min(1))
+      .min(1)
+      .describe('Label allowlist — only issues with at least one of these labels are ingested (e.g. ["kb", "decision", "policy"]).'),
+    max_issues_per_run: z
+      .number()
+      .int()
+      .min(1)
+      .max(50000)
+      .optional()
+      .describe('Maximum issues fetched per ingest run. Defaults to 500.'),
+  })
+  .describe('Jira Cloud context-source connection. Ingests issues filtered by project and label.');
+
 export const connectionConfigSchema = z.discriminatedUnion('driver', [
   ...warehouseConnectionSchemas,
   metabaseConnectionSchema,
@@ -204,4 +236,5 @@ export const connectionConfigSchema = z.discriminatedUnion('driver', [
   notionConnectionSchema,
   dbtConnectionSchema,
   metricflowConnectionSchema,
+  jiraConnectionSchema,
 ]);

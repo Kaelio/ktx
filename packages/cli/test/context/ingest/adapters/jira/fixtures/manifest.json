@@ -1,0 +1,10 @@
+{
+  "source": "jira",
+  "fetchedAt": "2026-06-27T00:00:00.000Z",
+  "baseUrl": "https://example.atlassian.net",
+  "projects": ["DOCS"],
+  "labels": ["kb", "decision"],
+  "since": null,
+  "issueCount": 2,
+  "warnings": []
+}
