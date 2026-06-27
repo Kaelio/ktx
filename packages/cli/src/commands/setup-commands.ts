@@ -57,7 +57,8 @@ function sourceType(value: string): KtxSetupSourceType {
     value === 'metabase' ||
     value === 'looker' ||
     value === 'lookml' ||
-    value === 'notion'
+    value === 'notion' ||
+    value === 'sigma'
   ) {
     return value;
   }

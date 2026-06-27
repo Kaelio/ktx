@@ -23,6 +23,7 @@ const expectedAdapterSkillHeadings: Record<string, string> = {
   lookml_ingest: '# LookML to ktx Semantic Layer',
   metabase_ingest: '# Metabase to ktx Semantic Layer',
   metricflow_ingest: '# MetricFlow to ktx Semantic Layer',
+  sigma_ingest: '# Sigma Ingest',
 };
 const verificationWriterSkills = [
   'notion_synthesize',
@@ -31,6 +32,7 @@ const verificationWriterSkills = [
   'looker_ingest',
   'metabase_ingest',
   'metricflow_ingest',
+  'sigma_ingest',
   'live_database_ingest',
   'historic_sql_table_digest',
   'historic_sql_patterns',

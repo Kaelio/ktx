@@ -178,7 +178,7 @@ sources. This is equivalent to passing `--skip-sources` in scripted setup.
 
 | Flag | Description |
 |------|-------------|
-| `--source <type>` | Context-source connector type: `dbt`, `metricflow`, `metabase`, `looker`, `lookml`, or `notion` |
+| `--source <type>` | Context-source connector type: `dbt`, `metricflow`, `metabase`, `looker`, `lookml`, `notion`, or `sigma` |
 | `--source-connection-id <id>` | Connection id for context-source setup |
 | `--source-path <path>` | Local source path for dbt, MetricFlow, or LookML |
 | `--source-git-url <url>` | Git URL for dbt, MetricFlow, or LookML |
@@ -262,6 +262,13 @@ ktx setup \
   --source-auth-token-ref env:NOTION_TOKEN \
   --notion-crawl-mode selected_roots \
   --notion-root-page-id abc123def456
+
+# Add a Sigma source
+ktx setup \
+  --source sigma \
+  --source-connection-id sigma-main \
+  --source-client-id your-client-id \
+  --source-client-secret-ref env:SIGMA_CLIENT_SECRET
 
 # Install project-scoped agent integration for Codex
 ktx setup --agents --target codex

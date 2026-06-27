@@ -119,6 +119,7 @@ context-source drivers share the map.
 | `dbt` | Context source | `driver`, one of `source_dir` or `repo_url` | `branch`, `path`, `profiles_path`, `target`, `project_name` |
 | `metricflow` | Context source | `driver`, `metricflow.repoUrl` | `metricflow.branch`, `metricflow.path`, `metricflow.auth_token_ref` |
 | `notion` | Context source | `driver`, `auth_token_ref` | `crawl_mode`, `root_*_ids`, `max_*_per_run` |
+| `sigma` | Context source | `driver`, `client_id`, `client_secret_ref` | `api_url` |
 
 ### Warehouse drivers
 
@@ -324,6 +325,31 @@ connections:
 | `max_pages_per_run` | Max pages fetched per ingest run (1-10000). |
 | `max_knowledge_creates_per_run` | Max new wiki pages created per run (0-25). |
 | `max_knowledge_updates_per_run` | Max existing wiki pages updated per run (0-100). |
+
+### Sigma
+
+```yaml
+connections:
+  sigma-main:
+    driver: sigma
+    api_url: https://api.sigmacomputing.com
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+    workbookFilter:
+      includeArchived: false
+      includeExplorations: false
+      updatedSince: "2026-01-01T00:00:00Z"
+```
+
+| Field | Purpose |
+|-------|---------|
+| `api_url` | Sigma API base URL. Defaults to `https://api.sigmacomputing.com` (GCP US). Override for AWS US (`https://aws-api.sigmacomputing.com`) or other regions. |
+| `client_id` | Sigma OAuth client ID. Required. |
+| `client_secret` / `client_secret_ref` | Literal secret or reference. Prefer the `_ref`. |
+| `connectionMappings` | Maps Sigma internal connection UUIDs to **ktx** warehouse connection IDs. Enables `sl_validate` for projected semantic-layer sources. |
+| `workbookFilter.includeArchived` | Include archived workbooks during ingest. Default: `false`. |
+| `workbookFilter.includeExplorations` | Include exploration workbooks during ingest. Default: `false`. |
+| `workbookFilter.updatedSince` | ISO 8601 date string. Only workbooks updated on or after this date are fetched. Useful for limiting ingest scope at large scale. |
 
 ## `setup`
 
