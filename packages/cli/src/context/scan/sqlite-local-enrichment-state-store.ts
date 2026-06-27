@@ -7,6 +7,8 @@ import type {
   KtxScanEnrichmentStageRecord,
   KtxScanEnrichmentStateStore,
 } from './enrichment-state.js';
+import { KTX_SCAN_ENRICHMENT_STAGES } from './enrichment-state.js';
+import { KTX_SCAN_MODES } from './types.js';
 import type { KtxScanEnrichmentStage, KtxScanMode } from './types.js';
 
 export interface SqliteLocalScanEnrichmentStateStoreOptions {
@@ -39,20 +41,20 @@ function metadataFor(input: {
   };
 }
 
+function isScanMode(value: unknown): value is KtxScanMode {
+  return typeof value === 'string' && (KTX_SCAN_MODES as readonly string[]).includes(value);
+}
+
+function isScanEnrichmentStage(value: unknown): value is KtxScanEnrichmentStage {
+  return typeof value === 'string' && (KTX_SCAN_ENRICHMENT_STAGES as readonly string[]).includes(value);
+}
+
 function parseMetadata(record: ContentResultCacheRecord): ScanStageMetadata {
-  const metadata = record.metadata as Partial<ScanStageMetadata>;
-  const stage = metadata.stage;
-  const mode = metadata.mode;
-  const syncId = metadata.syncId;
-  if (
-    typeof metadata.connectionId !== 'string' ||
-    typeof syncId !== 'string' ||
-    (mode !== 'structural' && mode !== 'enriched') ||
-    (stage !== 'descriptions' && stage !== 'embeddings' && stage !== 'relationships')
-  ) {
+  const { connectionId, syncId, mode, stage } = record.metadata as Partial<ScanStageMetadata>;
+  if (typeof connectionId !== 'string' || typeof syncId !== 'string' || !isScanMode(mode) || !isScanEnrichmentStage(stage)) {
     throw new Error(`Invalid scan enrichment cache metadata for ${record.namespace}/${record.scopeKey}`);
   }
-  return { connectionId: metadata.connectionId, syncId, mode, stage };
+  return { connectionId, syncId, mode, stage };
 }
 
 function toScanRecord<TOutput = unknown>(record: ContentResultCacheRecord<TOutput>): KtxScanEnrichmentStageRecord<TOutput> {

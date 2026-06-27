@@ -228,6 +228,32 @@ describe('scan enrichment state', () => {
     ]);
   });
 
+  it('round-trips a relationships-mode stage through listRunStages', async () => {
+    // A relationships-mode scan persists the relationships stage with
+    // mode 'relationships'; listRunStages must accept it, not reject it as
+    // invalid metadata (the mode allowlist once omitted 'relationships').
+    await store.saveCompletedStage({
+      runId: 'scan-run-rel',
+      connectionId: 'warehouse',
+      syncId: 'sync-rel',
+      mode: 'relationships',
+      stage: 'relationships',
+      inputHash: 'rel-hash',
+      output: { relationshipUpdate: null },
+      updatedAt: '2026-04-29T12:03:00.000Z',
+    });
+
+    await expect(store.listRunStages('scan-run-rel')).resolves.toEqual([
+      expect.objectContaining({
+        runId: 'scan-run-rel',
+        syncId: 'sync-rel',
+        mode: 'relationships',
+        stage: 'relationships',
+        status: 'completed',
+      }),
+    ]);
+  });
+
   it('uses the shared content-result cache and ignores the obsolete scan-specific table', async () => {
     const dbPath = join(tempDir, 'shared.sqlite');
     const legacy = new Database(dbPath);
