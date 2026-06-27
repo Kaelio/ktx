@@ -1,0 +1,11 @@
+{
+  "confluenceConnectionId": "confluence-prod",
+  "baseUrl": "https://example.atlassian.net",
+  "fetchedAt": "2026-06-27T11:00:00.000Z",
+  "spaceCount": 2,
+  "pageCount": 3,
+  "spaceKeys": [
+    "ENG",
+    "PROD"
+  ]
+}

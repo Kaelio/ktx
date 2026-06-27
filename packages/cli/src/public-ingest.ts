@@ -133,6 +133,7 @@ const sourceAdapterByDriver = new Map<string, string>([
   ['local_metabase', 'metabase'],
   ['looker', 'looker'],
   ['notion', 'notion'],
+  ['confluence', 'confluence'],
   ['metricflow', 'metricflow'],
   ['dbt', 'dbt'],
   ['lookml', 'lookml'],

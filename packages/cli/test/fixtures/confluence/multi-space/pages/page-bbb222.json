@@ -1,0 +1,14 @@
+{
+  "pageId": "bbb222",
+  "spaceId": "space-1",
+  "spaceKey": "ENG",
+  "spaceName": "Engineering",
+  "title": "API Standards",
+  "parentId": null,
+  "breadcrumb": "Engineering > API Standards",
+  "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/bbb222",
+  "lastEditedAt": "2026-06-05T10:00:00.000Z",
+  "version": 2,
+  "status": "current",
+  "contentStorage": "<h1>API Standards</h1><p>REST API design conventions for internal services.</p>"
+}

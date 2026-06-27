@@ -1,0 +1,14 @@
+{
+  "pageId": "aaa111",
+  "spaceId": "space-1",
+  "spaceKey": "ENG",
+  "spaceName": "Engineering",
+  "title": "Data Pipeline Architecture",
+  "parentId": null,
+  "breadcrumb": "Engineering > Data Pipeline Architecture",
+  "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/aaa111",
+  "lastEditedAt": "2026-06-01T09:00:00.000Z",
+  "version": 5,
+  "status": "current",
+  "contentStorage": "<h1>Data Pipeline Architecture</h1><p>This document describes the core data pipeline that ingests events into the warehouse.</p><h2>Overview</h2><p>We use Kafka for event streaming and Snowflake as our primary warehouse.</p>"
+}

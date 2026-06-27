@@ -196,6 +196,27 @@ const metricflowConnectionSchema = z
   })
   .describe('MetricFlow / SL context-source connection.');
 
+const confluenceConnectionSchema = z
+  .looseObject({
+    driver: z.literal('confluence'),
+    base_url: z
+      .string()
+      .url()
+      .describe('Confluence Cloud base URL (e.g. https://yourorg.atlassian.net).'),
+    email: z.string().min(1).describe('Atlassian account email used for Basic auth.'),
+    api_token: z.string().min(1).optional().describe('Literal Atlassian API token. Prefer api_token_ref.'),
+    api_token_ref: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Reference to Atlassian API token (e.g. env:CONFLUENCE_API_TOKEN or file:/path).'),
+    space_keys: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Limit ingest to specific space keys (e.g. ["ENG", "PROD"]). Defaults to all accessible global spaces.'),
+  })
+  .describe('Confluence Cloud context-source connection.');
+
 export const connectionConfigSchema = z.discriminatedUnion('driver', [
   ...warehouseConnectionSchemas,
   metabaseConnectionSchema,
@@ -204,4 +225,5 @@ export const connectionConfigSchema = z.discriminatedUnion('driver', [
   notionConnectionSchema,
   dbtConnectionSchema,
   metricflowConnectionSchema,
+  confluenceConnectionSchema,
 ]);

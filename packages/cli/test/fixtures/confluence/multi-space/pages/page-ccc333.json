@@ -1,0 +1,14 @@
+{
+  "pageId": "ccc333",
+  "spaceId": "space-2",
+  "spaceKey": "PROD",
+  "spaceName": "Product",
+  "title": "Feature Flags Guide",
+  "parentId": null,
+  "breadcrumb": "Product > Feature Flags Guide",
+  "url": "https://example.atlassian.net/wiki/spaces/PROD/pages/ccc333",
+  "lastEditedAt": "2026-06-15T16:00:00.000Z",
+  "version": 8,
+  "status": "current",
+  "contentStorage": "<h1>Feature Flags Guide</h1><p>How we use feature flags to control rollout of new features.</p>"
+}

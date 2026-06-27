@@ -43,6 +43,8 @@ import { pullConfigFromMetricflowIntegration } from './adapters/metricflow/pull-
 import { LocalNotionRuntimeStore } from './adapters/notion/local-state-store.js';
 import { NotionSourceAdapter } from './adapters/notion/notion.adapter.js';
 import type { NotionFetchLogger } from './adapters/notion/fetch.js';
+import { createLocalConfluenceSourceAdapter } from './adapters/confluence/local-confluence.adapter.js';
+import type { ConfluenceFetchLogger } from './adapters/confluence/fetch.js';
 import { seedLocalMappingStateFromKtxYaml } from './local-mapping-reconcile.js';
 import type { SourceAdapter } from './types.js';
 
@@ -70,7 +72,8 @@ export interface DefaultLocalIngestAdaptersOptions {
 type LocalIngestOperationalLogger = MetabaseClientLogger &
   MetabaseFetchLogger &
   LookerClientLogger &
-  NotionFetchLogger;
+  NotionFetchLogger &
+  ConfluenceFetchLogger;
 
 export function createDefaultLocalIngestAdapters(
   project: KtxLocalProject,
@@ -122,6 +125,9 @@ export function createDefaultLocalIngestAdapters(
       onPullSucceeded: async ({ connectionId, nextSuccessfulCursor }) => {
         await localNotionRuntimeStore(project).setCursor(connectionId, nextSuccessfulCursor);
       },
+      ...(options.logger ? { logger: options.logger } : {}),
+    }),
+    createLocalConfluenceSourceAdapter(project, {
       ...(options.logger ? { logger: options.logger } : {}),
     }),
   ];
@@ -328,6 +334,13 @@ export async function localPullConfigForAdapter(
     return {
       ...pullConfig,
       lastSuccessfulCursor: await localNotionRuntimeStore(project).readCursor(connectionId),
+    };
+  }
+  if (adapter.source === 'confluence') {
+    const spaceKeys = Array.isArray(connection?.space_keys) ? connection.space_keys : undefined;
+    return {
+      confluenceConnectionId: connectionId,
+      ...(spaceKeys ? { spaceKeys } : {}),
     };
   }
   if (adapter.source === 'metricflow') {
