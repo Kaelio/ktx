@@ -33,7 +33,7 @@ import { configureSnowflakeSdkLogger } from './sdk-logger.js';
 
 export interface KtxSnowflakeConnectionConfig {
   driver?: string;
-  authMethod?: 'password' | 'rsa';
+  authMethod?: 'password' | 'rsa' | 'oauth';
   account?: string;
   warehouse?: string;
   database?: string;
@@ -43,21 +43,24 @@ export interface KtxSnowflakeConnectionConfig {
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  token?: string;
+  token_ref?: string;
   role?: string;
   maxConnections?: number;
   [key: string]: unknown;
 }
 
 export interface KtxSnowflakeResolvedConnectionConfig {
-  authMethod: 'password' | 'rsa';
+  authMethod: 'password' | 'rsa' | 'oauth';
   account: string;
   warehouse: string;
   database: string;
   schemas: string[];
-  username: string;
+  username?: string;
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  token?: string;
   role?: string;
   maxConnections: number;
 }
@@ -260,7 +263,8 @@ export function snowflakeConnectionConfigFromConfig(input: {
   if (!database) {
     throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.database`);
   }
-  if (!username) {
+  // username is required for password/rsa; optional for oauth (token carries identity).
+  if (authMethod !== 'oauth' && !username) {
     throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.username`);
   }
   assertSafeSnowflakeIdentifier(warehouse, 'warehouse');
@@ -275,7 +279,7 @@ export function snowflakeConnectionConfigFromConfig(input: {
     warehouse,
     database,
     schemas: resolvedSchemas,
-    username,
+    ...(username ? { username } : {}),
     maxConnections: positiveIntegerConfigValue({
       connection: input.connection,
       key: 'maxConnections',
@@ -297,6 +301,18 @@ export function snowflakeConnectionConfigFromConfig(input: {
     if (!resolved.privateKey) {
       throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.privateKey for RSA auth`);
     }
+  } else if (authMethod === 'oauth') {
+    // token_ref is the preferred form; token accepts a literal value.
+    const tokenRef = input.connection?.token_ref;
+    const token = tokenRef
+      ? resolveStringReference(tokenRef as string, env)
+      : stringConfigValue(input.connection, 'token', env);
+    if (!token) {
+      throw new Error(
+        `Native Snowflake connector requires connections.${input.connectionId}.token_ref (or token) for OAuth auth`,
+      );
+    }
+    resolved.token = token;
   } else {
     resolved.password = stringConfigValue(input.connection, 'password', env);
     if (!resolved.password) {
@@ -488,9 +504,13 @@ class SnowflakeSdkDriver implements KtxSnowflakeDriver {
       clientSessionKeepAliveHeartbeatFrequency: 900,
       ...patch?.sdkOptions,
     };
-    return this.resolved.authMethod === 'rsa'
-      ? { ...baseConfig, authenticator: 'SNOWFLAKE_JWT', privateKey: this.decryptPrivateKey() }
-      : { ...baseConfig, password: this.resolved.password };
+    if (this.resolved.authMethod === 'rsa') {
+      return { ...baseConfig, authenticator: 'SNOWFLAKE_JWT', privateKey: this.decryptPrivateKey() };
+    }
+    if (this.resolved.authMethod === 'oauth') {
+      return { ...baseConfig, authenticator: 'OAUTH', token: this.resolved.token };
+    }
+    return { ...baseConfig, password: this.resolved.password };
   }
 
   private async executeSnowflakeQuery(

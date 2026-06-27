@@ -194,6 +194,89 @@ describe('KtxSnowflakeScanConnector', () => {
     }
   });
 
+  it('resolves OAuth config with token_ref and does not require username', () => {
+    const resolved = snowflakeConnectionConfigFromConfig({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'snowflake',
+        authMethod: 'oauth',
+        account: 'acct',
+        warehouse: 'WH',
+        database: 'ANALYTICS',
+        token_ref: 'env:SNOWFLAKE_OAUTH_TOKEN',
+      },
+      env: { SNOWFLAKE_OAUTH_TOKEN: 'test-token-value' }, // pragma: allowlist secret
+    });
+    expect(resolved.authMethod).toBe('oauth');
+    expect(resolved.token).toBe('test-token-value');
+    expect(resolved.username).toBeUndefined();
+  });
+
+  it('resolves OAuth config with inline token', () => {
+    const resolved = snowflakeConnectionConfigFromConfig({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'snowflake',
+        authMethod: 'oauth',
+        account: 'acct',
+        warehouse: 'WH',
+        database: 'ANALYTICS',
+        token: 'inline-token', // pragma: allowlist secret
+      },
+    });
+    expect(resolved.authMethod).toBe('oauth');
+    expect(resolved.token).toBe('inline-token');
+  });
+
+  it('resolves OAuth config with optional username', () => {
+    const resolved = snowflakeConnectionConfigFromConfig({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'snowflake',
+        authMethod: 'oauth',
+        account: 'acct',
+        warehouse: 'WH',
+        database: 'ANALYTICS',
+        username: 'svc_account',
+        token_ref: 'env:SNOWFLAKE_OAUTH_TOKEN',
+      },
+      env: { SNOWFLAKE_OAUTH_TOKEN: 'test-token-value' }, // pragma: allowlist secret
+    });
+    expect(resolved.username).toBe('svc_account');
+    expect(resolved.token).toBe('test-token-value');
+  });
+
+  it('throws when OAuth config is missing token and token_ref', () => {
+    expect(() =>
+      snowflakeConnectionConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'snowflake',
+          authMethod: 'oauth',
+          account: 'acct',
+          warehouse: 'WH',
+          database: 'ANALYTICS',
+        },
+      }),
+    ).toThrow('connections.warehouse.token_ref');
+  });
+
+  it('throws when password auth is missing username', () => {
+    expect(() =>
+      snowflakeConnectionConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'snowflake',
+          authMethod: 'password',
+          account: 'acct',
+          warehouse: 'WH',
+          database: 'ANALYTICS',
+          password: 'fixture-pass', // pragma: allowlist secret
+        },
+      }),
+    ).toThrow('connections.warehouse.username');
+  });
+
   it('rejects stale Snowflake pool config key', () => {
     const baseConnection: KtxSnowflakeConnectionConfig = {
       driver: 'snowflake',

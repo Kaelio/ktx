@@ -118,7 +118,7 @@ This helps **ktx** understand how your team actually queries the data.
 
 ## Snowflake
 
-Connects via the Snowflake SDK. Supports multi-schema scanning, RSA key authentication, and query-history configuration for Snowflake query history.
+Connects via the Snowflake SDK. Supports multi-schema scanning, password, RSA key pair, and OAuth authentication, and query-history configuration for Snowflake query history.
 
 ### Connection config
 
@@ -146,8 +146,25 @@ single schema, `schema_name: PUBLIC` is accepted as an equivalent shorthand.
 
 | Method | Config |
 |--------|--------|
-| Password | `password: env:SNOWFLAKE_PASSWORD` |
+| Password (default) | `password: env:SNOWFLAKE_PASSWORD` |
 | RSA key pair | `authMethod: rsa`, `privateKey: file:~/.ssh/snowflake_key.pem`, optional `passphrase` |
+| OAuth | `authMethod: oauth`, `token_ref: env:SNOWFLAKE_OAUTH_TOKEN` |
+
+For OAuth, `username` is optional — the token carries identity. If your Snowflake account requires it alongside the token (e.g. for auditing), add `username` as normal.
+
+```yaml title="ktx.yaml — OAuth example"
+connections:
+  my-snowflake:
+    driver: snowflake
+    authMethod: oauth
+    account: xy12345
+    warehouse: ANALYTICS_WH
+    database: PROD
+    token_ref: env:SNOWFLAKE_OAUTH_TOKEN
+    role: ANALYST
+```
+
+`token_ref` follows the same reference syntax as other secrets: `env:VAR` reads from an environment variable, `file:/path/to/token` reads from a file (supports `~` expansion). A literal token value can be supplied directly with `token:`, but `token_ref` is preferred.
 
 ### Features
 
