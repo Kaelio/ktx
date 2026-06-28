@@ -1,6 +1,5 @@
 import type {
   ListWorkbooksOptions,
-  SigmaDataModelPushResult,
   SigmaDataModelSummary,
   SigmaRuntimeClient,
   SigmaTestConnectionResult,
@@ -55,6 +54,7 @@ export class DefaultSigmaClient implements SigmaRuntimeClient {
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
   private tokenExpiresAt = 0;
+  private tokenInflight: Promise<void> | null = null;
 
   constructor(
     private readonly runtimeConfig: SigmaClientRuntimeConfig,
@@ -95,6 +95,7 @@ export class DefaultSigmaClient implements SigmaRuntimeClient {
     if (this.accessToken && now < this.tokenExpiresAt - 60_000) {
       return;
     }
+    if (this.tokenInflight) return this.tokenInflight;
     const body = new URLSearchParams();
     if (this.refreshToken) {
       body.set('grant_type', 'refresh_token');
@@ -102,10 +103,16 @@ export class DefaultSigmaClient implements SigmaRuntimeClient {
     } else {
       body.set('grant_type', 'client_credentials');
     }
-    const data = await this.fetchToken(body);
-    this.accessToken = data.access_token;
-    this.refreshToken = data.refresh_token ?? null;
-    this.tokenExpiresAt = now + data.expires_in * 1000;
+    this.tokenInflight = this.fetchToken(body)
+      .then((data) => {
+        this.accessToken = data.access_token;
+        this.refreshToken = data.refresh_token ?? null;
+        this.tokenExpiresAt = Date.now() + data.expires_in * 1000;
+      })
+      .finally(() => {
+        this.tokenInflight = null;
+      });
+    return this.tokenInflight;
   }
 
   private async request<T>(path: string, query?: Record<string, string>): Promise<T> {
@@ -168,77 +175,6 @@ export class DefaultSigmaClient implements SigmaRuntimeClient {
     throw lastError ?? new Error('Sigma API request failed after retries');
   }
 
-  private async mutate<T>(method: 'POST' | 'PUT', path: string, body: unknown): Promise<T> {
-    await this.ensureToken();
-    const url = `${this.apiUrl}${path}`;
-
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt <= this.clientConfig.maxRetries; attempt++) {
-      if (attempt > 0) {
-        const delay = Math.min(
-          this.clientConfig.baseDelayMs * 2 ** (attempt - 1),
-          this.clientConfig.maxDelayMs,
-        );
-        await new Promise<void>((resolve) => setTimeout(resolve, delay));
-      }
-
-      const res = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.accessToken}`,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.clientConfig.timeoutMs),
-      });
-
-      if (res.status === 401) {
-        this.accessToken = null;
-        this.refreshToken = null;
-        this.tokenExpiresAt = 0;
-        await this.ensureToken();
-        const retried = await fetch(url, {
-          method,
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.accessToken}`,
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(this.clientConfig.timeoutMs),
-        });
-        if (!retried.ok) {
-          const text = await retried.text().catch(() => '');
-          throw new Error(`Sigma API error after token refresh (${retried.status}): ${text}`);
-        }
-        return retried.json() as Promise<T>;
-      }
-
-      if (res.status === 429 || res.status >= 500) {
-        const text = await res.text().catch(() => '');
-        lastError = new Error(`Sigma API error (${res.status}): ${text}`);
-        if (isNonRetryable500(text)) throw lastError;
-        continue;
-      }
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`Sigma API error (${res.status}): ${text}`);
-      }
-
-      return res.json() as Promise<T>;
-    }
-
-    throw lastError ?? new Error(`Sigma API ${method} failed after retries`);
-  }
-
-  private post<T>(path: string, body: unknown): Promise<T> {
-    return this.mutate<T>('POST', path, body);
-  }
-
-  private put<T>(path: string, body: unknown): Promise<T> {
-    return this.mutate<T>('PUT', path, body);
-  }
-
   private async paginateAll<T>(path: string, query: Record<string, string> = {}): Promise<T[]> {
     const all: T[] = [];
     let page: string | null = null;
@@ -285,14 +221,6 @@ export class DefaultSigmaClient implements SigmaRuntimeClient {
 
   async getDataModelSpec(dataModelId: string): Promise<unknown> {
     return this.request<unknown>(`/v2/dataModels/${encodeURIComponent(dataModelId)}/spec`);
-  }
-
-  async createDataModel(spec: Record<string, unknown>): Promise<SigmaDataModelPushResult> {
-    return this.post<SigmaDataModelPushResult>('/v2/dataModels/spec', spec);
-  }
-
-  async updateDataModel(dataModelId: string, spec: Record<string, unknown>): Promise<SigmaDataModelPushResult> {
-    return this.put<SigmaDataModelPushResult>(`/v2/dataModels/${encodeURIComponent(dataModelId)}/spec`, spec);
   }
 
   async cleanup(): Promise<void> {

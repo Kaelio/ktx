@@ -33,20 +33,28 @@ describe('chunkSigmaStagedDir — first run', () => {
     expect(wu.displayLabel).toBe('Sigma: workbooks');
   });
 
-  it('data-models WU rawFiles contains all data model files and the manifest', async () => {
+  it('data-models WU rawFiles contains data model files but not the manifest', async () => {
     const result = await chunkSigmaStagedDir(SINGLE);
     const wu = result.workUnits.find((w) => w.unitKey === 'sigma-data-models')!;
     expect(wu.rawFiles).toContain('data-models/dm-aaa111.json');
     expect(wu.rawFiles).toContain('data-models/dm-bbb222.json');
-    expect(wu.rawFiles).toContain('sigma-manifest.json');
+    expect(wu.rawFiles).not.toContain('sigma-manifest.json');
     expect(wu.rawFiles).not.toContain('workbooks/wb-xxx111.json');
   });
 
-  it('workbooks WU rawFiles contains all workbook files and the manifest', async () => {
+  it('manifest is in peerFileIndex so the LLM can read it without affecting the hash', async () => {
+    const result = await chunkSigmaStagedDir(SINGLE);
+    const dmWu = result.workUnits.find((w) => w.unitKey === 'sigma-data-models')!;
+    const wbWu = result.workUnits.find((w) => w.unitKey === 'sigma-workbooks')!;
+    expect(dmWu.peerFileIndex).toContain('sigma-manifest.json');
+    expect(wbWu.peerFileIndex).toContain('sigma-manifest.json');
+  });
+
+  it('workbooks WU rawFiles contains workbook files but not the manifest', async () => {
     const result = await chunkSigmaStagedDir(SINGLE);
     const wu = result.workUnits.find((w) => w.unitKey === 'sigma-workbooks')!;
     expect(wu.rawFiles).toContain('workbooks/wb-xxx111.json');
-    expect(wu.rawFiles).toContain('sigma-manifest.json');
+    expect(wu.rawFiles).not.toContain('sigma-manifest.json');
     expect(wu.rawFiles).not.toContain('data-models/dm-aaa111.json');
   });
 
@@ -66,13 +74,13 @@ describe('chunkSigmaStagedDir — first run', () => {
   it('data-models WU notes describes model count', async () => {
     const result = await chunkSigmaStagedDir(SINGLE);
     const wu = result.workUnits.find((w) => w.unitKey === 'sigma-data-models')!;
-    expect(wu.notes).toMatch(/2 data model/);
+    expect(wu.notes).toBe('2 data models');
   });
 
   it('workbooks WU notes describes workbook count', async () => {
     const result = await chunkSigmaStagedDir(SINGLE);
     const wu = result.workUnits.find((w) => w.unitKey === 'sigma-workbooks')!;
-    expect(wu.notes).toMatch(/1 workbook/);
+    expect(wu.notes).toBe('1 workbook');
   });
 
   it('dependencyPaths is empty on first run for both WUs', async () => {
@@ -171,10 +179,10 @@ describe('chunkSigmaStagedDir — data model batching', () => {
     expect(keys).toEqual(['sigma-data-models-0', 'sigma-data-models-1']);
   });
 
-  it('first batch has exactly DATA_MODELS_PER_UNIT files plus the manifest', async () => {
+  it('first batch has exactly DATA_MODELS_PER_UNIT files (manifest excluded from rawFiles)', async () => {
     const result = await chunkSigmaStagedDir(stagedDir);
     const wu = result.workUnits.find((w) => w.unitKey === 'sigma-data-models-0')!;
-    expect(wu.rawFiles).toHaveLength(DATA_MODELS_PER_UNIT + 1);
+    expect(wu.rawFiles).toHaveLength(DATA_MODELS_PER_UNIT);
   });
 
   it('displayLabel includes batch position when split', async () => {
@@ -227,16 +235,16 @@ describe('chunkSigmaStagedDir — workbook batching', () => {
     expect(keys).toEqual(['sigma-workbooks-0', 'sigma-workbooks-1']);
   });
 
-  it('first batch has exactly WORKBOOKS_PER_UNIT files plus the manifest', async () => {
+  it('first batch has exactly WORKBOOKS_PER_UNIT files (manifest excluded from rawFiles)', async () => {
     const result = await chunkSigmaStagedDir(stagedDir);
     const wu = result.workUnits.find((w) => w.unitKey === 'sigma-workbooks-0')!;
-    expect(wu.rawFiles).toHaveLength(WORKBOOKS_PER_UNIT + 1); // +1 for manifest
+    expect(wu.rawFiles).toHaveLength(WORKBOOKS_PER_UNIT);
   });
 
-  it('second batch has the remainder plus the manifest', async () => {
+  it('second batch has the remainder only', async () => {
     const result = await chunkSigmaStagedDir(stagedDir);
     const wu = result.workUnits.find((w) => w.unitKey === 'sigma-workbooks-1')!;
-    expect(wu.rawFiles).toHaveLength(2); // 1 overflow workbook + manifest
+    expect(wu.rawFiles).toHaveLength(1); // 1 overflow workbook
   });
 
   it('displayLabel includes batch position when split', async () => {

@@ -242,33 +242,6 @@ describe('DefaultSigmaClient.getDataModelSpec', () => {
   });
 });
 
-describe('DefaultSigmaClient.createDataModel', () => {
-  it('posts spec and returns result', async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(makeResponse(TOKEN_RESPONSE))
-      .mockResolvedValueOnce(makeResponse({ dataModelId: 'new-dm' }));
-    const client = makeClient();
-    const result = await client.createDataModel({ schemaVersion: 1 });
-    expect(result.dataModelId).toBe('new-dm');
-    const mutateCall = vi.mocked(fetch).mock.calls[1]!;
-    expect(String(mutateCall[1]?.method)).toBe('POST');
-  });
-});
-
-describe('DefaultSigmaClient.updateDataModel', () => {
-  it('puts spec with encoded id and returns result', async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(makeResponse(TOKEN_RESPONSE))
-      .mockResolvedValueOnce(makeResponse({ dataModelId: 'dm-1' }));
-    const client = makeClient();
-    const result = await client.updateDataModel('dm-1', { schemaVersion: 1 });
-    expect(result.dataModelId).toBe('dm-1');
-    const mutateCall = vi.mocked(fetch).mock.calls[1]!;
-    expect(String(mutateCall[1]?.method)).toBe('PUT');
-    expect(String(mutateCall[0])).toContain('/v2/dataModels/dm-1/spec');
-  });
-});
-
 describe('DefaultSigmaClient — error handling', () => {
   it('retries on 500 and succeeds on retry', async () => {
     vi.mocked(fetch)

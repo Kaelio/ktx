@@ -1,5 +1,5 @@
 import type { FetchContext } from '../../types.js';
-import type { SigmaPullConfig, WorkbookFilter, WorkbookFilterInput } from './types.js';
+import type { SigmaPullConfig, WorkbookFilterInput } from './types.js';
 
 export interface SigmaTestConnectionResult {
   success: boolean;
@@ -18,10 +18,6 @@ export interface SigmaDataModelSummary {
   createdAt: string;
   updatedAt: string;
   isArchived?: boolean;
-}
-
-export interface SigmaDataModelPushResult {
-  dataModelId: string;
 }
 
 /** Workbook summary shape from GET /v2/workbooks list response. */
@@ -47,10 +43,6 @@ export interface SigmaRuntimeClient {
   listWorkbooks(opts?: WorkbookFilterInput): Promise<SigmaWorkbookSummary[]>;
   /** Returns the raw spec object from GET /v2/dataModels/{id}/spec. */
   getDataModelSpec(dataModelId: string): Promise<unknown>;
-  /** Creates a new data model from a spec. POST /v2/dataModels/spec */
-  createDataModel(spec: Record<string, unknown>): Promise<SigmaDataModelPushResult>;
-  /** Updates an existing data model from a spec. PUT /v2/dataModels/{id}/spec */
-  updateDataModel(dataModelId: string, spec: Record<string, unknown>): Promise<SigmaDataModelPushResult>;
   cleanup(): Promise<void>;
 }
 

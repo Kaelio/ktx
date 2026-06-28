@@ -111,7 +111,8 @@ describe('projectSigmaDataModels', () => {
     const source = written[0]!.source;
     expect(source.table).toBe('FIVETRAN.SALESFORCE.OPPORTUNITIES');
     expect(source.columns.some((c) => c.name === 'deal_amount')).toBe(true);
-    expect(source.measures.some((m) => m.name === 'total_amount')).toBe(true);
+    expect(source.columns.some((c) => c.name === 'total_amount')).toBe(false);
+    expect(source.measures).toEqual([]);
     expect(result.touchedSources).toHaveLength(1);
     expect(result.errors).toHaveLength(0);
   });
@@ -181,7 +182,7 @@ describe('projectSigmaDataModels', () => {
     expect(source.columns.some((c) => c.name === 'hidden')).toBe(false);
   });
 
-  it('classifies aggregation formulas as measures', async () => {
+  it('silently skips aggregation formula columns and never emits measures', async () => {
     await writeProjectionConfig(stagedDir, ['c']);
     const spec = makeSpec([
       {
@@ -206,10 +207,10 @@ describe('projectSigmaDataModels', () => {
     await projectSigmaDataModels(makeCtx(stagedDir, writeSource), makeCtx(stagedDir, writeSource).semanticLayerService as never);
 
     const source = written[0]!;
-    expect(source.measures.map((m) => m.name)).toContain('total_revenue');
-    expect(source.measures.map((m) => m.name)).toContain('unique_customers');
+    expect(source.measures).toEqual([]);
     expect(source.columns.map((c) => c.name)).toContain('order_date');
     expect(source.columns.map((c) => c.name)).not.toContain('total_revenue');
+    expect(source.columns.map((c) => c.name)).not.toContain('unique_customers');
   });
 
   it('skips models with null spec', async () => {

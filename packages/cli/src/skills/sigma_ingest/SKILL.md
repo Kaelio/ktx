@@ -56,7 +56,7 @@ Raw files for both unit types are:
 ```
 
 `source.kind` discriminates:
-- `warehouse-table` — element maps directly to a warehouse table. Has `connectionId` and `path` (array of path segments forming the fully-qualified table name). `project()` writes an SL source when `connectionMappings` covers this `connectionId`. Elements with `"visibleAsSource": false` are supporting tables joined into the primary element via `Lookup()` formulas.
+- `warehouse-table` — element maps directly to a warehouse table. Has `connectionId` and `path` (array of path segments forming the fully-qualified table name). `project()` writes an SL source when `connectionMappings` covers this `connectionId`.
 - `table` — element is a derived view layered on top of another element; identified by `source.elementId`. No warehouse path. Wiki-only.
 
 **`workbooks/<id>.json`** — one per workbook (summary only; no spec endpoint exists):
@@ -145,31 +145,7 @@ If `connectionMappings` has no entry for the element's `source.connectionId`, tr
 
 ### Joins within a data model
 
-Sigma does not have explicit join declarations. Joins are encoded as `Lookup()` formulas in column definitions of warehouse-table elements. The pattern is:
-
-```
-Lookup([TARGET_TABLE/Column], [left_key], [TARGET_TABLE/right_key])
-```
-
-This means: fetch `TARGET_TABLE.Column` where `left_key = TARGET_TABLE.right_key`.
-
-When a page has multiple `warehouse-table` elements, they are related — supporting elements (those with `"visibleAsSource": false`) are joined into the primary element via Lookup formulas. The primary element is typically the one referenced by a `source.kind === "table"` element or the one without `visibleAsSource: false`.
-
-**When an SL source was written for the primary element**, add `joins` entries for each supporting warehouse-table element on the same page:
-
-1. Find all `warehouse-table` elements on the page beyond the primary.
-2. For each, identify its SL source name using the same slug rule: `<dataModelName>_<elementName>` (or just `<dataModelName>` if names are identical after slugifying).
-3. Parse `Lookup()` formulas in the primary element's columns to find the join key pair. The left key is a column on the primary element; the right key is a column on the target element.
-4. Write the join using physical column names (slugified), e.g.:
-   ```yaml
-   joins:
-     - to: admin_dataset_team
-       on: admin_dataset.team_id = admin_dataset_team.id
-       relationship: many_to_one
-   ```
-5. When no Lookup() clearly establishes the join key (e.g. formula is too complex or uses intermediate elements), write the join with `on: ""` and note it as unverified in the wiki body rather than omitting it.
-
-Use `many_to_one` as the default relationship unless a Lookup pattern or column name clearly implies otherwise (e.g. a column named `id` on the left joined to a foreign key on the right suggests `one_to_many`).
+Joins are not projected in v1; `joins: []` is always written by `project()`. `Lookup()` formulas may be described in wiki prose instead.
 
 ### Non-warehouse elements (`source.kind === "table"`)
 

@@ -453,6 +453,7 @@ connections:
 - Context ingest (`ktx ingest sigma-main`) fetches from the Sigma API directly
 - Ingest is incremental: items whose `updatedAt` timestamp is unchanged since the last run are skipped
 - Models backed by CSV uploads or unsupported connector subtypes cannot have their spec exported; these are skipped with a warning (a Sigma API limitation)
+- Joins are not projected from Sigma data models in this release; `joins: []` is always written by the projection step. Lookup relationships visible in data model specs are captured as wiki knowledge instead.
 
 ---
 

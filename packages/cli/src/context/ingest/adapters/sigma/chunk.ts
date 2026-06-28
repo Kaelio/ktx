@@ -85,13 +85,14 @@ function emitBatches(
   perUnit: number,
   unitKeyBase: string,
   labelBase: string,
+  noun: string,
   allPaths: string[],
 ): WorkUnit[] {
   const batches = Math.ceil(paths.length / perUnit) || 0;
   const units: WorkUnit[] = [];
   for (let i = 0; i < batches; i++) {
     const batch = paths.slice(i * perUnit, (i + 1) * perUnit);
-    const rawFiles = [...batch, STAGED_FILES.manifest].sort();
+    const rawFiles = [...batch].sort();
     const rawFilesSet = new Set(rawFiles);
     const suffix = batches > 1 ? `-${i}` : '';
     units.push({
@@ -100,7 +101,7 @@ function emitBatches(
       rawFiles,
       peerFileIndex: allPaths.filter((p) => !rawFilesSet.has(p)).sort(),
       dependencyPaths: [],
-      notes: `${batch.length} ${labelBase.toLowerCase().replace('sigma: ', '')}${batch.length === 1 ? '' : 's'}`,
+      notes: `${batch.length} ${noun}${batch.length === 1 ? '' : 's'}`,
     });
   }
   return units;
@@ -111,8 +112,8 @@ function emitWorkUnits(bundle: LoadedBundle): WorkUnit[] {
   const dmPaths = [...bundle.dataModelsByPath.keys()].sort();
   const wbPaths = [...bundle.workbooksByPath.keys()].sort();
   return [
-    ...emitBatches(dmPaths, DATA_MODELS_PER_UNIT, 'sigma-data-models', 'Sigma: data models', bundle.allPaths),
-    ...emitBatches(wbPaths, WORKBOOKS_PER_UNIT, 'sigma-workbooks', 'Sigma: workbooks', bundle.allPaths),
+    ...emitBatches(dmPaths, DATA_MODELS_PER_UNIT, 'sigma-data-models', 'Sigma: data models', 'data model', bundle.allPaths),
+    ...emitBatches(wbPaths, WORKBOOKS_PER_UNIT, 'sigma-workbooks', 'Sigma: workbooks', 'workbook', bundle.allPaths),
   ];
 }
 

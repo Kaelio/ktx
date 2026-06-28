@@ -28,8 +28,6 @@ function makeFactory(client: Partial<SigmaRuntimeClient>): SigmaClientFactory {
     listDataModels: vi.fn().mockResolvedValue([]),
     listWorkbooks: vi.fn().mockResolvedValue([]),
     getDataModelSpec: vi.fn().mockResolvedValue(null),
-    createDataModel: vi.fn().mockResolvedValue({ dataModelId: 'new' }),
-    updateDataModel: vi.fn().mockResolvedValue({ dataModelId: 'existing' }),
     cleanup: vi.fn().mockResolvedValue(undefined),
     ...client,
   };
@@ -174,8 +172,6 @@ describe('fetchSigmaBundle', () => {
       listDataModels: vi.fn().mockResolvedValue([]),
       listWorkbooks: vi.fn().mockResolvedValue([]),
       getDataModelSpec: vi.fn(),
-      createDataModel: vi.fn(),
-      updateDataModel: vi.fn(),
       cleanup: vi.fn().mockResolvedValue(undefined),
     } satisfies SigmaRuntimeClient);
     const factory: SigmaClientFactory = { createClient: createClientMock };
@@ -290,6 +286,40 @@ describe('fetchSigmaBundle', () => {
     });
     // Spec fetch must be skipped for the unchanged model.
     expect(getSpecMock).not.toHaveBeenCalled();
+  });
+
+  it('retries spec fetch for a model whose updatedAt matches but staged spec is null (transient failure)', async () => {
+    const summary = makeSummary('dm-1', 'Revenue Model', 'Finance/Revenue');
+    await mkdir(join(stagedDir, 'data-models'), { recursive: true });
+    const existingStaged = {
+      sigmaId: 'dm-1',
+      name: 'Revenue Model',
+      path: 'Finance/Revenue',
+      latestVersion: 1,
+      updatedAt: summary.updatedAt,
+      isArchived: false,
+      spec: null,
+    };
+    await writeFile(
+      join(stagedDir, 'data-models', 'dm-1.json'),
+      JSON.stringify(existingStaged),
+      'utf-8',
+    );
+    const freshSpec = { schemaVersion: 1, name: 'Revenue Model' };
+    const getSpecMock = vi.fn().mockResolvedValue(freshSpec);
+    const factory = makeFactory({
+      listDataModels: vi.fn().mockResolvedValue([summary]),
+      getDataModelSpec: getSpecMock,
+    });
+    await fetchSigmaBundle({
+      pullConfig: TEST_PULL_CONFIG,
+      stagedDir,
+      ctx: {} as never,
+      clientFactory: factory,
+    });
+    expect(getSpecMock).toHaveBeenCalledWith('dm-1');
+    const written = JSON.parse(await readFile(join(stagedDir, 'data-models', 'dm-1.json'), 'utf-8'));
+    expect(written.spec).toEqual(freshSpec);
   });
 
   it('writes workbook count to manifest', async () => {
@@ -432,5 +462,32 @@ describe('fetchSigmaBundle', () => {
     await fetchSigmaBundle({ pullConfig: TEST_PULL_CONFIG, stagedDir, ctx: {} as never, clientFactory: factory });
     await expect(readFile(join(stagedDir, 'workbooks', 'wb-stale.json'), 'utf-8')).rejects.toThrow();
     await expect(readFile(join(stagedDir, 'workbooks', 'wb-active.json'), 'utf-8')).resolves.toBeDefined();
+  });
+
+  it('workbookFilter.updatedSince filters fetch but preserves existing staged files for older workbooks', async () => {
+    // Pre-stage an old workbook from a previous full fetch.
+    await mkdir(join(stagedDir, 'workbooks'), { recursive: true });
+    const oldStaged = {
+      sigmaId: 'wb-old', name: 'Old Dashboard', path: 'Finance/Old',
+      latestVersion: 1, updatedAt: '2026-06-20T00:00:00Z', isArchived: false, workbookUrlId: 'wb-url-old',
+    };
+    await writeFile(join(stagedDir, 'workbooks', 'wb-old.json'), JSON.stringify(oldStaged), 'utf-8');
+    const listWorkbooksMock = vi.fn().mockResolvedValue([
+      { workbookId: 'wb-old', workbookUrlId: 'wb-url-old', name: 'Old Dashboard', path: 'Finance/Old', latestVersion: 1, ownerId: 'u1', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-06-20T00:00:00Z', isArchived: false },
+      { workbookId: 'wb-new', workbookUrlId: 'wb-url-new', name: 'New Dashboard', path: 'Finance/New', latestVersion: 1, ownerId: 'u1', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-06-26T00:00:00Z', isArchived: false },
+    ]);
+    const factory = makeFactory({ listWorkbooks: listWorkbooksMock });
+    await fetchSigmaBundle({
+      pullConfig: { sigmaConnectionId: 'sigma-prod', workbookFilter: { updatedSince: '2026-06-25T00:00:00Z' } },
+      stagedDir,
+      ctx: {} as never,
+      clientFactory: factory,
+    });
+    // Only the new workbook is staged on this run.
+    await expect(readFile(join(stagedDir, 'workbooks', 'wb-new.json'), 'utf-8')).resolves.toBeDefined();
+    // Old workbook's staged file is PRESERVED — it is still active, just outside the filter window.
+    await expect(readFile(join(stagedDir, 'workbooks', 'wb-old.json'), 'utf-8')).resolves.toBeDefined();
+    // listWorkbooks is called without updatedSince to get the full universe for eviction.
+    expect(listWorkbooksMock).toHaveBeenCalledWith(expect.not.objectContaining({ updatedSince: expect.anything() }));
   });
 });

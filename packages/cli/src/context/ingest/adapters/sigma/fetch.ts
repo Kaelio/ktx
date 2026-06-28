@@ -111,7 +111,9 @@ export async function fetchSigmaBundle({
         while ((summary = queue.shift()) !== undefined) {
           const existing = existingByModelId.get(summary.dataModelId);
 
-          if (existing && existing.updatedAt === summary.updatedAt) {
+          // Only skip when the cached spec was successfully fetched. spec: null means
+          // the previous attempt failed transiently — retry regardless of updatedAt.
+          if (existing && existing.updatedAt === summary.updatedAt && existing.spec !== null) {
             logger.log(`Unchanged: ${summary.name}`);
             skipped++;
             continue;
@@ -162,16 +164,21 @@ export async function fetchSigmaBundle({
     }
 
     // Fetch workbooks (summary metadata only — no separate spec endpoint).
+    // Fetch the full non-archived/non-exploration universe first so eviction is based on
+    // all known workbooks, not just the updatedSince slice. Mirrors the data-model path.
     logger.log('Listing Sigma workbooks...');
-    const activeWorkbooks = await client.listWorkbooks(config.workbookFilter);
-    logger.log(`Found ${activeWorkbooks.length} workbook(s) matching filter.`);
+    const { updatedSince, ...filterWithoutSince } = config.workbookFilter ?? {};
+    const allWorkbooks = await client.listWorkbooks(filterWithoutSince);
+    const nonArchivedWorkbookIds = new Set(allWorkbooks.map((wb) => wb.workbookId));
+    const activeWorkbooks = updatedSince
+      ? allWorkbooks.filter((wb) => new Date(wb.updatedAt).getTime() >= new Date(updatedSince).getTime())
+      : allWorkbooks;
+    logger.log(`Found ${activeWorkbooks.length} workbook(s) to process (${allWorkbooks.length} total).`);
 
-    const seenWorkbookIds = new Set<string>();
     let workbooksFetched = 0;
     let workbooksSkipped = 0;
 
     for (const wb of activeWorkbooks) {
-      seenWorkbookIds.add(wb.workbookId);
       const existing = existingByWorkbookId.get(wb.workbookId);
 
       if (existing && existing.updatedAt === wb.updatedAt) {
@@ -196,8 +203,9 @@ export async function fetchSigmaBundle({
       workbooksFetched++;
     }
 
+    // Evict only workbooks that are archived or deleted — not those outside the updatedSince window.
     for (const [workbookId] of existingByWorkbookId) {
-      if (seenWorkbookIds.has(workbookId)) continue;
+      if (nonArchivedWorkbookIds.has(workbookId)) continue;
       try {
         await rm(join(stagedDir, STAGED_FILES.workbooksDir, `${workbookId}.json`));
         logger.log(`Removed stale staged file for workbook ${workbookId}.`);

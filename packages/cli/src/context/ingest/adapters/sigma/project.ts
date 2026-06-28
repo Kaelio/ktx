@@ -63,26 +63,6 @@ const sigmaSpecSchema = z
 
 type SpecColumn = z.infer<typeof specColumnSchema>;
 
-// Aggregation functions that classify a formula as a measure.
-const AGG_PREFIXES = [
-  'Sum(',
-  'Count(',
-  'CountDistinct(',
-  'Avg(',
-  'Average(',
-  'Min(',
-  'Max(',
-  'StdDev(',
-  'Variance(',
-  'Median(',
-  'Corr(',
-];
-
-function isAggregationFormula(formula: string): boolean {
-  const trimmed = formula.trim();
-  return AGG_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
-}
-
 /** Extract the column name from a bracket formula like `[TABLE/Column Name]` or `[Column]`. */
 function extractColumnName(formula: string): string | null {
   const match = /\[(?:[^\]/]+\/)?([^\]]+)\]/.exec(formula.trim());
@@ -119,30 +99,24 @@ function buildSourceFromElement(
   if (!sourceName) return null;
 
   const slColumns: SemanticLayerSource['columns'] = [];
-  const measures: SemanticLayerSource['measures'] = [];
 
   for (const col of columns) {
     if (col.hidden) continue;
     if (!col.formula) continue;
+    // Aggregation formulas (Sum, Count, etc.) are Sigma-specific expressions that don't map to
+    // warehouse columns — skip them silently. The sigma_ingest skill surfaces them as wiki candidates.
+    if (/^[A-Za-z]+\(/.test(col.formula.trim())) continue;
 
     const displayName = col.name ?? extractColumnName(col.formula);
     if (!displayName) continue;
     const colSlug = slugify(displayName);
     if (!colSlug) continue;
 
-    if (isAggregationFormula(col.formula)) {
-      measures.push({
-        name: colSlug,
-        expr: col.formula,
-        ...(col.description ? { description: col.description } : {}),
-      });
-    } else {
-      slColumns.push({
-        name: colSlug,
-        type: inferColumnType(col),
-        ...(col.description ? { descriptions: { user: col.description } } : {}),
-      });
-    }
+    slColumns.push({
+      name: colSlug,
+      type: inferColumnType(col),
+      ...(col.description ? { descriptions: { user: col.description } } : {}),
+    });
   }
 
   const source: SemanticLayerSource = {
@@ -151,7 +125,7 @@ function buildSourceFromElement(
     grain: [],
     columns: slColumns,
     joins: [],
-    measures,
+    measures: [],
   };
 
   if (dataModelName) {
@@ -175,9 +149,6 @@ export async function projectSigmaDataModels(
   const errors: string[] = [];
   const touchedSources: Array<{ connectionId: string; sourceName: string }> = [];
 
-  // connectionMappings: Sigma internal connection UUID → ktx warehouse connection ID.
-  // When a mapping exists the source lands under the warehouse connection (enabling sl_validate).
-  // Unmapped elements fall back to the Sigma connection ID.
   const connectionMappings = await readProjectionConfig(ctx.stagedDir);
 
   const dmDir = join(ctx.stagedDir, STAGED_FILES.dataModelsDir);
