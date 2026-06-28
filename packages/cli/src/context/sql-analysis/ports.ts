@@ -9,6 +9,7 @@ export type SqlAnalysisDialect =
   | 'sqlite'
   | 'tsql'
   | 'clickhouse'
+  | 'trino'
   | (string & {});
 
 export type SqlAnalysisLiteralSlotType = 'string' | 'number' | 'timestamp' | 'date' | 'boolean' | 'null' | 'unknown';

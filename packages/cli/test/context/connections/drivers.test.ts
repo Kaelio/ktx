@@ -64,9 +64,16 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     database: 'ANALYTICS',
     schema: 'PUBLIC',
   }),
+  trino: () => ({
+    driver: 'trino',
+    host: 'localhost',
+    port: 8080,
+    user: 'reader',
+    catalogs: ['hive'],
+  }),
 };
 
-const allowedScopeKeys = new Set(['dataset_ids', 'databases', 'schemas', 'schema_names']);
+const allowedScopeKeys = new Set(['dataset_ids', 'databases', 'schemas', 'schema_names', 'catalogs']);
 const historicSqlReaderDrivers = new Set<KtxConnectionDriver>(['postgres', 'bigquery', 'snowflake']);
 
 function assertExportedRegistryBoundaryTypes(input: {
@@ -101,6 +108,7 @@ describe('driverRegistrations', () => {
       'snowflake',
       'sqlite',
       'sqlserver',
+      'trino',
     ]);
   });
 

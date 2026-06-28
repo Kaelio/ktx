@@ -1,7 +1,7 @@
 import type { KtxConnectionDriver, KtxScanConnector } from '../scan/types.js';
 
 /** @internal */
-export type KtxScopeConfigKey = 'dataset_ids' | 'databases' | 'schemas' | 'schema_names';
+export type KtxScopeConfigKey = 'dataset_ids' | 'databases' | 'schemas' | 'schema_names' | 'catalogs';
 
 /** @internal */
 export interface KtxDriverConnectorModule {
@@ -169,6 +169,27 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
             throw invalidConnectionConfig('sqlserver');
           }
           return new m.KtxSqlServerScanConnector({ connectionId, connection: typedConnection });
+        },
+      };
+    },
+  },
+  trino: {
+    driver: 'trino',
+    scopeConfigKey: 'catalogs',
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/trino/connector.js');
+      return {
+        isConnectionConfig: (connection) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxTrinoConnectionConfig>[0];
+          return m.isKtxTrinoConnectionConfig(typedConnection);
+        },
+        createScanConnector: ({ connectionId, connection }) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxTrinoConnectionConfig>[0];
+          if (!m.isKtxTrinoConnectionConfig(typedConnection)) {
+            throw invalidConnectionConfig('trino');
+          }
+          return new m.KtxTrinoScanConnector({ connectionId, connection: typedConnection });
         },
       };
     },

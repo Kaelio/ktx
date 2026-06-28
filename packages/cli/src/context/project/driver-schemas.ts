@@ -13,6 +13,7 @@ const warehouseDrivers = [
   'sqlite',
   'clickhouse',
   'sqlserver',
+  'trino',
 ] as const;
 
 type WarehouseDriver = (typeof warehouseDrivers)[number];
@@ -46,6 +47,7 @@ const warehouseConnectionSchemas = [
   warehouseConnectionSchema('sqlite'),
   warehouseConnectionSchema('clickhouse'),
   warehouseConnectionSchema('sqlserver'),
+  warehouseConnectionSchema('trino'),
 ] as const;
 
 const positiveIntKeyMessage = (field: string) => `${field} keys must be positive-integer strings (e.g. "1", "42")`;
