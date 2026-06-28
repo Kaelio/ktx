@@ -170,6 +170,18 @@ const notionConnectionSchema = z
   })
   .describe('Notion context-source connection.');
 
+const gdriveConnectionSchema = z
+  .looseObject({
+    driver: z.literal('gdrive'),
+    service_account_key_ref: z
+      .string()
+      .min(1)
+      .describe('Reference to a Google service-account JSON key file. Must use file:/absolute/path/to/key.json.'),
+    folder_id: z.string().min(1).describe('Google Drive folder ID to ingest.'),
+    recursive: z.boolean().optional().describe('When true, recursively traverse subfolders beneath folder_id.'),
+  })
+  .describe('Google Drive Google Docs context-source connection.');
+
 const dbtConnectionSchema = z
   .looseObject({
     driver: z.literal('dbt'),
@@ -204,6 +216,7 @@ export const connectionConfigSchema = z.discriminatedUnion('driver', [
   lookerConnectionSchema,
   lookmlConnectionSchema,
   notionConnectionSchema,
+  gdriveConnectionSchema,
   dbtConnectionSchema,
   metricflowConnectionSchema,
 ]);

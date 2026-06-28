@@ -73,6 +73,7 @@ describe('local ingest adapters', () => {
       'lookml',
       'dbt',
       'metabase',
+      'gdrive',
       'looker',
       'metricflow',
       'notion',
