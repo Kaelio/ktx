@@ -97,6 +97,161 @@ export function assertReadOnlySql(sql: string): string {
   return trimmed;
 }
 
+function isSqlIdentifierPart(char: string | undefined): boolean {
+  return char !== undefined && /[A-Za-z0-9_$]/.test(char);
+}
+
+function keywordAt(sql: string, index: number, keyword: string): boolean {
+  if (sql.slice(index, index + keyword.length).toLowerCase() !== keyword.toLowerCase()) {
+    return false;
+  }
+  return !isSqlIdentifierPart(sql[index - 1]) && !isSqlIdentifierPart(sql[index + keyword.length]);
+}
+
+function skipWhitespaceAndComments(sql: string, index: number): number {
+  let current = index;
+  while (current < sql.length) {
+    while (/\s/.test(sql[current] ?? '')) {
+      current += 1;
+    }
+    if (sql.startsWith('--', current) || sql.startsWith('/*', current)) {
+      current = skipQuotedOrComment(sql, current);
+      continue;
+    }
+    return current;
+  }
+  return current;
+}
+
+function skipBracketIdentifier(sql: string, index: number): number {
+  let current = index + 1;
+  while (current < sql.length) {
+    if (sql[current] === ']') {
+      if (sql[current + 1] === ']') {
+        current += 2;
+        continue;
+      }
+      return current + 1;
+    }
+    current += 1;
+  }
+  return -1;
+}
+
+function skipBacktickIdentifier(sql: string, index: number): number {
+  let current = index + 1;
+  while (current < sql.length) {
+    if (sql[current] === '`') {
+      if (sql[current + 1] === '`') {
+        current += 2;
+        continue;
+      }
+      return current + 1;
+    }
+    current += 1;
+  }
+  return -1;
+}
+
+function skipIdentifier(sql: string, index: number): number {
+  if (sql[index] === '"') {
+    const skipped = skipQuotedOrComment(sql, index);
+    return skipped > index ? skipped : -1;
+  }
+  if (sql[index] === '[') {
+    return skipBracketIdentifier(sql, index);
+  }
+  if (sql[index] === '`') {
+    return skipBacktickIdentifier(sql, index);
+  }
+  let current = index;
+  while (isSqlIdentifierPart(sql[current])) {
+    current += 1;
+  }
+  return current > index ? current : -1;
+}
+
+function skipBalancedParentheses(sql: string, index: number): number {
+  if (sql[index] !== '(') {
+    return -1;
+  }
+
+  let current = index;
+  let depth = 0;
+  while (current < sql.length) {
+    const skipped = skipQuotedOrComment(sql, current);
+    if (skipped > current) {
+      current = skipped;
+      continue;
+    }
+
+    if (sql[current] === '(') {
+      depth += 1;
+    } else if (sql[current] === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return current + 1;
+      }
+    }
+    current += 1;
+  }
+
+  return -1;
+}
+
+/** @internal */
+export function hoistLeadingCte(sql: string): { withPrefix: string; body: string } {
+  const trimmed = sql.trim();
+  if (!keywordAt(trimmed, 0, 'with')) {
+    return { withPrefix: '', body: sql };
+  }
+
+  let current = skipWhitespaceAndComments(trimmed, 4);
+  if (keywordAt(trimmed, current, 'recursive')) {
+    current = skipWhitespaceAndComments(trimmed, current + 'recursive'.length);
+  }
+
+  while (current < trimmed.length) {
+    current = skipIdentifier(trimmed, current);
+    if (current < 0) {
+      return { withPrefix: '', body: trimmed };
+    }
+
+    current = skipWhitespaceAndComments(trimmed, current);
+    if (trimmed[current] === '(') {
+      current = skipBalancedParentheses(trimmed, current);
+      if (current < 0) {
+        return { withPrefix: '', body: trimmed };
+      }
+      current = skipWhitespaceAndComments(trimmed, current);
+    }
+
+    if (!keywordAt(trimmed, current, 'as')) {
+      return { withPrefix: '', body: trimmed };
+    }
+
+    current = skipWhitespaceAndComments(trimmed, current + 2);
+    current = skipBalancedParentheses(trimmed, current);
+    if (current < 0) {
+      return { withPrefix: '', body: trimmed };
+    }
+
+    current = skipWhitespaceAndComments(trimmed, current);
+    if (trimmed[current] === ',') {
+      current = skipWhitespaceAndComments(trimmed, current + 1);
+      continue;
+    }
+
+    const body = trimmed.slice(current).trimStart();
+    if (!body) {
+      return { withPrefix: '', body: trimmed };
+    }
+    return { withPrefix: `${trimmed.slice(0, current).trimEnd()} `, body };
+  }
+
+  return { withPrefix: '', body: trimmed };
+}
+
 // `assertReadOnlySql` deliberately keeps trailing semicolons, comments, and
 // whitespace (e.g. `select 1; -- done`) — harmless for direct single-statement
 // execution. A row-limit subquery wrapper needs a bare expression instead: a
@@ -137,5 +292,6 @@ export function limitSqlForExecution(sql: string, maxRows: number | undefined): 
   if (!Number.isInteger(maxRows) || maxRows <= 0) {
     throw new KtxQueryError('maxRows must be a positive integer.');
   }
-  return `select * from (${trimmed}) as ktx_query_result limit ${maxRows}`;
+  const { withPrefix, body } = hoistLeadingCte(trimmed);
+  return `${withPrefix}select * from (${body}) as ktx_query_result limit ${maxRows}`;
 }

@@ -281,6 +281,35 @@ describe('setup sources step', () => {
     expect((await readConfig()).connections['notion-main']?.last_successful_cursor).toBeUndefined();
   });
 
+  it('writes Google Drive config with a non-recursive default', async () => {
+    await addPrimarySource();
+    const validateGdrive = vi.fn(async () => ({ ok: true as const, detail: 'docs=2' }));
+
+    await expect(
+      runKtxSetupSourcesStep(
+        {
+          projectDir,
+          inputMode: 'disabled',
+          source: 'gdrive',
+          sourceConnectionId: 'gdrive-main',
+          gdriveServiceAccountKeyRef: 'file:/tmp/gdrive-key.json', // pragma: allowlist secret
+          gdriveFolderId: 'folder-123',
+          runInitialSourceIngest: false,
+          skipSources: false,
+        },
+        makeIo().io,
+        { validateGdrive },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['gdrive-main'] });
+
+    expect((await readConfig()).connections['gdrive-main']).toMatchObject({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/gdrive-key.json', // pragma: allowlist secret
+      folder_id: 'folder-123',
+      recursive: false,
+    });
+  });
+
   it('rejects --source-api-key-ref for Notion and points at --source-auth-token-ref', async () => {
     await addPrimarySource();
     const io = makeIo();
@@ -766,6 +795,7 @@ describe('setup sources step', () => {
     );
     const options = vi.mocked(testPrompts.multiselect).mock.calls[0]?.[0].options ?? [];
     expect(options).toContainEqual({ value: 'notion', label: 'Notion' });
+    expect(options).toContainEqual({ value: 'gdrive', label: 'Google Drive' });
   });
 
   it('shows already configured context sources in the interactive checklist', async () => {
@@ -1429,6 +1459,39 @@ describe('setup sources step', () => {
       auth_token_ref: 'env:NOTION_TOKEN',
       crawl_mode: 'selected_roots',
       root_page_ids: ['new-page'],
+    });
+  });
+
+  it('edits an existing Google Drive source with the current key ref, folder id, and recursion flag', async () => {
+    await addPrimarySource();
+    await addConnection('gdrive-main', {
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/old-key.json', // pragma: allowlist secret
+      folder_id: 'old-folder',
+      recursive: false,
+    });
+    const testPrompts = prompts({
+      multiselect: [['gdrive']],
+      select: ['edit:gdrive-main', 'true', 'done'],
+      text: ['file:/tmp/new-key.json', 'new-folder'],
+    });
+
+    await expect(
+      runKtxSetupSourcesStep(
+        { projectDir, inputMode: 'auto', runInitialSourceIngest: false, skipSources: false },
+        makeIo().io,
+        {
+          prompts: testPrompts,
+          validateGdrive: vi.fn(async () => ({ ok: true as const, detail: 'docs=3' })),
+        },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['gdrive-main'] });
+
+    expect((await readConfig()).connections['gdrive-main']).toMatchObject({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/new-key.json', // pragma: allowlist secret
+      folder_id: 'new-folder',
+      recursive: true,
     });
   });
 

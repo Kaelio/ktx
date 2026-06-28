@@ -105,6 +105,7 @@ describe('buildPublicIngestPlan', () => {
       warehouse: { driver: 'postgres' },
       prod_metabase: { driver: 'metabase', api_url: 'https://metabase.example.com' },
       docs: { driver: 'notion' },
+      docs_drive: { driver: 'gdrive', service_account_key_ref: 'file:/tmp/gdrive-key.json', folder_id: 'folder-123' }, // pragma: allowlist secret
     });
 
     expect(buildPublicIngestPlan(project, { projectDir: '/tmp/project', all: true })).toEqual({
@@ -125,6 +126,14 @@ describe('buildPublicIngestPlan', () => {
           operation: 'source-ingest',
           adapter: 'notion',
           debugCommand: 'ktx ingest docs --debug',
+          steps: ['source-ingest', 'memory-update'],
+        },
+        {
+          connectionId: 'docs_drive',
+          driver: 'gdrive',
+          operation: 'source-ingest',
+          adapter: 'gdrive',
+          debugCommand: 'ktx ingest docs_drive --debug',
           steps: ['source-ingest', 'memory-update'],
         },
         {

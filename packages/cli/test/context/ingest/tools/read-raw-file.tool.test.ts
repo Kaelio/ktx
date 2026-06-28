@@ -26,6 +26,15 @@ describe('read_raw_file tool', () => {
     expect(result).toContain('line2');
   });
 
+  it('accepts forward-slash allow-list paths on Windows-style path normalization', async () => {
+    const tool = createReadRawFileTool({ stagedDir, allowedPaths: new Set(['views/a.yml']) });
+    const result = await (tool.execute as (...args: unknown[]) => unknown)(
+      { path: 'views\\a.yml' },
+      { toolCallId: 't1', messages: [] },
+    );
+    expect(result).toContain('line1');
+  });
+
   it('refuses to return oversized files and directs callers to read spans', async () => {
     await writeFile(join(stagedDir, 'views', 'huge.yml'), `${'x'.repeat(160_000)}\n`, 'utf-8');
     const tool = createReadRawFileTool({ stagedDir, allowedPaths: new Set(['views/huge.yml']) });
