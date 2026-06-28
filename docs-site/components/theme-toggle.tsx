@@ -55,8 +55,28 @@ function MoonIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function MonitorIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8" />
+      <path d="M12 16v4" />
+    </svg>
+  );
+}
+
 const OPTIONS = [
   ["light", SunIcon],
+  ["system", MonitorIcon],
   ["dark", MoonIcon],
 ] as const;
 
@@ -65,14 +85,22 @@ function cx(...classes: (string | false | undefined)[]): string {
 }
 
 export function ThemeToggle({ className, ...props }: ComponentProps<"div">) {
-  const { setTheme, resolvedTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
+
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  const active = mounted ? resolvedTheme : null;
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const active = mounted ? theme : null;
 
   return (
     <div
-      className={cx("inline-flex items-center overflow-hidden border", className)}
+      className={cx(
+        "inline-flex items-center overflow-hidden border",
+        className,
+      )}
       data-theme-toggle=""
       {...props}
     >
@@ -81,6 +109,7 @@ export function ThemeToggle({ className, ...props }: ComponentProps<"div">) {
           key={key}
           type="button"
           aria-label={key}
+          aria-pressed={active === key}
           onClick={() => setTheme(key)}
           className={cx(
             "size-6.5 p-1.5 transition-colors",
