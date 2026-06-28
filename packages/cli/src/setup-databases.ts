@@ -69,7 +69,8 @@ export type KtxSetupDatabaseDriver =
   | 'clickhouse'
   | 'sqlserver'
   | 'bigquery'
-  | 'snowflake';
+  | 'snowflake'
+  | 'trino';
 
 export interface KtxSetupDatabasesArgs {
   projectDir: string;
@@ -156,6 +157,7 @@ const DRIVER_OPTIONS: Array<{ value: KtxSetupDatabaseDriver; label: string }> = 
   { value: 'mysql', label: 'MySQL' },
   { value: 'clickhouse', label: 'ClickHouse' },
   { value: 'sqlserver', label: 'SQL Server' },
+  { value: 'trino', label: 'Trino' },
   { value: 'sqlite', label: 'SQLite' },
 ];
 
@@ -178,6 +180,7 @@ const DEFAULT_CONNECTION_IDS: Record<KtxSetupDatabaseDriver, string> = {
   sqlserver: 'sqlserver-warehouse',
   bigquery: 'bigquery-warehouse',
   snowflake: 'snowflake-warehouse',
+  trino: 'trino-warehouse',
 };
 
 interface ScopeDiscoverySpec {
@@ -255,15 +258,23 @@ const SCOPE_DISCOVERY_SPECS: Partial<Record<KtxSetupDatabaseDriver, ScopeDiscove
     configSingleField: 'schema_name',
     suggest: defaultSuggest,
   },
+  trino: {
+    noun: 'catalog',
+    nounPlural: 'catalogs',
+    promptLabel: 'Trino catalogs',
+    configArrayField: 'catalogs',
+    suggest: defaultSuggest,
+  },
 };
 
-type UrlDriverType = Extract<KtxSetupDatabaseDriver, 'postgres' | 'mysql' | 'clickhouse' | 'sqlserver'>;
+type UrlDriverType = Extract<KtxSetupDatabaseDriver, 'postgres' | 'mysql' | 'clickhouse' | 'sqlserver' | 'trino'>;
 
 const DRIVER_CONNECTION_DEFAULTS: Record<UrlDriverType, { port: string }> = {
   postgres: { port: '5432' },
   mysql: { port: '3306' },
   clickhouse: { port: '8123' },
   sqlserver: { port: '1433' },
+  trino: { port: '8080' },
 };
 
 function driverLabel(driver: KtxSetupDatabaseDriver): string {

@@ -15,6 +15,7 @@ const SQLGLOT_DIALECTS: Record<string, SqlAnalysisDialect> = {
   sqlite: 'sqlite',
   duckdb: 'duckdb',
   clickhouse: 'clickhouse',
+  trino: 'trino',
   databricks: 'databricks',
 };
 

@@ -5,6 +5,7 @@ import { KtxPostgresDialect } from '../../connectors/postgres/dialect.js';
 import { KtxSqliteDialect } from '../../connectors/sqlite/dialect.js';
 import { KtxSnowflakeDialect } from '../../connectors/snowflake/dialect.js';
 import { KtxSqlServerDialect } from '../../connectors/sqlserver/dialect.js';
+import { KtxTrinoDialect } from '../../connectors/trino/dialect.js';
 import type { KtxConnectionDriver, KtxSchemaDimensionType, KtxTableRef } from '../scan/types.js';
 import type { KtxDialectTableRef } from './dialect-helpers.js';
 
@@ -42,6 +43,7 @@ const supportedDrivers: KtxConnectionDriver[] = [
   'sqlite',
   'snowflake',
   'sqlserver',
+  'trino',
 ];
 
 const dialectFactories: Record<KtxConnectionDriver, () => KtxDialect> = {
@@ -52,6 +54,7 @@ const dialectFactories: Record<KtxConnectionDriver, () => KtxDialect> = {
   sqlite: () => new KtxSqliteDialect(),
   snowflake: () => new KtxSnowflakeDialect(),
   sqlserver: () => new KtxSqlServerDialect(),
+  trino: () => new KtxTrinoDialect(),
 };
 
 export function getDialectForDriver(driver: string): KtxDialect {
