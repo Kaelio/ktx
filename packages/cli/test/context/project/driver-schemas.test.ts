@@ -91,7 +91,7 @@ describe('connectionConfigSchema - context source drivers with mappings', () => 
   });
 });
 
-describe('connectionConfigSchema - notion / dbt / metricflow', () => {
+describe('connectionConfigSchema - notion / gdrive / dbt / metricflow', () => {
   it('parses a notion connection with selected_roots crawl', () => {
     const parsed = connectionConfigSchema.parse({
       driver: 'notion',
@@ -116,6 +116,21 @@ describe('connectionConfigSchema - notion / dbt / metricflow', () => {
         crawl_mode: 'everything',
       }),
     ).toThrow();
+  });
+
+  it('parses a gdrive connection', () => {
+    const parsed = connectionConfigSchema.parse({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/google-service-account.json', // pragma: allowlist secret
+      folder_id: 'folder-123',
+      recursive: true,
+    });
+    expect(parsed).toMatchObject({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/google-service-account.json', // pragma: allowlist secret
+      folder_id: 'folder-123',
+      recursive: true,
+    });
   });
 
   it('parses a dbt connection from a local source_dir', () => {

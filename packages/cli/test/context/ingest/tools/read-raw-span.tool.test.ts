@@ -24,6 +24,15 @@ describe('read_raw_span tool', () => {
     expect(result).toBe('line2\nline3\nline4');
   });
 
+  it('accepts forward-slash allow-list paths on Windows-style path normalization', async () => {
+    const tool = createReadRawSpanTool({ stagedDir, allowedPaths: new Set(['v/a.yml']) });
+    const result = await (tool.execute as (...args: unknown[]) => unknown)(
+      { path: 'v\\a.yml', startLine: 2, endLine: 3 },
+      { toolCallId: 't1', messages: [] },
+    );
+    expect(result).toBe('line2\nline3');
+  });
+
   it('clamps endLine to the end of the file', async () => {
     const tool = createReadRawSpanTool({ stagedDir, allowedPaths: new Set(['v/a.yml']) });
     const result = await (tool.execute as (...args: unknown[]) => unknown)(

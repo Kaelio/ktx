@@ -57,6 +57,7 @@
     "@commander-js/extra-typings": "14.0.0",
     "@duckdb/node-api": "1.5.3-r.3",
     "@google-cloud/bigquery": "^8.3.1",
+    "google-auth-library": "10.6.2",
     "@looker/sdk": "^26.8.0",
     "@looker/sdk-node": "^26.8.0",
     "@looker/sdk-rtl": "^21.6.5",
