@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork, type ChildProcess } from 'node:child_process';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { normalizeQueryRows } from '../../context/connections/query-executor.js';
@@ -162,7 +162,7 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
   private readonly now: () => Date;
   private readonly deadlineMs: number;
   private readonly spawnReadQueryChild: () => ChildProcess;
-  private readonly dialect = getDialectForDriver('sqlite');
+  private readonly dialect = getSqlDialectForDriver('sqlite');
   private db: Database.Database | null = null;
 
   constructor(options: KtxSqliteScanConnectorOptions) {

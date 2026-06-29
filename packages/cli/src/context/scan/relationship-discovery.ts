@@ -1,5 +1,5 @@
 import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
-import type { KtxDialect } from '../connections/dialects.js';
+import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxEnrichedRelationship, KtxEnrichedSchema, KtxRelationshipUpdate } from './enrichment-types.js';
 import {
@@ -40,7 +40,7 @@ import type {
 
 export interface DiscoverKtxRelationshipsInput {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect | null;
   connector: KtxScanConnector;
   schema: KtxEnrichedSchema;
   context: KtxScanContext;
@@ -131,7 +131,7 @@ function compositeSummary(relationships: readonly KtxCompositeRelationshipCandid
 
 async function detectCompositeRelationships(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect | null;
   schema: KtxEnrichedSchema;
   profile: KtxRelationshipProfileArtifact;
   executor: KtxRelationshipReadOnlyExecutor | null;
@@ -140,13 +140,14 @@ async function detectCompositeRelationships(input: {
   budget: KtxRelationshipDetectionBudget;
   progress?: KtxProgressPort;
 }): Promise<KtxCompositeRelationshipCandidate[]> {
-  if (!input.executor || !input.profile.sqlAvailable) {
+  if (!input.executor || !input.profile.sqlAvailable || !input.dialect) {
     return [];
   }
+  const dialect = input.dialect;
   try {
     const compositeDetection = await discoverKtxCompositeRelationships({
       connectionId: input.connectionId,
-      dialect: input.dialect,
+      dialect,
       schema: input.schema,
       profiles: input.profile,
       executor: input.executor,
@@ -241,6 +242,7 @@ export async function discoverKtxRelationships(
   const profileCache = createKtxRelationshipProfileCache();
   const profile = await profileKtxRelationshipSchema({
     connectionId: input.connectionId,
+    driver: input.connector.driver,
     dialect: input.dialect,
     schema: input.schema,
     executor,

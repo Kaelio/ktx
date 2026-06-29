@@ -2,6 +2,7 @@ import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-ex
 import type { KtxSemanticLayerComputePort } from '../../context/daemon/semantic-layer-compute.js';
 import type { KtxMcpProgressCallback } from '../mcp/types.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
+import { isSqlQueryableDriver } from '../connections/dialects.js';
 import { FEDERATED_CONNECTION_ID } from '../connections/federation.js';
 import { resolveRequiredConnectionId } from '../connections/resolve-connection.js';
 import { sqlAnalysisDialectForDriver } from '../sql-analysis/dialect.js';
@@ -83,6 +84,12 @@ export async function compileLocalSlQuery(
   await options.onProgress?.({ progress: 0, message: 'Compiling query' });
   const connectionId = resolveLocalConnectionId(project, options.connectionId);
   const driver = project.config.connections[connectionId]?.driver;
+  if (!isSqlQueryableDriver(driver)) {
+    throw new Error(
+      `Semantic-layer queries require a SQL warehouse connection; '${connectionId}' uses the non-SQL driver ` +
+        `'${driver ?? 'unknown'}'. MongoDB and other context-only sources are searchable and ingestable, not SL-queryable.`,
+    );
+  }
   const dialect = sqlAnalysisDialectForDriver(driver);
   const sources = await loadComputableSources(project, connectionId);
 

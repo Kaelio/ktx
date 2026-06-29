@@ -69,7 +69,8 @@ export type KtxSetupDatabaseDriver =
   | 'clickhouse'
   | 'sqlserver'
   | 'bigquery'
-  | 'snowflake';
+  | 'snowflake'
+  | 'mongodb';
 
 export interface KtxSetupDatabasesArgs {
   projectDir: string;
@@ -156,6 +157,7 @@ const DRIVER_OPTIONS: Array<{ value: KtxSetupDatabaseDriver; label: string }> = 
   { value: 'mysql', label: 'MySQL' },
   { value: 'clickhouse', label: 'ClickHouse' },
   { value: 'sqlserver', label: 'SQL Server' },
+  { value: 'mongodb', label: 'MongoDB' },
   { value: 'sqlite', label: 'SQLite' },
 ];
 
@@ -178,6 +180,7 @@ const DEFAULT_CONNECTION_IDS: Record<KtxSetupDatabaseDriver, string> = {
   sqlserver: 'sqlserver-warehouse',
   bigquery: 'bigquery-warehouse',
   snowflake: 'snowflake-warehouse',
+  mongodb: 'mongodb-source',
 };
 
 interface ScopeDiscoverySpec {
@@ -228,6 +231,13 @@ const SCOPE_DISCOVERY_SPECS: Partial<Record<KtxSetupDatabaseDriver, ScopeDiscove
     noun: 'database',
     nounPlural: 'databases',
     promptLabel: 'ClickHouse databases',
+    configArrayField: 'databases',
+    suggest: defaultSuggest,
+  },
+  mongodb: {
+    noun: 'database',
+    nounPlural: 'databases',
+    promptLabel: 'MongoDB databases',
     configArrayField: 'databases',
     suggest: defaultSuggest,
   },
@@ -748,6 +758,41 @@ async function buildUrlConnectionConfig(input: {
   }
 }
 
+async function buildMongoConnectionConfig(input: {
+  connectionId: string;
+  args: KtxSetupDatabasesArgs;
+  prompts: KtxSetupDatabasesPromptAdapter;
+  existingConnection?: KtxProjectConnectionConfig;
+}): Promise<KtxProjectConnectionConfig | null | 'back'> {
+  if (input.args.inputMode === 'disabled' && !input.args.databaseUrl) return null;
+
+  const rawUrl =
+    input.args.databaseUrl ??
+    (await promptText(
+      input.prompts,
+      'MongoDB connection URL\nFor example mongodb+srv://user:pass@cluster.example.net/app.', // pragma: allowlist secret
+      stringConfigField(input.existingConnection, 'url'),
+    ));
+  if (rawUrl === undefined) return 'back';
+  if (!rawUrl) return null;
+
+  const url = normalizeInputReference(rawUrl);
+  const scope = scriptedScopeConfigForDriver('mongodb', input.args.databaseSchemas);
+
+  if (url.startsWith('env:') || url.startsWith('file:')) {
+    return { driver: 'mongodb', url, ...scope };
+  }
+  if (urlHasCredentials(url)) {
+    const ref = await writeProjectLocalSecretReference({
+      projectDir: input.args.projectDir,
+      fileName: `${input.connectionId}-url`,
+      value: url,
+    });
+    return { driver: 'mongodb', url: ref, ...scope };
+  }
+  return { driver: 'mongodb', url, ...scope };
+}
+
 async function buildConnectionConfig(input: {
   driver: KtxSetupDatabaseDriver;
   connectionId: string;
@@ -771,6 +816,14 @@ async function buildConnectionConfig(input: {
   if (driver === 'postgres' || driver === 'mysql' || driver === 'clickhouse' || driver === 'sqlserver') {
     return await buildUrlConnectionConfig({
       driver,
+      connectionId: input.connectionId,
+      args,
+      prompts,
+      existingConnection: input.existingConnection,
+    });
+  }
+  if (driver === 'mongodb') {
+    return await buildMongoConnectionConfig({
       connectionId: input.connectionId,
       args,
       prompts,

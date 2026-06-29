@@ -1,5 +1,5 @@
 import { createClient } from '@clickhouse/client';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { connectorTestFailure, createKtxConnectorCapabilities, type KtxConnectorTestResult, type KtxColumnSampleInput, type KtxColumnSampleResult, type KtxColumnStatsInput, type KtxColumnStatsResult, type KtxQueryResult, type KtxReadOnlyQueryInput, type KtxScanConnector, type KtxScanContext, type KtxScanInput, type KtxSchemaColumn, type KtxSchemaSnapshot, type KtxSchemaTable, type KtxTableRef, type KtxTableSampleInput, type KtxTableListEntry, type KtxTableSampleResult } from '../../context/scan/types.js';
@@ -301,7 +301,7 @@ export class KtxClickHouseScanConnector implements KtxScanConnector {
   private readonly endpointResolver?: KtxClickHouseEndpointResolver;
   private readonly now: () => Date;
   private readonly deadlineMs: number;
-  private readonly dialect = getDialectForDriver('clickhouse');
+  private readonly dialect = getSqlDialectForDriver('clickhouse');
   private client: KtxClickHouseClient | null = null;
   private resolvedEndpoint: KtxClickHouseResolvedEndpoint | null = null;
 

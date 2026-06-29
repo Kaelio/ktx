@@ -1,4 +1,4 @@
-import type { KtxDialect } from '../../context/connections/dialects.js';
+import type { KtxSqlDialect } from '../../context/connections/dialects.js';
 import {
   columnDisplayPartCount,
   formatDialectDisplayRef,
@@ -11,7 +11,7 @@ import type { KtxSchemaDimensionType, KtxTableRef } from '../../context/scan/typ
 type MysqlTableNameRef = Pick<KtxTableRef, 'name'> & Partial<Pick<KtxTableRef, 'catalog' | 'db'>>;
 
 /** @internal */
-export class KtxMysqlDialect implements KtxDialect {
+export class KtxMysqlDialect implements KtxSqlDialect {
   readonly type = 'mysql' as const;
 
   private readonly typeMappings: Record<string, KtxSchemaDimensionType> = {

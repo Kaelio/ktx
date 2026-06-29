@@ -1,5 +1,5 @@
 import { resolveStringReference } from '../shared/string-reference.js';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
@@ -423,7 +423,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
   private readonly endpointResolver?: KtxPostgresEndpointResolver;
   private readonly now: () => Date;
   private readonly deadlineMs: number;
-  private readonly dialect = getDialectForDriver('postgres');
+  private readonly dialect = getSqlDialectForDriver('postgres');
   private pool: KtxPostgresPool | null = null;
   private lastIdlePoolError: Error | null = null;
   private resolvedEndpoint: KtxPostgresResolvedEndpoint | null = null;

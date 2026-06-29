@@ -23,6 +23,14 @@ at the Orbit-style no-declared-constraint relationship fixture and verifies that
 relationship enrichment writes nine accepted joins without requiring a local
 warehouse credential.
 
+## mongodb
+
+`mongodb/` is a manual container-backed example for the MongoDB connector. It
+seeds a representative dataset (nested documents, arrays, a mixed-type field, a
+nullable field, and a view), then exercises the connector as a fast no-LLM
+introspection smoke (`scripts/smoke.sh`) and documents a full keyless
+`ktx ingest` run. Works with Docker Compose or `podman compose`.
+
 ## postgres-historic
 
 `postgres-historic/` is a manual Docker-backed smoke for Postgres

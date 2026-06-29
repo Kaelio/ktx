@@ -28,6 +28,28 @@ describe('connectionConfigSchema (driver discriminated union)', () => {
     });
   });
 
+  it('parses a mongodb connection with sampling fields', () => {
+    const parsed = connectionConfigSchema.parse({
+      driver: 'mongodb',
+      url: 'env:MONGO_URL',
+      databases: ['app'],
+      enabled_tables: ['app.users'],
+      sample_size: 500,
+      order_by: 'createdAt',
+    });
+    expect(parsed).toMatchObject({
+      driver: 'mongodb',
+      url: 'env:MONGO_URL',
+      databases: ['app'],
+      sample_size: 500,
+      order_by: 'createdAt',
+    });
+  });
+
+  it('rejects a mongodb connection without a url', () => {
+    expect(() => connectionConfigSchema.parse({ driver: 'mongodb', databases: ['app'] })).toThrow();
+  });
+
   it('rejects an unknown driver', () => {
     expect(() => connectionConfigSchema.parse({ driver: 'nope', url: 'x' })).toThrow();
   });
@@ -91,7 +113,7 @@ describe('connectionConfigSchema - context source drivers with mappings', () => 
   });
 });
 
-describe('connectionConfigSchema - notion / dbt / metricflow', () => {
+describe('connectionConfigSchema - notion / gdrive / dbt / metricflow', () => {
   it('parses a notion connection with selected_roots crawl', () => {
     const parsed = connectionConfigSchema.parse({
       driver: 'notion',
@@ -116,6 +138,21 @@ describe('connectionConfigSchema - notion / dbt / metricflow', () => {
         crawl_mode: 'everything',
       }),
     ).toThrow();
+  });
+
+  it('parses a gdrive connection', () => {
+    const parsed = connectionConfigSchema.parse({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/google-service-account.json', // pragma: allowlist secret
+      folder_id: 'folder-123',
+      recursive: true,
+    });
+    expect(parsed).toMatchObject({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/google-service-account.json', // pragma: allowlist secret
+      folder_id: 'folder-123',
+      recursive: true,
+    });
   });
 
   it('parses a dbt connection from a local source_dir', () => {

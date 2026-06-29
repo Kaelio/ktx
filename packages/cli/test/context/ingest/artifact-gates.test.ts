@@ -72,6 +72,19 @@ describe('artifact gates', () => {
     ).toThrow(/provenance row references raw path outside this snapshot: cards\/missing\.json/);
   });
 
+  it('accepts equivalent provenance raw paths across platform path separators', () => {
+    expect(() =>
+      validateProvenanceRawPaths({
+        rows: [
+          { rawPath: 'docs/herness-a88aa1bf05/page.md' },
+          { rawPath: 'docs/herness-a88aa1bf05/metadata.json' },
+        ],
+        currentRawPaths: new Set(['docs\\herness-a88aa1bf05\\page.md', 'docs\\herness-a88aa1bf05\\metadata.json']),
+        deletedRawPaths: new Set(),
+      }),
+    ).not.toThrow();
+  });
+
   it('fails measure-level wiki frontmatter sl_refs that point at missing entities', async () => {
     const wikiService = wikiServiceWithPages({
       'account-segments': {
