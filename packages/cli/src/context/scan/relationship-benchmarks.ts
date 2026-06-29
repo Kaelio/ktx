@@ -6,7 +6,7 @@ import { gunzipSync } from 'node:zlib';
 import Database from 'better-sqlite3';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { getDialectForDriver } from '../connections/dialects.js';
+import { getSqlDialectForDriver } from '../connections/dialects.js';
 import type { KtxLlmRuntimePort } from '../llm/runtime-port.js';
 import type { KtxEnrichedRelationship, KtxEnrichedSchema, KtxRelationshipType } from './enrichment-types.js';
 import { snapshotToKtxEnrichedSchema } from './local-enrichment.js';
@@ -537,7 +537,7 @@ export function ktxRelationshipBenchmarkDetectorWithLlm(
       const formalLinks = formalMetadata.accepted.map((relationship) => relationshipToBenchmarkLink(relationship));
       const acceptedKeys = new Set(formalLinks.map(fkKey));
       const sqliteDataAvailable = Boolean(input.dataPath && input.snapshot.driver === 'sqlite');
-      const dialect = getDialectForDriver(input.snapshot.driver);
+      const dialect = getSqlDialectForDriver(input.snapshot.driver);
       const profilingExecutor =
         sqliteDataAvailable && input.mode !== 'profiling_disabled'
           ? new KtxRelationshipBenchmarkSqliteExecutor(input.dataPath as string)
@@ -552,6 +552,7 @@ export function ktxRelationshipBenchmarkDetectorWithLlm(
             })
           : await profileKtxRelationshipSchema({
               connectionId: input.snapshot.connectionId,
+              driver: input.snapshot.driver,
               dialect,
               schema: input.schema,
               executor: profilingExecutor,
@@ -673,7 +674,7 @@ export function currentKtxRelationshipBenchmarkDetector(): KtxRelationshipBenchm
       const formalLinks = formalMetadata.accepted.map((relationship) => relationshipToBenchmarkLink(relationship));
       const acceptedKeys = new Set(formalLinks.map(fkKey));
       const sqliteDataAvailable = Boolean(input.dataPath && input.snapshot.driver === 'sqlite');
-      const dialect = getDialectForDriver(input.snapshot.driver);
+      const dialect = getSqlDialectForDriver(input.snapshot.driver);
       const profilingExecutor =
         sqliteDataAvailable && input.mode !== 'profiling_disabled'
           ? new KtxRelationshipBenchmarkSqliteExecutor(input.dataPath as string)
@@ -688,6 +689,7 @@ export function currentKtxRelationshipBenchmarkDetector(): KtxRelationshipBenchm
             })
           : await profileKtxRelationshipSchema({
               connectionId: input.snapshot.connectionId,
+              driver: input.snapshot.driver,
               dialect,
               schema: input.schema,
               executor: profilingExecutor,

@@ -1,6 +1,6 @@
 import pLimit from 'p-limit';
 import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
-import { getDialectForDriver } from '../connections/dialects.js';
+import { getSqlDialectForDriver } from '../connections/dialects.js';
 import { buildDefaultKtxProjectConfig, type KtxScanRelationshipConfig } from '../project/config.js';
 import { KtxDescriptionGenerator } from './description-generation.js';
 import { buildKtxColumnEmbeddingText } from './embedding-text.js';
@@ -18,6 +18,7 @@ import {
 } from './enrichment-state.js';
 import { skippedKtxScanEnrichmentSummary } from './enrichment-summary.js';
 import type { KtxScanDescriptionResumeStore } from './local-enrichment-artifacts.js';
+import { tableRefKey } from './table-ref.js';
 import type {
   KtxEmbeddingUpdate,
   KtxEnrichedColumn,
@@ -276,11 +277,11 @@ export function snapshotToKtxEnrichedSchema(
   embeddingsByColumnId: ReadonlyMap<string, number[]> = new Map(),
   descriptions: KtxLocalScanEnrichmentResult['descriptionUpdates'] = [],
 ): KtxEnrichedSchema {
-  const descriptionByTable = new Map(descriptions.map((item) => [item.table.name, item]));
+  const descriptionByTable = new Map(descriptions.map((item) => [tableRefKey(item.table), item]));
   const tables: KtxEnrichedTable[] = snapshot.tables.map((table) => {
     const id = tableId(table);
     const ref = tableRef(table);
-    const tableDescription = descriptionByTable.get(table.name);
+    const tableDescription = descriptionByTable.get(tableRefKey(ref));
     const columns: KtxEnrichedColumn[] = table.columns.map((column) => {
       const idForColumn = columnId(table, column);
       const aiColumnDescription = tableDescription?.columnDescriptions[column.name] ?? null;
@@ -384,14 +385,14 @@ async function generateDescriptions(input: {
   // calls only for the remainder. A failed/skipped table carries null descriptions
   // and is not recovered, so it is retried.
   const recovered = input.resumeStore ? ((await input.resumeStore.load(input.inputHash)) ?? []) : [];
-  const enrichedByName = new Map<string, KtxScanDescriptionUpdate>();
+  const enrichedById = new Map<string, KtxScanDescriptionUpdate>();
   for (const update of recovered) {
     if (isEnrichedDescriptionUpdate(update)) {
-      enrichedByName.set(update.table.name, update);
+      enrichedById.set(tableRefKey(update.table), update);
     }
   }
-  const remaining = input.snapshot.tables.filter((table) => !enrichedByName.has(table.name));
-  const recoveredCount = enrichedByName.size;
+  const remaining = input.snapshot.tables.filter((table) => !enrichedById.has(tableRefKey(tableRef(table))));
+  const recoveredCount = enrichedById.size;
   if (recoveredCount > 0) {
     input.context.logger?.info(
       `[enrich] resume: recovered ${recoveredCount}/${totalTables} descriptions, enriching ${remaining.length}`,
@@ -416,7 +417,7 @@ async function generateDescriptions(input: {
       await input.resumeStore.flush({
         inputHash: input.inputHash,
         snapshot: input.snapshot,
-        descriptionUpdates: [...enrichedByName.values()],
+        descriptionUpdates: [...enrichedById.values()],
         changedTableNames,
       });
     } finally {
@@ -481,7 +482,7 @@ async function generateDescriptions(input: {
           update = nullDescriptionUpdate(table);
         }
         if (isEnrichedDescriptionUpdate(update)) {
-          enrichedByName.set(table.name, update);
+          enrichedById.set(tableRefKey(tableRef(table)), update);
           pendingChanged.add(table.name);
           sinceFlush += 1;
           await flush(false);
@@ -492,7 +493,7 @@ async function generateDescriptions(input: {
   await flush(true);
   await input.progress?.update(1, `Generated descriptions for ${totalTables} tables`);
   // Full set in snapshot order: recovered + freshly enriched, null for any still-failed.
-  return input.snapshot.tables.map((table) => enrichedByName.get(table.name) ?? nullDescriptionUpdate(table));
+  return input.snapshot.tables.map((table) => enrichedById.get(tableRefKey(tableRef(table))) ?? nullDescriptionUpdate(table));
 }
 
 // The exact per-column text fed to the embedding model. Shared by the embeddings
@@ -502,10 +503,10 @@ function buildKtxColumnEmbeddingTexts(
   snapshot: KtxSchemaSnapshot,
   descriptions: KtxLocalScanEnrichmentResult['descriptionUpdates'],
 ): Array<{ columnId: string; text: string }> {
-  const descriptionByTable = new Map(descriptions.map((item) => [item.table.name, item]));
+  const descriptionByTable = new Map(descriptions.map((item) => [tableRefKey(item.table), item]));
   const texts: Array<{ columnId: string; text: string }> = [];
   for (const table of snapshot.tables) {
-    const tableDescriptions = descriptionByTable.get(table.name);
+    const tableDescriptions = descriptionByTable.get(tableRefKey(tableRef(table)));
     for (const column of table.columns) {
       const text = buildKtxColumnEmbeddingText({
         tableName: table.name,
@@ -661,7 +662,9 @@ export async function runLocalScanEnrichment(
     snapshot,
     connectionId: input.connectionId,
   });
-  const dialect = getDialectForDriver(snapshot.driver);
+  const dialect = input.connector.capabilities.readOnlySql
+    ? getSqlDialectForDriver(snapshot.driver)
+    : null;
   const now = input.now ?? (() => new Date());
   const state = completedKtxScanEnrichmentStateSummary();
   const syncId = input.syncId ?? input.context.runId;

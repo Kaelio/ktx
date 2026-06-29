@@ -46,6 +46,10 @@ export interface FinalArtifactGateResult {
   findings: FinalArtifactGateFinding[];
 }
 
+function normalizeRawPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
 function parseSlRef(ref: string): { connectionId: string | null; sourceName: string; entityName: string | null } {
   const withoutConnection = ref.includes('/') ? ref.slice(ref.indexOf('/') + 1) : ref;
   const connectionId = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : null;
@@ -218,8 +222,11 @@ export async function validateFinalIngestArtifacts(input: FinalArtifactGateInput
 }
 
 export function validateProvenanceRawPaths(input: ProvenanceRawPathValidationInput): void {
+  const currentRawPaths = new Set([...input.currentRawPaths].map(normalizeRawPath));
+  const deletedRawPaths = new Set([...input.deletedRawPaths].map(normalizeRawPath));
   for (const row of input.rows) {
-    if (!input.currentRawPaths.has(row.rawPath) && !input.deletedRawPaths.has(row.rawPath)) {
+    const rawPath = normalizeRawPath(row.rawPath);
+    if (!currentRawPaths.has(rawPath) && !deletedRawPaths.has(rawPath)) {
       throw new Error(`provenance row references raw path outside this snapshot: ${row.rawPath}`);
     }
   }

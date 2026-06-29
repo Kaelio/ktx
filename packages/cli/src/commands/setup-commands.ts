@@ -57,7 +57,8 @@ function sourceType(value: string): KtxSetupSourceType {
     value === 'metabase' ||
     value === 'looker' ||
     value === 'lookml' ||
-    value === 'notion'
+    value === 'notion' ||
+    value === 'gdrive'
   ) {
     return value;
   }
@@ -132,6 +133,9 @@ function shouldShowSetupEntryMenu(
     metabaseDatabaseId?: number;
     notionCrawlMode?: string;
     notionRootPageId?: string[];
+    gdriveServiceAccountKeyRef?: string;
+    gdriveFolderId?: string;
+    gdriveRecursive?: boolean;
     skipSources?: boolean;
   },
   command: Command,
@@ -197,6 +201,9 @@ function shouldShowSetupEntryMenu(
     'sourceTarget',
     'metabaseDatabaseId',
     'notionCrawlMode',
+    'gdriveServiceAccountKeyRef',
+    'gdriveFolderId',
+    'gdriveRecursive',
     'skipSources',
   ].some((optionName) => optionWasSpecified(command, optionName));
 }
@@ -337,6 +344,12 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
         .default([] as string[])
         .hideHelp(),
     )
+    .addOption(
+      new Option('--gdrive-service-account-key-ref <ref>', 'file: reference to a Google service account JSON key')
+        .hideHelp(),
+    )
+    .addOption(new Option('--gdrive-folder-id <id>', 'Google Drive folder id to ingest').hideHelp())
+    .addOption(new Option('--gdrive-recursive', 'Recursively traverse Google Drive subfolders').hideHelp().default(false))
     .addOption(new Option('--skip-sources', 'Mark optional source setup complete with no sources').hideHelp().default(false))
     .showHelpAfterError();
 
@@ -486,6 +499,11 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
       ...(options.metabaseDatabaseId !== undefined ? { metabaseDatabaseId: options.metabaseDatabaseId } : {}),
       ...(options.notionCrawlMode ? { notionCrawlMode: options.notionCrawlMode } : {}),
       ...(options.notionRootPageId.length > 0 ? { notionRootPageIds: options.notionRootPageId } : {}),
+      ...(options.gdriveServiceAccountKeyRef
+        ? { gdriveServiceAccountKeyRef: options.gdriveServiceAccountKeyRef }
+        : {}),
+      ...(options.gdriveFolderId ? { gdriveFolderId: options.gdriveFolderId } : {}),
+      ...(options.gdriveRecursive ? { gdriveRecursive: true } : {}),
       runInitialSourceIngest: false,
       skipSources: options.skipSources === true,
       showEntryMenu: shouldShowSetupEntryMenu(options, command),

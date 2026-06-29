@@ -11,7 +11,9 @@ export const KTX_DATABASE_DRIVER_IDS = [
   'snowflake',
 ] as const;
 
-const databaseDriverIds = new Set<string>(KTX_DATABASE_DRIVER_IDS);
+// mongodb is a database driver but has no SQL dialect, so it sits outside the
+// dialect-notes coverage set above.
+const databaseDriverIds = new Set<string>([...KTX_DATABASE_DRIVER_IDS, 'mongodb']);
 
 export function normalizeConnectionDriver(connection: KtxProjectConnectionConfig): string {
   return String(connection.driver ?? '')

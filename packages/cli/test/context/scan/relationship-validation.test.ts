@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { KtxQueryError } from '../../../src/errors.js';
-import { getDialectForDriver } from '../../../src/context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../../src/context/connections/dialects.js';
 import type { KtxEnrichedColumn, KtxEnrichedSchema, KtxEnrichedTable } from '../../../src/context/scan/enrichment-types.js';
 import { generateKtxRelationshipDiscoveryCandidates } from '../../../src/context/scan/relationship-candidates.js';
 import type { KtxRelationshipProfileArtifact } from '../../../src/context/scan/relationship-profiling.js';
@@ -103,7 +103,8 @@ describe('relationship validation', () => {
     const testSchema = schema();
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: testSchema,
       executor,
       ctx: { runId: 'validate-test' },
@@ -114,7 +115,7 @@ describe('relationship validation', () => {
 
     const validated = await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates,
       profiles,
       executor,
@@ -152,7 +153,8 @@ describe('relationship validation', () => {
     const testSchema = schema();
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: testSchema,
       executor,
       ctx: { runId: 'validate-test' },
@@ -167,7 +169,7 @@ describe('relationship validation', () => {
     };
     const validated = await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates,
       profiles,
       executor: timingOutExecutor,
@@ -199,7 +201,8 @@ describe('relationship validation', () => {
     const testSchema = schema();
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: testSchema,
       executor,
       ctx: { runId: 'validate-test' },
@@ -210,7 +213,7 @@ describe('relationship validation', () => {
 
     const validated = await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates,
       profiles,
       executor,
@@ -249,7 +252,8 @@ describe('relationship validation', () => {
     const testSchema = schema();
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: testSchema,
       executor,
       ctx: { runId: 'validate-budget-profile' },
@@ -262,7 +266,7 @@ describe('relationship validation', () => {
 
     const validated = await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates,
       profiles,
       executor,
@@ -304,7 +308,8 @@ describe('relationship validation', () => {
     ]);
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: testSchema,
       executor,
       ctx: { runId: 'validate-zero-budget-profile' },
@@ -314,7 +319,7 @@ describe('relationship validation', () => {
 
     const validated = await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates,
       profiles,
       executor,
@@ -351,7 +356,8 @@ describe('relationship validation', () => {
     ]);
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: testSchema,
       executor,
       ctx: { runId: 'llm-rejected-validation' },
@@ -380,7 +386,7 @@ describe('relationship validation', () => {
 
     const [validated] = await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates: [llmCandidate],
       profiles,
       executor,
@@ -425,7 +431,8 @@ describe('relationship validation', () => {
     ]);
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: testSchema,
       executor,
       ctx: { runId: 'validation-concurrency-profile' },
@@ -434,7 +441,7 @@ describe('relationship validation', () => {
 
     await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates,
       profiles,
       executor: throttled,
@@ -526,7 +533,7 @@ describe('relationship validation', () => {
 
     const [validated] = await validateKtxRelationshipDiscoveryCandidates({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       candidates: [candidate],
       profiles,
       executor,

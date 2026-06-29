@@ -24,6 +24,7 @@ const SETUP_GITIGNORE_ENTRIES = [
   'db.sqlite',
   'db.sqlite-*',
   'ingest-transcripts/',
+  'logs/',
   'secrets/',
   'setup/',
   'agents/',

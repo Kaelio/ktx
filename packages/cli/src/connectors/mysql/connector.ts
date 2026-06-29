@@ -1,5 +1,5 @@
 import mysql, { type FieldPacket, type Pool, type RowDataPacket } from 'mysql2/promise';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { resolveStringReference } from '../shared/string-reference.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
@@ -398,7 +398,7 @@ export class KtxMysqlScanConnector implements KtxScanConnector {
   private readonly endpointResolver?: KtxMysqlEndpointResolver;
   private readonly now: () => Date;
   private readonly deadlineMs: number;
-  private readonly dialect = getDialectForDriver('mysql');
+  private readonly dialect = getSqlDialectForDriver('mysql');
   private pool: KtxMysqlPool | null = null;
   private resolvedEndpoint: KtxMysqlResolvedEndpoint | null = null;
 

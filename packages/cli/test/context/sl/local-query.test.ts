@@ -67,6 +67,18 @@ grain: []
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  it('refuses a non-SQL (context-only) connection instead of compiling it as Postgres', async () => {
+    project.config.connections['mongo-prod'] = { driver: 'mongodb', url: 'mongodb://localhost:27017/app' };
+    await expect(
+      compileLocalSlQuery(project, {
+        connectionId: 'mongo-prod',
+        query: { measures: ['orders.order_count'], dimensions: ['orders.status'], limit: 25 },
+        compute,
+      }),
+    ).rejects.toThrow(/non-SQL driver 'mongodb'|require a SQL warehouse connection/);
+    expect(compute.query).not.toHaveBeenCalled();
+  });
+
   it('compiles a local semantic-layer query with computable sources only', async () => {
     const result = await compileLocalSlQuery(project, {
       connectionId: 'warehouse',

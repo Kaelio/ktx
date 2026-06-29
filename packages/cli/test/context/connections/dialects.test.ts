@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getDialectForDriver } from '../../../src/context/connections/dialects.js';
+import { getDialectForDriver, getSqlDialectForDriver } from '../../../src/context/connections/dialects.js';
 import type { KtxConnectionDriver, KtxTableRef } from '../../../src/context/scan/types.js';
 
 interface DialectFixture {
@@ -248,8 +248,8 @@ const fixtures: DialectFixture[] = [
 ];
 
 describe('getDialectForDriver', () => {
-  it.each(fixtures)('returns a full KtxDialect for $driver', (fixture) => {
-    const dialect = getDialectForDriver(fixture.driver);
+  it.each(fixtures)('returns a full KtxSqlDialect for $driver', (fixture) => {
+    const dialect = getSqlDialectForDriver(fixture.driver);
     const column = dialect.quoteIdentifier('status');
 
     expect(dialect.type).toBe(fixture.driver);
@@ -305,12 +305,12 @@ describe('getDialectForDriver', () => {
 
   it('throws with a supported-driver list for unknown drivers', () => {
     expect(() => getDialectForDriver('oracle')).toThrow(
-      'Unsupported warehouse driver "oracle". Supported drivers: bigquery, clickhouse, mysql, postgres, sqlite, snowflake, sqlserver',
+      'Unsupported driver "oracle". Supported drivers: bigquery, clickhouse, mongodb, mysql, postgres, snowflake, sqlite, sqlserver',
     );
   });
 
   it('rejects legacy driver aliases', () => {
-    expect(() => getDialectForDriver('postgresql')).toThrow('Unsupported warehouse driver "postgresql"');
-    expect(() => getDialectForDriver('sqlite3')).toThrow('Unsupported warehouse driver "sqlite3"');
+    expect(() => getDialectForDriver('postgresql')).toThrow('Unsupported driver "postgresql"');
+    expect(() => getDialectForDriver('sqlite3')).toThrow('Unsupported driver "sqlite3"');
   });
 });

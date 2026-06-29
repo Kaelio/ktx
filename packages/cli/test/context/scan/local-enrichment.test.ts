@@ -264,6 +264,57 @@ describe('local scan enrichment', () => {
     });
   });
 
+  it('scopes descriptions by full table identity across same-named tables in different schemas', () => {
+    const multiSchemaSnapshot: KtxSchemaSnapshot = {
+      connectionId: 'warehouse',
+      driver: 'postgres',
+      extractedAt: '2026-04-29T12:00:00.000Z',
+      scope: { schemas: ['analytics', 'staging'] },
+      metadata: {},
+      tables: ['analytics', 'staging'].map((schema) => ({
+        catalog: null,
+        db: schema,
+        name: 'orders',
+        kind: 'table',
+        comment: null,
+        estimatedRows: 1,
+        foreignKeys: [],
+        columns: [
+          {
+            name: 'id',
+            nativeType: 'integer',
+            normalizedType: 'integer',
+            dimensionType: 'number',
+            nullable: false,
+            primaryKey: true,
+            comment: null,
+          },
+        ],
+      })),
+    };
+    const descriptions = [
+      {
+        table: { catalog: null, db: 'analytics', name: 'orders' },
+        tableDescription: 'Curated analytics orders',
+        columnDescriptions: { id: 'Analytics order id' },
+      },
+      {
+        table: { catalog: null, db: 'staging', name: 'orders' },
+        tableDescription: 'Raw staging orders',
+        columnDescriptions: { id: 'Staging order id' },
+      },
+    ];
+
+    const schema = snapshotToKtxEnrichedSchema(multiSchemaSnapshot, new Map(), descriptions);
+
+    const analytics = schema.tables.find((table) => table.id === 'analytics.orders');
+    const staging = schema.tables.find((table) => table.id === 'staging.orders');
+    expect(analytics?.descriptions.ai).toBe('Curated analytics orders');
+    expect(staging?.descriptions.ai).toBe('Raw staging orders');
+    expect(analytics?.columns[0]?.descriptions.ai).toBe('Analytics order id');
+    expect(staging?.columns[0]?.descriptions.ai).toBe('Staging order id');
+  });
+
   it('maps snapshot foreign keys into formal schema relationships', () => {
     const source = noDeclaredRelationshipSnapshot();
     const snapshotWithForeignKey = {
@@ -1399,6 +1450,71 @@ describe('local scan enrichment', () => {
       'Recovered customers description',
     );
     expect(rerun.state.resumedStages).toEqual([]);
+  });
+
+  it('resumes per table identity, re-enriching a same-named table in another schema', async () => {
+    const multiSchemaSnapshot: KtxSchemaSnapshot = {
+      connectionId: 'warehouse',
+      driver: 'postgres',
+      extractedAt: '2026-04-29T12:00:00.000Z',
+      scope: { schemas: ['analytics', 'staging'] },
+      metadata: {},
+      tables: ['analytics', 'staging'].map((schema) => ({
+        catalog: null,
+        db: schema,
+        name: 'orders',
+        kind: 'table',
+        comment: null,
+        estimatedRows: 1,
+        foreignKeys: [],
+        columns: [
+          {
+            name: 'id',
+            nativeType: 'integer',
+            normalizedType: 'integer',
+            dimensionType: 'number',
+            nullable: false,
+            primaryKey: true,
+            comment: null,
+          },
+        ],
+      })),
+    };
+    const scanConnector = connector();
+    const providers = createDeterministicLocalScanEnrichmentProviders();
+    const generateObject = vi.spyOn(providers.llmRuntime, 'generateObject');
+    // Only the analytics.orders description was flushed before the interruption.
+    const resumeStore = {
+      load: vi.fn(async () => [
+        {
+          table: { catalog: null, db: 'analytics', name: 'orders' },
+          tableDescription: 'Recovered analytics orders',
+          columnDescriptions: { id: 'Recovered analytics id' },
+        },
+      ]),
+      flush: vi.fn(async () => {}),
+    };
+
+    const result = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      detectRelationships: false,
+      connector: scanConnector,
+      snapshot: multiSchemaSnapshot,
+      context: { runId: 'resume-identity' },
+      providers,
+      descriptionResumeStore: resumeStore,
+      relationshipSettings: { ...buildDefaultKtxProjectConfig().scan.relationships, enabled: false },
+    });
+
+    // staging.orders is not recovered (different identity), so it is re-enriched
+    // exactly once; analytics.orders keeps its recovered description.
+    expect(generateObject).toHaveBeenCalledTimes(1);
+    const analytics = result.descriptionUpdates.find((update) => update.table.db === 'analytics');
+    const staging = result.descriptionUpdates.find((update) => update.table.db === 'staging');
+    expect(analytics?.tableDescription).toBe('Recovered analytics orders');
+    expect(staging?.tableDescription).not.toBe('Recovered analytics orders');
+    expect(staging?.tableDescription).toBeTruthy();
   });
 
   it('flags an unselected stage stale when its inputs changed, names the cascade, and clears after re-running it', async () => {

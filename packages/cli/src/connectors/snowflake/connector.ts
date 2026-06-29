@@ -1,5 +1,5 @@
 import { createPrivateKey } from 'node:crypto';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { resolveStringReference } from '../shared/string-reference.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
@@ -576,7 +576,7 @@ export class KtxSnowflakeScanConnector implements KtxScanConnector {
 
   private readonly resolved: KtxSnowflakeResolvedConnectionConfig;
   private readonly driverFactory: KtxSnowflakeDriverFactory;
-  private readonly dialect = getDialectForDriver('snowflake');
+  private readonly dialect = getSqlDialectForDriver('snowflake');
   private readonly now: () => Date;
   private driverInstance: KtxSnowflakeDriver | null = null;
 

@@ -22,6 +22,11 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     schemas: ['public'],
   }),
   sqlite: () => ({ driver: 'sqlite', path: 'warehouse.db' }),
+  mongodb: () => ({
+    driver: 'mongodb',
+    url: 'mongodb://localhost:27017/app',
+    databases: ['app'],
+  }),
   mysql: () => ({
     driver: 'mysql',
     host: 'localhost',
@@ -96,6 +101,7 @@ describe('driverRegistrations', () => {
     expect(listSupportedDrivers()).toEqual([
       'bigquery',
       'clickhouse',
+      'mongodb',
       'mysql',
       'postgres',
       'snowflake',

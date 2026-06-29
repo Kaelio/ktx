@@ -122,6 +122,17 @@ function createKtxCliLiveDatabaseIntrospection(
   return {
     async extractSchema(connectionId: string, options?: LiveDatabaseIntrospectionOptions) {
       const connection = project.config.connections[connectionId];
+      if (String(connection?.driver ?? '').toLowerCase() === 'mongodb') {
+        const { createMongoDbLiveDatabaseIntrospection } = await import('./connectors/mongodb/live-database-introspection.js');
+        const { isKtxMongoDbConnectionConfig } = await import('./connectors/mongodb/connector.js');
+        if (!isKtxMongoDbConnectionConfig(connection)) {
+          return daemon.extractSchema(connectionId, options);
+        }
+        const mongodb = createMongoDbLiveDatabaseIntrospection({
+          connections: project.config.connections,
+        });
+        return mongodb.extractSchema(connectionId, options);
+      }
       if (isKtxPostgresConnectionConfig(connection)) {
         return postgres.extractSchema(connectionId, options);
       }

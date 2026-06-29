@@ -1,4 +1,4 @@
-import type { KtxDialect } from '../connections/dialects.js';
+import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxEnrichedColumn, KtxEnrichedSchema, KtxEnrichedTable } from './enrichment-types.js';
 import { type KtxRelationshipDetectionBudget, mapWithBudget } from './relationship-detection-budget.js';
 import type {
@@ -57,7 +57,8 @@ export interface KtxRelationshipProfileCache {
 
 export interface ProfileKtxRelationshipSchemaInput {
   connectionId: string;
-  dialect: KtxDialect;
+  driver: KtxConnectionDriver;
+  dialect: KtxSqlDialect | null;
   schema: KtxEnrichedSchema;
   executor: KtxRelationshipReadOnlyExecutor | null;
   ctx: KtxScanContext;
@@ -126,7 +127,7 @@ function columnKey(table: KtxEnrichedTable, column: KtxEnrichedColumn): string {
 
 function tableProfileCacheKey(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   ctx: KtxScanContext;
   table: KtxTableRef;
   sampleValuesPerColumn: number;
@@ -152,7 +153,7 @@ function sqlSuffix(fragment: string): string {
   return fragment ? ` ${fragment}` : '';
 }
 
-function sampledTableSql(dialect: KtxDialect, tableSql: string, limit: number): string {
+function sampledTableSql(dialect: KtxSqlDialect, tableSql: string, limit: number): string {
   const top = dialect.getTopClause(limit);
   if (top) {
     return `(SELECT ${top} * FROM ${tableSql}) AS relationship_profile_sample`;
@@ -161,7 +162,7 @@ function sampledTableSql(dialect: KtxDialect, tableSql: string, limit: number): 
 }
 
 function sampleValuesSql(input: {
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   tableSql: string;
   columnSql: string;
   limit: number;
@@ -178,7 +179,7 @@ function sampleValuesSql(input: {
 }
 
 function columnProfileSelectSql(input: {
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   tableSql: string;
   profileTableSql: string;
   column: KtxEnrichedColumn;
@@ -221,7 +222,7 @@ function splitSampleValues(value: unknown): string[] {
 
 async function queryCount(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   table: KtxTableRef;
   executor: KtxRelationshipReadOnlyExecutor;
   ctx: KtxScanContext;
@@ -236,7 +237,7 @@ async function queryCount(input: {
 
 async function queryTableProfile(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   table: KtxEnrichedTable;
   executor: KtxRelationshipReadOnlyExecutor;
   ctx: KtxScanContext;
@@ -323,10 +324,10 @@ type TableProfileResult =
 export async function profileKtxRelationshipSchema(
   input: ProfileKtxRelationshipSchemaInput,
 ): Promise<KtxRelationshipProfileArtifact> {
-  if (!input.executor) {
+  if (!input.executor || !input.dialect) {
     return {
       connectionId: input.connectionId,
-      driver: input.dialect.type,
+      driver: input.driver,
       sqlAvailable: false,
       queryCount: 0,
       tables: [],
@@ -340,6 +341,7 @@ export async function profileKtxRelationshipSchema(
   const columns: Record<string, KtxRelationshipColumnProfile> = {};
   const warnings: string[] = [];
   const executor = input.executor;
+  const dialect = input.dialect;
 
   const enabledTables = input.schema.tables.filter((candidate) => candidate.enabled);
   const { results: tableResults } = await mapWithBudget<KtxEnrichedTable, TableProfileResult>({
@@ -354,7 +356,7 @@ export async function profileKtxRelationshipSchema(
       const profileSampleRows = input.profileSampleRows ?? 10000;
       const cacheKey = tableProfileCacheKey({
         connectionId: input.connectionId,
-        dialect: input.dialect,
+        dialect,
         ctx: input.ctx,
         table: table.ref,
         sampleValuesPerColumn,
@@ -368,7 +370,7 @@ export async function profileKtxRelationshipSchema(
       try {
         const tableProfile = await queryTableProfile({
           connectionId: input.connectionId,
-          dialect: input.dialect,
+          dialect,
           table,
           executor,
           ctx: input.ctx,
@@ -413,7 +415,7 @@ export async function profileKtxRelationshipSchema(
 
   return {
     connectionId: input.connectionId,
-    driver: input.dialect.type,
+    driver: input.driver,
     sqlAvailable: true,
     queryCount: queryTotal,
     tables,

@@ -1,10 +1,11 @@
 import YAML from 'yaml';
-import { buildLiveDatabaseManifestShards, type LiveDatabaseManifestExistingDescriptions, type LiveDatabaseManifestJoinData, type LiveDatabaseManifestJoinEntry, type LiveDatabaseManifestShard, type LiveDatabaseManifestTableData } from '../../context/ingest/adapters/live-database/manifest.js';
+import { buildLiveDatabaseManifestShards, buildTableRef, type LiveDatabaseManifestExistingDescriptions, type LiveDatabaseManifestJoinData, type LiveDatabaseManifestJoinEntry, type LiveDatabaseManifestShard, type LiveDatabaseManifestTableData } from '../../context/ingest/adapters/live-database/manifest.js';
 import type { TableUsageOutput } from '../../context/ingest/adapters/historic-sql/skill-schemas.js';
 import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { isSlYamlPath } from '../../context/sl/source-files.js';
 import { deriveFederatedConnection } from '../connections/federation.js';
+import { tableRefKey } from './table-ref.js';
 import type { KtxLocalScanEnrichmentResult } from './local-enrichment.js';
 import {
   buildKtxRelationshipArtifacts,
@@ -81,9 +82,8 @@ function schemaDir(connectionId: string): string {
 
 function tableDescription(
   table: KtxSchemaTable,
-  descriptionUpdates: LocalDescriptionUpdates = [],
+  update: LocalDescriptionUpdates[number] | undefined,
 ): Record<string, string> | undefined {
-  const update = descriptionUpdates.find((candidate) => candidate.table.name === table.name);
   const descriptions: Record<string, string> = {};
   if (table.comment) {
     descriptions.db = table.comment;
@@ -95,11 +95,9 @@ function tableDescription(
 }
 
 function columnDescription(
-  table: KtxSchemaTable,
   column: KtxSchemaColumn,
-  descriptionUpdates: LocalDescriptionUpdates = [],
+  update: LocalDescriptionUpdates[number] | undefined,
 ): Record<string, string> | undefined {
-  const update = descriptionUpdates.find((candidate) => candidate.table.name === table.name);
   const aiDescription = update?.columnDescriptions[column.name] ?? null;
   const descriptions: Record<string, string> = {};
   if (column.comment) {
@@ -115,19 +113,25 @@ function snapshotTablesToManifestData(
   snapshot: KtxSchemaSnapshot,
   descriptionUpdates: LocalDescriptionUpdates = [],
 ): LiveDatabaseManifestTableData[] {
-  return snapshot.tables.map((table) => ({
-    name: table.name,
-    catalog: table.catalog,
-    db: table.db,
-    descriptions: tableDescription(table, descriptionUpdates),
-    columns: table.columns.map((column) => ({
-      name: column.name,
-      type: column.dimensionType,
-      ...(column.primaryKey ? { pk: true } : {}),
-      ...(column.nullable === false ? { nullable: false } : {}),
-      descriptions: columnDescription(table, column, descriptionUpdates),
-    })),
-  }));
+  // Resolve a table's descriptions by full identity: two same-named tables in
+  // different schemas must not collapse onto one update.
+  const updateByRef = new Map(descriptionUpdates.map((update) => [tableRefKey(update.table), update]));
+  return snapshot.tables.map((table) => {
+    const update = updateByRef.get(tableRefKey({ catalog: table.catalog, db: table.db, name: table.name }));
+    return {
+      name: table.name,
+      catalog: table.catalog,
+      db: table.db,
+      descriptions: tableDescription(table, update),
+      columns: table.columns.map((column) => ({
+        name: column.name,
+        type: column.dimensionType,
+        ...(column.primaryKey ? { pk: true } : {}),
+        ...(column.nullable === false ? { nullable: false } : {}),
+        descriptions: columnDescription(column, update),
+      })),
+    };
+  });
 }
 
 function formalJoins(snapshot: KtxSchemaSnapshot): LiveDatabaseManifestJoinData[] {
@@ -262,7 +266,10 @@ async function loadExistingManifestState(
         if (!validTableNames.has(tableName)) {
           continue;
         }
-        descriptions.set(tableName, {
+        // Descriptions/usage key on the fully-qualified `entry.table` ref so two
+        // same-named tables across schemas stay distinct; joins remain keyed by
+        // bare name to match the bare-name join graph.
+        descriptions.set(entry.table, {
           table: entry.descriptions ? { ...entry.descriptions } : undefined,
           columns: new Map(
             (entry.columns ?? []).flatMap((column) =>
@@ -271,7 +278,7 @@ async function loadExistingManifestState(
           ),
         });
         if (entry.usage) {
-          usage.set(tableName, { ...entry.usage });
+          usage.set(entry.table, { ...entry.usage });
         }
         const joins = (entry.joins ?? []).filter((join) => {
           return (
@@ -307,7 +314,7 @@ export async function loadOnDiskDescriptionUpdates(
   const siblingTargets = await federatedSiblingTargets(project, connectionId);
   const existing = await loadExistingManifestState(project, connectionId, snapshot, siblingTargets);
   return snapshot.tables.map((table) => {
-    const entry = existing.descriptions.get(table.name);
+    const entry = existing.descriptions.get(buildTableRef(table.name, table.catalog, table.db));
     const columnDescriptions: Record<string, string | null> = {};
     for (const column of table.columns) {
       columnDescriptions[column.name] = entry?.columns.get(column.name)?.ai ?? null;

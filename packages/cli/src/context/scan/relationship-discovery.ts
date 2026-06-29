@@ -1,5 +1,5 @@
 import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
-import type { KtxDialect } from '../connections/dialects.js';
+import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxEnrichedRelationship, KtxEnrichedSchema, KtxRelationshipUpdate } from './enrichment-types.js';
 import {
@@ -40,7 +40,7 @@ import type {
 
 export interface DiscoverKtxRelationshipsInput {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect | null;
   connector: KtxScanConnector;
   schema: KtxEnrichedSchema;
   context: KtxScanContext;
@@ -131,7 +131,7 @@ function compositeSummary(relationships: readonly KtxCompositeRelationshipCandid
 
 async function detectCompositeRelationships(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect | null;
   schema: KtxEnrichedSchema;
   profile: KtxRelationshipProfileArtifact;
   executor: KtxRelationshipReadOnlyExecutor | null;
@@ -140,13 +140,14 @@ async function detectCompositeRelationships(input: {
   budget: KtxRelationshipDetectionBudget;
   progress?: KtxProgressPort;
 }): Promise<KtxCompositeRelationshipCandidate[]> {
-  if (!input.executor || !input.profile.sqlAvailable) {
+  if (!input.executor || !input.profile.sqlAvailable || !input.dialect) {
     return [];
   }
+  const dialect = input.dialect;
   try {
     const compositeDetection = await discoverKtxCompositeRelationships({
       connectionId: input.connectionId,
-      dialect: input.dialect,
+      dialect,
       schema: input.schema,
       profiles: input.profile,
       executor: input.executor,
@@ -241,6 +242,7 @@ export async function discoverKtxRelationships(
   const profileCache = createKtxRelationshipProfileCache();
   const profile = await profileKtxRelationshipSchema({
     connectionId: input.connectionId,
+    driver: input.connector.driver,
     dialect: input.dialect,
     schema: input.schema,
     executor,
@@ -258,17 +260,21 @@ export async function discoverKtxRelationships(
       profiles: profile,
     },
   );
-  const llmProposalResult = input.settings.llmProposals
-    ? await proposeKtxRelationshipCandidatesWithLlm({
-        connectionId: input.connectionId,
-        schema: input.schema,
-        profile,
-        llmRuntime: input.llmRuntime ?? null,
-        settings: {
-          maxTablesPerBatch: input.settings.maxLlmTablesPerBatch,
-        },
-      })
-    : { candidates: [], warnings: [], llmCalls: 0, summary: 'skipped' as const };
+  // The LLM proposal is one more unit of relationship work, so it honors the same
+  // budget/abort gate as profiling, validation, and composite probing — a stage
+  // that already exhausted its budget (or was aborted) must not start a fresh call.
+  const llmProposalResult =
+    input.settings.llmProposals && !budget.check()
+      ? await proposeKtxRelationshipCandidatesWithLlm({
+          connectionId: input.connectionId,
+          schema: input.schema,
+          profile,
+          llmRuntime: input.llmRuntime ?? null,
+          settings: {
+            maxTablesPerBatch: input.settings.maxLlmTablesPerBatch,
+          },
+        })
+      : { candidates: [], warnings: [], llmCalls: 0, summary: 'skipped' as const };
   const candidates = mergeKtxRelationshipDiscoveryCandidates([
     ...deterministicCandidates,
     ...llmProposalResult.candidates,
@@ -352,7 +358,9 @@ export async function discoverKtxRelationships(
     profile,
     resolvedRelationships: graph.relationships,
     compositeRelationships,
-    statisticalValidation: profile.sqlAvailable ? 'completed' : 'skipped',
+    // A budget/abort stop means profiling did not finish, so report it as not
+    // completed even though the SQL capability was available.
+    statisticalValidation: profile.sqlAvailable && !stopReason ? 'completed' : 'skipped',
     llmRelationshipValidation: llmProposalResult.summary,
     warnings,
     partial: stopReason ? { reason: stopReason } : null,

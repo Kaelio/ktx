@@ -330,8 +330,19 @@ async function searchLocalKnowledgePagesWithSqlite(
     limit?: number;
   },
 ): Promise<LocalKnowledgeSearchResult[]> {
-  const pages = await loadAllKnowledgePages(project, { userId: input.userId, connectionId: input.connectionId });
-  const byPath = new Map(pages.map((page) => [page.path, page]));
+  // The sqlite index is shared across connections and `index.sync` deletes any
+  // page not in its input, so sync the FULL corpus and apply the connection
+  // filter only to the candidate/result set (`allowedPaths`), never to sync.
+  const pages = await loadAllKnowledgePages(project, { userId: input.userId });
+  const allowedPaths = new Set(
+    pages.filter((page) => pageMatchesConnection(page.connections, input.connectionId)).map((page) => page.path),
+  );
+  const allowedPages = pages.filter((page) => allowedPaths.has(page.path));
+  // Scope the lexical/semantic lanes inside the query so their LIMIT applies to
+  // in-scope rows; only narrow when a connection is requested (otherwise every
+  // path is allowed and the filter is a no-op).
+  const scopedPaths = input.connectionId === undefined ? undefined : [...allowedPaths];
+  const byPath = new Map(allowedPages.map((page) => [page.path, page]));
   const embeddingService = input.embeddingService ?? null;
   const index = new SqliteKnowledgeIndex({ dbPath: sqliteKnowledgeDbPath(project) });
   const existingPages = index.getExistingPages();
@@ -356,7 +367,7 @@ async function searchLocalKnowledgePagesWithSqlite(
 
   index.sync(indexPages);
 
-  const finalLimit = input.limit ?? Math.max(1, indexPages.length);
+  const finalLimit = input.limit ?? Math.max(1, allowedPages.length);
   const core = new HybridSearchCore();
   const generators: SearchCandidateGenerator[] = [
     {
@@ -365,6 +376,7 @@ async function searchLocalKnowledgePagesWithSqlite(
         const rows = index.searchLexicalCandidates({
           queryText: args.queryText,
           limit: args.laneCandidatePoolLimit,
+          allowedPaths: scopedPaths,
         });
         return {
           candidates: rows.map((row) => ({ id: row.id, rank: row.rank, rawScore: row.rawScore })),
@@ -374,7 +386,10 @@ async function searchLocalKnowledgePagesWithSqlite(
     {
       lane: 'token',
       async generate(args) {
-        const rows = tokenLaneCandidates(pages, args.normalizedQuery.terms).slice(0, args.laneCandidatePoolLimit);
+        const rows = tokenLaneCandidates(allowedPages, args.normalizedQuery.terms).slice(
+          0,
+          args.laneCandidatePoolLimit,
+        );
         return {
           candidates: rows.map((row, index) => ({
             id: row.page.path,
@@ -396,6 +411,7 @@ async function searchLocalKnowledgePagesWithSqlite(
           const rows = index.searchSemanticCandidates({
             queryEmbedding,
             limit: args.laneCandidatePoolLimit,
+            allowedPaths: scopedPaths,
           });
           return {
             candidates: rows

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { KtxLlmRuntimePort } from '../../../src/context/llm/runtime-port.js';
-import { getDialectForDriver } from '../../../src/context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../../src/context/connections/dialects.js';
 import { buildDefaultKtxProjectConfig } from '../../../src/context/project/config.js';
 import { snapshotToKtxEnrichedSchema } from '../../../src/context/scan/local-enrichment.js';
 import {
@@ -312,7 +312,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(executor),
       schema: snapshotToKtxEnrichedSchema(snapshot()),
       context: { runId: 'relationship-run-1' },
@@ -361,7 +361,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(executor),
       schema: snapshotToKtxEnrichedSchema(snapshot()),
       context: { runId: 'relationship-progress' },
@@ -390,7 +390,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(executor),
       schema: snapshotToKtxEnrichedSchema(snapshot()),
       context: { runId: 'relationship-budget' },
@@ -400,6 +400,40 @@ describe('production relationship discovery', () => {
 
     expect(result.partial).toEqual({ reason: 'budget' });
     expect(result.relationships.accepted).toBe(0);
+  });
+
+  it('does not start the LLM relationship proposal once the budget is exhausted', async () => {
+    executor = new InMemorySqliteExecutor();
+    executor.db.exec(`
+      CREATE TABLE accounts (id INTEGER NOT NULL, name TEXT NOT NULL);
+      CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+      INSERT INTO accounts (id, name) VALUES (1, 'Acme'), (2, 'Globex');
+      INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+    `);
+    let calls = 0;
+    const now = () => calls++ * 1000;
+    const generateObject = vi.fn(async () => ({ pkCandidates: [], fkCandidates: [] }));
+    const runtime: KtxLlmRuntimePort = {
+      generateText: vi.fn(),
+      generateObject: generateObject as KtxLlmRuntimePort['generateObject'],
+      runAgentLoop: vi.fn(),
+      subprocessForkSpec: () => null,
+    };
+
+    const result = await discoverKtxRelationships({
+      connectionId: 'warehouse',
+      dialect: getSqlDialectForDriver('sqlite'),
+      connector: connector(executor),
+      schema: snapshotToKtxEnrichedSchema(snapshot()),
+      context: { runId: 'relationship-budget-llm' },
+      settings: { ...relationshipSettings(), detectionBudgetMs: 1 },
+      llmRuntime: runtime,
+      now,
+    });
+
+    expect(result.partial).toEqual({ reason: 'budget' });
+    expect(result.llmRelationshipValidation).toBe('skipped');
+    expect(generateObject).not.toHaveBeenCalled();
   });
 
   it('returns a partial result when the scan signal is already aborted', async () => {
@@ -413,7 +447,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(executor),
       schema: snapshotToKtxEnrichedSchema(snapshot()),
       context: { runId: 'relationship-aborted', signal: AbortSignal.abort() },
@@ -421,6 +455,8 @@ describe('production relationship discovery', () => {
     });
 
     expect(result.partial).toEqual({ reason: 'aborted' });
+    // A stop-before-completion must not be reported as completed statistical validation.
+    expect(result.statisticalValidation).toBe('skipped');
   });
 
   it('accepts a profile-driven natural-key relationship without declared metadata', async () => {
@@ -435,7 +471,7 @@ describe('production relationship discovery', () => {
     const schema = naturalKeySnapshot();
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: {
         ...connector(executor),
         introspect: async () => schema,
@@ -485,7 +521,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: {
         ...connector(executor),
         introspect: async () => sourceSnapshot,
@@ -518,7 +554,7 @@ describe('production relationship discovery', () => {
   it('keeps candidates review-only when read-only SQL is unavailable', async () => {
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(null),
       schema: snapshotToKtxEnrichedSchema(snapshot()),
       context: { runId: 'relationship-run-no-sql' },
@@ -544,7 +580,7 @@ describe('production relationship discovery', () => {
     const sourceSnapshot = declaredForeignKeySnapshot();
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(null),
       schema: snapshotToKtxEnrichedSchema(sourceSnapshot),
       context: { runId: 'formal-metadata-no-sql' },
@@ -591,7 +627,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(executor),
       schema: snapshotToKtxEnrichedSchema(llmOnlyRelationshipSnapshot()),
       context: { runId: 'llm-relationship-orchestrator' },
@@ -631,7 +667,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: connector(executor),
       schema: snapshotToKtxEnrichedSchema(snapshot()),
       context: { runId: 'configured-thresholds' },
@@ -692,7 +728,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      dialect: getSqlDialectForDriver('sqlite'),
       connector: {
         ...connector(executor),
         introspect: async () => richSnapshot,
@@ -748,7 +784,7 @@ describe('production relationship discovery', () => {
 
     const result = await discoverKtxRelationships({
       connectionId: maskedSnapshot.connectionId,
-      dialect: getDialectForDriver(maskedSnapshot.driver),
+      dialect: getSqlDialectForDriver(maskedSnapshot.driver),
       connector: testConnector,
       schema: snapshotToKtxEnrichedSchema(maskedSnapshot, new Map()),
       context: { runId: 'test:production-composite' },

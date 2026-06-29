@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import type { KtxEmbeddingPort } from '../../context/core/embedding.js';
-import type { KtxFileStorePort } from '../../context/core/file-store.js';
+import type { KtxFileStorePort, KtxFileWriteResult } from '../../context/core/file-store.js';
 import type { KtxLogger } from '../../context/core/config.js';
 import { noopLogger } from '../../context/core/config.js';
 import type { ReindexWorkResult } from '../index-sync/types.js';
@@ -232,11 +232,21 @@ export class KnowledgeWikiService {
     author: string,
     authorEmail: string,
     commitMessage?: string,
-  ): Promise<void> {
-    await this.writePage(scope, scopeId, pageKey, frontmatter, content, author, authorEmail, commitMessage);
+  ): Promise<KtxFileWriteResult> {
+    const writeResult = await this.writePage(
+      scope,
+      scopeId,
+      pageKey,
+      frontmatter,
+      content,
+      author,
+      authorEmail,
+      commitMessage,
+    );
     const serialized = this.serializePage(frontmatter, content);
     const contentHash = createHash('sha256').update(serialized).digest('hex');
     await this.syncSinglePage(scope, scopeId, pageKey, frontmatter, content, contentHash);
+    return writeResult;
   }
 
   // ── Index sync (files → DB) ───────────────────────────────────

@@ -11,6 +11,7 @@ import {
   searchLocalKnowledgePages,
   writeLocalKnowledgePage,
 } from '../../../src/context/wiki/local-knowledge.js';
+import { SqliteKnowledgeIndex } from '../../../src/context/wiki/sqlite-knowledge-index.js';
 
 class FakeEmbeddingPort {
   readonly maxBatchSize = 16;
@@ -369,6 +370,42 @@ describe('local knowledge helpers', () => {
       'orders-global',
       'orders-sales-db',
     ]);
+  });
+
+  it('keeps other-connection pages and embeddings in the sqlite index after a scoped search', async () => {
+    const embedding = new FakeEmbeddingPort();
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-sales-db',
+      scope: 'GLOBAL',
+      summary: 'Sales DB orders',
+      content: 'Orders are paid in the sales database.',
+      connections: ['sales_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-events-db',
+      scope: 'GLOBAL',
+      summary: 'Events DB orders',
+      content: 'Orders are paid in the events database.',
+      connections: ['events_db'],
+    });
+
+    const scoped = await searchLocalKnowledgePages(project, {
+      query: 'orders paid',
+      userId: 'local',
+      connectionId: 'sales_db',
+      embeddingService: embedding,
+    });
+    expect(scoped.map((result) => result.key)).toEqual(['orders-sales-db']);
+
+    // A connection-scoped search must not prune the other connection's page (or
+    // its cached embedding) from the shared persistent index.
+    const index = new SqliteKnowledgeIndex({ dbPath: join(project.projectDir, '.ktx', 'db.sqlite') });
+    const indexed = index.getExistingPages();
+    expect([...indexed.keys()].sort()).toEqual([
+      'wiki/global/orders-events-db.md',
+      'wiki/global/orders-sales-db.md',
+    ]);
+    expect(indexed.get('wiki/global/orders-events-db.md')?.embedding).not.toBeNull();
   });
 
   it('filters search per connection across lexical and token lanes when embeddings are disabled', async () => {
