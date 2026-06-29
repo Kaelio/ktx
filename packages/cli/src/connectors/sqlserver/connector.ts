@@ -1,5 +1,5 @@
 import { assertReadOnlySql, hoistLeadingCte, stripTrailingSqlNoise } from '../../context/connections/read-only-sql.js';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
 import {
@@ -353,7 +353,7 @@ export class KtxSqlServerScanConnector implements KtxScanConnector {
   private readonly poolFactory: KtxSqlServerPoolFactory;
   private readonly endpointResolver?: KtxSqlServerEndpointResolver;
   private readonly now: () => Date;
-  private readonly dialect = getDialectForDriver('sqlserver');
+  private readonly dialect = getSqlDialectForDriver('sqlserver');
   private pool: KtxSqlServerPool | null = null;
   private resolvedEndpoint: KtxSqlServerResolvedEndpoint | null = null;
 

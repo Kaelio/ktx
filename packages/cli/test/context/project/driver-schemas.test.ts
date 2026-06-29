@@ -28,6 +28,28 @@ describe('connectionConfigSchema (driver discriminated union)', () => {
     });
   });
 
+  it('parses a mongodb connection with sampling fields', () => {
+    const parsed = connectionConfigSchema.parse({
+      driver: 'mongodb',
+      url: 'env:MONGO_URL',
+      databases: ['app'],
+      enabled_tables: ['app.users'],
+      sample_size: 500,
+      order_by: 'createdAt',
+    });
+    expect(parsed).toMatchObject({
+      driver: 'mongodb',
+      url: 'env:MONGO_URL',
+      databases: ['app'],
+      sample_size: 500,
+      order_by: 'createdAt',
+    });
+  });
+
+  it('rejects a mongodb connection without a url', () => {
+    expect(() => connectionConfigSchema.parse({ driver: 'mongodb', databases: ['app'] })).toThrow();
+  });
+
   it('rejects an unknown driver', () => {
     expect(() => connectionConfigSchema.parse({ driver: 'nope', url: 'x' })).toThrow();
   });

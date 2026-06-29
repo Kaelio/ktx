@@ -1,4 +1,4 @@
-import type { KtxDialect } from '../connections/dialects.js';
+import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxRelationshipEndpoint } from './enrichment-types.js';
 import { applyKtxRelationshipValidationBudget, type KtxRelationshipValidationBudget } from './relationship-budget.js';
 import type { KtxRelationshipDiscoveryCandidate } from './relationship-candidates.js';
@@ -44,7 +44,7 @@ export interface KtxValidatedRelationshipDiscoveryCandidate
 
 export interface ValidateKtxRelationshipDiscoveryCandidatesInput {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect | null;
   candidates: readonly KtxRelationshipDiscoveryCandidate[];
   profiles: KtxRelationshipProfileArtifact;
   executor: KtxRelationshipReadOnlyExecutor | null;
@@ -108,7 +108,7 @@ function sqlSuffix(fragment: string): string {
 }
 
 function buildCoverageSql(input: {
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect;
   childTable: KtxTableRef;
   childColumn: string;
   parentTable: KtxTableRef;
@@ -237,13 +237,14 @@ export async function validateKtxRelationshipDiscoveryCandidates(
   input: ValidateKtxRelationshipDiscoveryCandidatesInput,
 ): Promise<KtxValidatedRelationshipDiscoveryCandidate[]> {
   const settings = mergeSettings(input.settings);
-  if (!input.executor || !input.profiles.sqlAvailable) {
+  if (!input.executor || !input.profiles.sqlAvailable || !input.dialect) {
     return input.candidates.map((candidate) =>
       reviewWithoutValidation(candidate, input.profiles, 'validation_unavailable'),
     );
   }
 
   const executor = input.executor;
+  const dialect = input.dialect;
 
   async function validateCandidate(
     candidate: KtxRelationshipDiscoveryCandidate,
@@ -260,7 +261,7 @@ export async function validateKtxRelationshipDiscoveryCandidates(
       {
         connectionId: input.connectionId,
         sql: buildCoverageSql({
-          dialect: input.dialect,
+          dialect,
           childTable: candidate.from.table,
           childColumn: sourceColumn,
           parentTable: candidate.to.table,

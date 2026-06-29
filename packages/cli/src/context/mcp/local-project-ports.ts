@@ -2,6 +2,7 @@ import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-ex
 import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
 import { executeProjectReadOnlySql } from '../../context/connections/project-sql-executor.js';
 import { FEDERATED_CONNECTION_ID, federatedConnectionListing } from '../../context/connections/federation.js';
+import { assertSqlQueryableConnection } from '../../context/connections/dialects.js';
 import { resolveConfiguredConnection } from '../../context/connections/resolve-connection.js';
 import {
   type LocalConnectionInfo,
@@ -48,6 +49,9 @@ async function executeValidatedReadOnlySql(
   const isFederated = input.connectionId === FEDERATED_CONNECTION_ID;
   const connectionId = isFederated ? input.connectionId : assertSafeConnectionId(input.connectionId);
   const connection = isFederated ? undefined : resolveConfiguredConnection(project.config, connectionId);
+  if (!isFederated) {
+    assertSqlQueryableConnection(connectionId, connection!.driver);
+  }
 
   const dialect = sqlAnalysisDialectForDriver(isFederated ? 'duckdb' : connection!.driver);
   const validation = await options.sqlAnalysis.validateReadOnly(input.sql, dialect);

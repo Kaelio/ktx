@@ -29,9 +29,17 @@ below.
 | `--agents` | Install agent configuration and rules only | `false` |
 | `--target <target>` | Agent target: `claude-code`, `claude-desktop`, `codex`, `cursor`, `opencode`, or `universal` | - |
 | `--global` | Install agent integration into the global target scope for `claude-code` or `codex` | `false` |
-| `--install-dir <path>` | Directory to install project-scoped agent config into. Defaults to the ktx project directory; resolved against the current directory and created if missing. Use it to install `.claude/`, `.mcp.json`, and rules where you open your agent (e.g. `--install-dir .`). Mutually exclusive with `--global` and `--local` | ktx project dir |
+| `--install-dir <path>` | Install project-scoped agent configuration | ktx project dir |
 | `--yes` | Accept project creation and runtime install defaults where setup asks for confirmation | `false` |
 | `--no-input` | Disable interactive terminal input | - |
+
+> **`--install-dir <path>`**
+>
+> Installs project-scoped agent configuration into the specified directory.
+> The path is resolved against the current directory and created if it doesn't
+> exist. Use it to install `.claude/`, `.mcp.json`, and rules where you open
+> your agent (for example, `--install-dir .`). This option is mutually exclusive
+> with `--global` and `--local`.
 
 Use the global `--project-dir <path>` option when setup should target a
 specific directory.

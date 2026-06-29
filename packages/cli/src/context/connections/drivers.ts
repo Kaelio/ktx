@@ -68,6 +68,27 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
       };
     },
   },
+  mongodb: {
+    driver: 'mongodb',
+    scopeConfigKey: 'databases',
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/mongodb/connector.js');
+      return {
+        isConnectionConfig: (connection) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxMongoDbConnectionConfig>[0];
+          return m.isKtxMongoDbConnectionConfig(typedConnection);
+        },
+        createScanConnector: ({ connectionId, connection }) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxMongoDbConnectionConfig>[0];
+          if (!m.isKtxMongoDbConnectionConfig(typedConnection)) {
+            throw invalidConnectionConfig('mongodb');
+          }
+          return new m.KtxMongoDbScanConnector({ connectionId, connection: typedConnection });
+        },
+      };
+    },
+  },
   mysql: {
     driver: 'mysql',
     scopeConfigKey: 'schemas',

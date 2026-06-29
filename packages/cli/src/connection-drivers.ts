@@ -8,6 +8,7 @@ const KTX_DATABASE_DRIVER_IDS = new Set([
   'sqlserver',
   'bigquery',
   'snowflake',
+  'mongodb',
 ]);
 
 export function normalizeConnectionDriver(connection: KtxProjectConnectionConfig): string {

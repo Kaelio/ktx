@@ -1,6 +1,6 @@
 import pLimit from 'p-limit';
 import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
-import { getDialectForDriver } from '../connections/dialects.js';
+import { getSqlDialectForDriver } from '../connections/dialects.js';
 import { buildDefaultKtxProjectConfig, type KtxScanRelationshipConfig } from '../project/config.js';
 import { KtxDescriptionGenerator } from './description-generation.js';
 import { buildKtxColumnEmbeddingText } from './embedding-text.js';
@@ -486,7 +486,9 @@ export async function runLocalScanEnrichment(
     snapshot,
     connectionId: input.connectionId,
   });
-  const dialect = getDialectForDriver(snapshot.driver);
+  const dialect = input.connector.capabilities.readOnlySql
+    ? getSqlDialectForDriver(snapshot.driver)
+    : null;
   const now = input.now ?? (() => new Date());
   const state = completedKtxScanEnrichmentStateSummary();
   const syncId = input.syncId ?? input.context.runId;

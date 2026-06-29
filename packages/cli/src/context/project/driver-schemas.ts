@@ -48,6 +48,41 @@ const warehouseConnectionSchemas = [
   warehouseConnectionSchema('sqlserver'),
 ] as const;
 
+const mongodbConnectionSchema = z
+  .looseObject({
+    driver: z.literal('mongodb'),
+    url: z
+      .string()
+      .min(1)
+      .describe(
+        'MongoDB connection string (mongodb:// or mongodb+srv://, including TLS/Atlas); may contain a reference like env:MONGO_URL.',
+      ),
+    database: z.string().min(1).optional().describe('Single database to introspect when not using databases or a URL path.'),
+    databases: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Databases whose collections ktx introspects as tables. Falls back to the URL path database.'),
+    enabled_tables: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Optional allowlist of "database.collection" names to introspect.'),
+    sample_size: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('How many recent documents to sample per collection when inferring the schema (default 1000).'),
+    order_by: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Field to sort by descending when sampling. Defaults to _id; set this when _id is not an ObjectId. ' +
+          'Should be indexed — an unindexed sort hits MongoDB\'s in-memory sort limit on large collections.',
+      ),
+  })
+  .describe('MongoDB primary-source connection. Schema is inferred by sampling the most recent documents.');
+
 const positiveIntKeyMessage = (field: string) => `${field} keys must be positive-integer strings (e.g. "1", "42")`;
 
 const positiveIntKeyRegex = /^[1-9]\d*$/;
@@ -251,6 +286,7 @@ const sigmaConnectionSchema = z
 
 export const connectionConfigSchema = z.discriminatedUnion('driver', [
   ...warehouseConnectionSchemas,
+  mongodbConnectionSchema,
   metabaseConnectionSchema,
   lookerConnectionSchema,
   lookmlConnectionSchema,

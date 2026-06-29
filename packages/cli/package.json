@@ -72,6 +72,7 @@
     "ink": "^7.0.3",
     "lookml-parser": "7.1.0",
     "minimatch": "^10.2.5",
+    "mongodb": "^6.12.0",
     "mssql": "^12.5.4",
     "mysql2": "^3.22.3",
     "openai": "^6.38.0",

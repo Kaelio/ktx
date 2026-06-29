@@ -1,6 +1,6 @@
 ---
 title: Primary Sources
-description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, or SQLite.
+description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, or MongoDB.
 ---
 
 **ktx** connects to your data warehouse or database to build schema context,
@@ -26,10 +26,12 @@ Agents should prefer environment or file references over literal secrets.
 
 | Field | Required | Applies to | Description |
 |-------|----------|------------|-------------|
-| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, or `sqlite` |
+| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, or `mongodb` |
 | `url` | One of the connection methods | URL-style connectors | Database URL, `env:NAME`, or `file:/path/to/secret` |
 | `host`, `port`, `database`, `username`, `password` | One of the connection methods | PostgreSQL, MySQL, SQL Server | Field-by-field connection values |
 | `schema` or `schemas` | No | schema-aware warehouses | Single schema or list of schemas to scan |
+| `databases` | No | ClickHouse, MongoDB | List of databases to scan |
+| `sample_size`, `order_by` | No | MongoDB | Schema-inference sampling controls (recent documents, sort field) |
 | `context.queryHistory` | No | PostgreSQL, Snowflake, BigQuery | Enables query-history ingestion when the warehouse supports it |
 | `path` | Yes for path-style SQLite | SQLite | Local SQLite database path or `env:NAME` reference |
 | `max_bytes_billed` | No | BigQuery | Maximum bytes billed per query job |
@@ -509,6 +511,87 @@ No authentication required - SQLite is file-based. The file must be readable by 
 - SQLite type affinity system: `TEXT`, `NUMERIC`, `INTEGER`, `REAL`, `BLOB`
 - Foreign key enforcement requires explicit `PRAGMA foreign_keys = ON`
 - Database file must exist before `ktx connection test` or ingest runs
+
+---
+
+## MongoDB
+
+Connects to MongoDB as a primary context source. **ktx** treats each collection
+as a table and each inferred top-level field as a column. MongoDB is a non-SQL
+source: `ktx sql` and semantic-layer metric compilation do not apply to a MongoDB
+connection, but its collections still flow through `ktx ingest`, descriptions, and
+relationship discovery.
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  mongo-prod:
+    driver: mongodb
+    url: env:MONGO_URL
+    databases: [app]
+    enabled_tables: [app.users, app.orders] # optional collection allowlist
+    sample_size: 1000
+    # order_by: createdAt                    # only when _id is not an ObjectId
+```
+
+Standard `mongodb://` and `mongodb+srv://` connection strings are supported,
+including TLS and MongoDB Atlas — pass the full connection string (with its
+query parameters) as `url`. The `databases` list selects which databases to
+introspect; if omitted, **ktx** uses the database in the URL path. `ktx setup`
+also offers MongoDB and stores the selected databases under
+`connections.<id>.databases`.
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| Connection string | `url: env:MONGO_URL` or `url: file:/path/to/secret` |
+| Atlas / TLS | Use a `mongodb+srv://` URL with the credentials and TLS options Atlas provides |
+
+### Schema inference
+
+MongoDB has no fixed schema, so **ktx** infers one by sampling the most recent
+`sample_size` documents per collection (default 1000), sorted by `_id`
+descending. Because an ObjectId embeds its creation time, this captures the
+collection's current shape with zero configuration. When `_id` is not an
+ObjectId (custom string or UUID keys), set `order_by` to a timestamp field such
+as `createdAt` so "most recent" is well-defined. A custom `order_by` field
+should be indexed — an unindexed sort hits MongoDB's in-memory sort limit and
+fails on large collections (`_id`, the default, is always indexed).
+
+For each top-level field, **ktx** unions the BSON types seen and derives
+nullability from how often the field is present:
+
+- Scalar BSON types map to `string`, `number`, `time`, or `boolean`
+- A field seen with more than one type is recorded as `mixed` and treated as a string
+- Sub-documents and arrays become a single opaque `json` column (no dotted-path
+  columns); their sampled values are stringified, not faithfully serialized
+- `_id` is the primary key
+
+### Features
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Collections (as tables) | Yes | Via `listCollections`; `system.*` collections are excluded |
+| Primary keys | Yes | `_id` |
+| Foreign keys | No | MongoDB has no formal foreign keys |
+| Row count estimates | Yes | Via `estimatedDocumentCount` |
+| Column statistics | No | - |
+| Query history | No | - |
+| Table sampling | Yes | Reads the most recent documents |
+| Nested analysis | Yes | Sub-documents and arrays modeled as opaque `json` |
+| Read-only SQL (`ktx sql`) | No | MongoDB is not a SQL source |
+
+### Dialect notes
+
+- Strictly read-only: the connector only issues `find`, `listCollections`,
+  `estimatedDocumentCount`, and read aggregations
+- Sampling rides the `_id` index and uses a server-side time limit so large
+  collections do not stall a run; a custom `order_by` must be indexed for the
+  same guarantee
+- `sample_size` trades inference coverage for speed; raise it for collections
+  with highly variable documents
 
 ## Common errors
 
