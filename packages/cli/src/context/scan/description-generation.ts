@@ -775,7 +775,8 @@ export class KtxDescriptionGenerator {
     // a timeout is surfaced as KtxAbortedError so retryAsync does NOT retry it (one
     // wedge stays one timeout, not 3×). Tune via KTX_ENRICH_LLM_TIMEOUT_MS (default
     // 120s) and KTX_ENRICH_LLM_ATTEMPTS (default 3).
-    const enrichTimeoutMs = Number(process.env.KTX_ENRICH_LLM_TIMEOUT_MS ?? 120_000);
+    const rawEnrichTimeoutMs = Number(process.env.KTX_ENRICH_LLM_TIMEOUT_MS);
+    const enrichTimeoutMs = Number.isFinite(rawEnrichTimeoutMs) && rawEnrichTimeoutMs > 0 ? rawEnrichTimeoutMs : 120_000;
     const enrichAttempts = Math.max(1, Number(process.env.KTX_ENRICH_LLM_ATTEMPTS ?? 3) || 3);
     let llmStartedAt = 0;
     let lastTimedOut = false;

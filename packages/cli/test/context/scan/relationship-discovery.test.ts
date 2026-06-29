@@ -402,6 +402,40 @@ describe('production relationship discovery', () => {
     expect(result.relationships.accepted).toBe(0);
   });
 
+  it('does not start the LLM relationship proposal once the budget is exhausted', async () => {
+    executor = new InMemorySqliteExecutor();
+    executor.db.exec(`
+      CREATE TABLE accounts (id INTEGER NOT NULL, name TEXT NOT NULL);
+      CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+      INSERT INTO accounts (id, name) VALUES (1, 'Acme'), (2, 'Globex');
+      INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+    `);
+    let calls = 0;
+    const now = () => calls++ * 1000;
+    const generateObject = vi.fn(async () => ({ pkCandidates: [], fkCandidates: [] }));
+    const runtime: KtxLlmRuntimePort = {
+      generateText: vi.fn(),
+      generateObject: generateObject as KtxLlmRuntimePort['generateObject'],
+      runAgentLoop: vi.fn(),
+      subprocessForkSpec: () => null,
+    };
+
+    const result = await discoverKtxRelationships({
+      connectionId: 'warehouse',
+      dialect: getDialectForDriver('sqlite'),
+      connector: connector(executor),
+      schema: snapshotToKtxEnrichedSchema(snapshot()),
+      context: { runId: 'relationship-budget-llm' },
+      settings: { ...relationshipSettings(), detectionBudgetMs: 1 },
+      llmRuntime: runtime,
+      now,
+    });
+
+    expect(result.partial).toEqual({ reason: 'budget' });
+    expect(result.llmRelationshipValidation).toBe('skipped');
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+
   it('returns a partial result when the scan signal is already aborted', async () => {
     executor = new InMemorySqliteExecutor();
     executor.db.exec(`

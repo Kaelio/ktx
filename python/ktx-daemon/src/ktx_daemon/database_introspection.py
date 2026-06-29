@@ -292,10 +292,14 @@ def _object_introspection_warning(
         )
         if part
     )
+    column = _optional_string(row, "column_name") or _optional_string(
+        row, "from_column"
+    )
     return DatabaseIntrospectionWarning(
         code=OBJECT_INTROSPECTION_FAILED_CODE,
         message=str(error),
         table=name,
+        column=column,
         recoverable=True,
         metadata={"object": label or "object"},
     )
@@ -342,7 +346,8 @@ def _map_rows_to_tables(
                     comment=_optional_string(row, "column_comment"),
                 )
             )
-        except ValueError:
+        except ValueError as error:
+            warnings.append(_object_introspection_warning(row, error))
             continue
 
     for row in rows.foreign_key_rows:
@@ -361,7 +366,8 @@ def _map_rows_to_tables(
                     constraint_name=_optional_string(row, "constraint_name"),
                 )
             )
-        except ValueError:
+        except ValueError as error:
+            warnings.append(_object_introspection_warning(row, error))
             continue
 
     sorted_tables = sorted(

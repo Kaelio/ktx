@@ -258,17 +258,21 @@ export async function discoverKtxRelationships(
       profiles: profile,
     },
   );
-  const llmProposalResult = input.settings.llmProposals
-    ? await proposeKtxRelationshipCandidatesWithLlm({
-        connectionId: input.connectionId,
-        schema: input.schema,
-        profile,
-        llmRuntime: input.llmRuntime ?? null,
-        settings: {
-          maxTablesPerBatch: input.settings.maxLlmTablesPerBatch,
-        },
-      })
-    : { candidates: [], warnings: [], llmCalls: 0, summary: 'skipped' as const };
+  // The LLM proposal is one more unit of relationship work, so it honors the same
+  // budget/abort gate as profiling, validation, and composite probing — a stage
+  // that already exhausted its budget (or was aborted) must not start a fresh call.
+  const llmProposalResult =
+    input.settings.llmProposals && !budget.check()
+      ? await proposeKtxRelationshipCandidatesWithLlm({
+          connectionId: input.connectionId,
+          schema: input.schema,
+          profile,
+          llmRuntime: input.llmRuntime ?? null,
+          settings: {
+            maxTablesPerBatch: input.settings.maxLlmTablesPerBatch,
+          },
+        })
+      : { candidates: [], warnings: [], llmCalls: 0, summary: 'skipped' as const };
   const candidates = mergeKtxRelationshipDiscoveryCandidates([
     ...deterministicCandidates,
     ...llmProposalResult.candidates,

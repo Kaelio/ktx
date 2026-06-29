@@ -38,7 +38,7 @@ function warehouseConnectionSchema<const Driver extends WarehouseDriver>(driver:
         .positive()
         .optional()
         .describe(
-          'Maximum execution time for a single read-only query, in milliseconds (default 30000). Enforced as a server-side statement timeout for remote engines and by terminating the worker thread for in-process SQLite. A query exceeding it is cancelled and returns a "query exceeded Ns" error so the agent can revise.',
+          'Maximum execution time for a single read-only query, in milliseconds (default 30000). Enforced as a server-side statement timeout for remote engines and by SIGKILL-ing a forked query subprocess for in-process SQLite. A query exceeding it is cancelled and returns a "query exceeded Ns" error so the agent can revise.',
         ),
     })
     .describe(
