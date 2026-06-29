@@ -338,6 +338,10 @@ async function searchLocalKnowledgePagesWithSqlite(
     pages.filter((page) => pageMatchesConnection(page.connections, input.connectionId)).map((page) => page.path),
   );
   const allowedPages = pages.filter((page) => allowedPaths.has(page.path));
+  // Scope the lexical/semantic lanes inside the query so their LIMIT applies to
+  // in-scope rows; only narrow when a connection is requested (otherwise every
+  // path is allowed and the filter is a no-op).
+  const scopedPaths = input.connectionId === undefined ? undefined : [...allowedPaths];
   const byPath = new Map(allowedPages.map((page) => [page.path, page]));
   const embeddingService = input.embeddingService ?? null;
   const index = new SqliteKnowledgeIndex({ dbPath: sqliteKnowledgeDbPath(project) });
@@ -369,12 +373,11 @@ async function searchLocalKnowledgePagesWithSqlite(
     {
       lane: 'lexical',
       async generate(args) {
-        const rows = index
-          .searchLexicalCandidates({
-            queryText: args.queryText,
-            limit: args.laneCandidatePoolLimit,
-          })
-          .filter((row) => allowedPaths.has(row.path));
+        const rows = index.searchLexicalCandidates({
+          queryText: args.queryText,
+          limit: args.laneCandidatePoolLimit,
+          allowedPaths: scopedPaths,
+        });
         return {
           candidates: rows.map((row) => ({ id: row.id, rank: row.rank, rawScore: row.rawScore })),
         };
@@ -408,10 +411,11 @@ async function searchLocalKnowledgePagesWithSqlite(
           const rows = index.searchSemanticCandidates({
             queryEmbedding,
             limit: args.laneCandidatePoolLimit,
+            allowedPaths: scopedPaths,
           });
           return {
             candidates: rows
-              .filter((row) => row.rawScore > 0 && allowedPaths.has(row.path))
+              .filter((row) => row.rawScore > 0)
               .map((row, index) => ({ id: row.id, rank: index + 1, rawScore: row.rawScore })),
           };
         } catch (error) {
