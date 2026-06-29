@@ -770,7 +770,7 @@ async function buildMongoConnectionConfig(input: {
     input.args.databaseUrl ??
     (await promptText(
       input.prompts,
-      'MongoDB connection URL\nFor example mongodb+srv://user:pass@cluster.example.net/app.',
+      'MongoDB connection URL\nFor example mongodb+srv://user:pass@cluster.example.net/app.', // pragma: allowlist secret
       stringConfigField(input.existingConnection, 'url'),
     ));
   if (rawUrl === undefined) return 'back';

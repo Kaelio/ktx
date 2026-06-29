@@ -243,6 +243,7 @@ describe('setup databases step', () => {
         { value: 'mysql', label: 'MySQL' },
         { value: 'clickhouse', label: 'ClickHouse' },
         { value: 'sqlserver', label: 'SQL Server' },
+        { value: 'mongodb', label: 'MongoDB' },
         { value: 'sqlite', label: 'SQLite' },
       ],
       required: true,

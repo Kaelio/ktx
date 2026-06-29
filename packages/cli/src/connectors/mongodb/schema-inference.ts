@@ -1,5 +1,5 @@
 import type { KtxSchemaColumn } from '../../context/scan/types.js';
-import { KtxMongoDbDialect } from './dialect.js';
+import type { KtxDialect } from '../../context/connections/dialects.js';
 
 export type KtxMongoDocument = Record<string, unknown>;
 
@@ -82,7 +82,7 @@ function resolveNativeType(types: ReadonlySet<string>): string {
  */
 export function inferKtxMongoCollectionColumns(
   documents: readonly KtxMongoDocument[],
-  dialect: KtxMongoDbDialect,
+  dialect: KtxDialect,
 ): KtxSchemaColumn[] {
   const total = documents.length;
   const order: string[] = [];

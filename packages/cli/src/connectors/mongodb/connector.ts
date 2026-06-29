@@ -17,7 +17,7 @@ import {
   type KtxTableSampleResult,
 } from '../../context/scan/types.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
-import { KtxMongoDbDialect } from './dialect.js';
+import { getDialectForDriver } from '../../context/connections/dialects.js';
 import { inferKtxMongoCollectionColumns, type KtxMongoDocument, MONGO_ID_FIELD } from './schema-inference.js';
 
 const DEFAULT_SAMPLE_SIZE = 1000;
@@ -210,7 +210,7 @@ export class KtxMongoDbScanConnector implements KtxScanConnector {
   private readonly enabledTables: ReadonlySet<string> | null;
   private readonly clientFactory: KtxMongoClientFactory;
   private readonly now: () => Date;
-  private readonly dialect = new KtxMongoDbDialect();
+  private readonly dialect = getDialectForDriver('mongodb');
   private client: KtxMongoClient | null = null;
 
   constructor(options: KtxMongoDbScanConnectorOptions) {

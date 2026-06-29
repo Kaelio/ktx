@@ -9,7 +9,7 @@ import {
 const dialect = new KtxMongoDbDialect();
 
 function objectId(): unknown {
-  return { _bsontype: 'ObjectId', toString: () => '64b7f0c2a1b2c3d4e5f60718' };
+  return { _bsontype: 'ObjectId', toString: () => '64b7f0c2a1b2c3d4e5f60718' }; // pragma: allowlist secret
 }
 
 function decimal128(value: string): unknown {
