@@ -162,7 +162,8 @@ function getShardKey(connectionType: string, catalog: string | null, db: string 
   }
 }
 
-function buildTableRef(name: string, catalog: string | null, db: string | null): string {
+/** @internal */
+export function buildTableRef(name: string, catalog: string | null, db: string | null): string {
   const parts: string[] = [];
   if (catalog) {
     parts.push(catalog);
@@ -273,7 +274,10 @@ export function buildLiveDatabaseManifestShards(
   for (const table of input.tables) {
     const shardKey = getShardKey(input.connectionType, table.catalog, table.db);
     const shard = shards.get(shardKey) ?? { tables: {} };
-    const existingDescriptions = input.existingDescriptions?.get(table.name);
+    // Existing descriptions/usage are keyed by the fully-qualified ref so two
+    // same-named tables in different schemas never share an entry.
+    const fullRef = buildTableRef(table.name, table.catalog, table.db);
+    const existingDescriptions = input.existingDescriptions?.get(fullRef);
 
     const columns: LiveDatabaseManifestColumn[] = table.columns.map((column) => {
       const manifestColumn: LiveDatabaseManifestColumn = {
@@ -297,7 +301,7 @@ export function buildLiveDatabaseManifestShards(
     });
 
     const entry: LiveDatabaseManifestTableEntry = {
-      table: buildTableRef(table.name, table.catalog, table.db),
+      table: fullRef,
       columns,
     };
 
@@ -306,7 +310,7 @@ export function buildLiveDatabaseManifestShards(
       entry.descriptions = tableDescriptions;
     }
 
-    const usage = mergeUsagePreservingExternal(input.existingUsage?.get(table.name), table.usage);
+    const usage = mergeUsagePreservingExternal(input.existingUsage?.get(fullRef), table.usage);
     if (usage) {
       entry.usage = usage;
     }

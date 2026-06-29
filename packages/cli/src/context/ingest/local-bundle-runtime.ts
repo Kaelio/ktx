@@ -478,11 +478,11 @@ function parseKnowledgeIndexPath(file: string): { scope: 'GLOBAL' | 'USER'; page
   const segments = file.split('/');
   if (segments.length === 2 && segments[0] === 'global') {
     const pageKey = segments[1].replace(/\.md$/, '');
-    return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(pageKey) ? { scope: 'GLOBAL', pageKey } : null;
+    return /^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(pageKey) ? { scope: 'GLOBAL', pageKey } : null;
   }
   if (segments.length === 3 && segments[0] === 'user') {
     const pageKey = segments[2].replace(/\.md$/, '');
-    return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(pageKey) ? { scope: 'USER', pageKey } : null;
+    return /^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(pageKey) ? { scope: 'USER', pageKey } : null;
   }
   return null;
 }

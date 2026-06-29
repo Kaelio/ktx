@@ -21,6 +21,7 @@ export interface LocalKnowledgePage {
   tags: string[];
   refs: string[];
   slRefs: string[];
+  connections: string[];
 }
 
 export interface LocalKnowledgeSummary {
@@ -52,6 +53,7 @@ export interface WriteLocalKnowledgePageInput {
   representativeSql?: string;
   usage?: HistoricSqlWikiUsageFrontmatter;
   fingerprints?: string[];
+  connections?: string[];
 }
 
 const LOCAL_AUTHOR = 'ktx';
@@ -73,6 +75,19 @@ function assertSafePathToken(kind: string, value: string): string {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+/** Coerce a YAML scalar or list into a string list — `connections` accepts a single id or a list. */
+function stringList(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return value.trim().length > 0 ? [value] : [];
+  }
+  return stringArray(value);
+}
+
+/** A page applies to `connectionId` when it is unscoped (empty) or lists that id. */
+function pageMatchesConnection(connections: string[], connectionId: string | undefined): boolean {
+  return connectionId === undefined || connections.length === 0 || connections.includes(connectionId);
 }
 
 function knowledgePath(scope: LocalKnowledgeScope, userId: string | undefined, key: string): string {
@@ -104,6 +119,7 @@ function parseKnowledgePage(key: string, path: string, scope: LocalKnowledgeScop
       tags: [],
       refs: [],
       slRefs: [],
+      connections: [],
     };
   }
 
@@ -117,6 +133,7 @@ function parseKnowledgePage(key: string, path: string, scope: LocalKnowledgeScop
     tags: stringArray(frontmatter.tags),
     refs: stringArray(frontmatter.refs),
     slRefs: stringArray(frontmatter.sl_refs),
+    connections: stringList(frontmatter.connections),
   };
 }
 
@@ -133,6 +150,7 @@ function serializeKnowledgePage(input: WriteLocalKnowledgePageInput): string {
     ...(input.representativeSql === undefined ? {} : { representative_sql: input.representativeSql }),
     ...(input.usage === undefined ? {} : { usage: input.usage }),
     ...(input.fingerprints === undefined ? {} : { fingerprints: input.fingerprints }),
+    ...(input.connections === undefined ? {} : { connections: input.connections }),
   };
   return `---\n${YAML.stringify(frontmatter, { indent: 2, lineWidth: 0 }).trimEnd()}\n---\n\n${input.content.trim()}\n`;
 }
@@ -180,7 +198,7 @@ export async function readLocalKnowledgePage(
 
 export async function listLocalKnowledgePages(
   project: KtxLocalProject,
-  input: { userId?: string } = {},
+  input: { userId?: string; connectionId?: string } = {},
 ): Promise<LocalKnowledgeSummary[]> {
   const userId = input.userId ?? 'local';
   const pages: LocalKnowledgeSummary[] = [];
@@ -193,7 +211,7 @@ export async function listLocalKnowledgePages(
         continue;
       }
       const page = await readPageAtPath(project, key, path, scope);
-      if (page) {
+      if (page && pageMatchesConnection(page.connections, input.connectionId)) {
         pages.push({ key, path, scope, summary: page.summary });
       }
     }
@@ -225,6 +243,26 @@ export async function listLocalKnowledgePageKeys(
     }
   }
   return [...keys].sort();
+}
+
+/**
+ * Connection ids referenced by any stored page's `connections` frontmatter,
+ * sorted and deduped. Derived from files; an id here that is not configured in
+ * `ktx.yaml` is a warn-only condition (config and content evolve independently)
+ * and never blocks loading, searching, or reading.
+ */
+export async function listReferencedConnectionIds(
+  project: KtxLocalProject,
+  input: { userId?: string } = {},
+): Promise<string[]> {
+  const pages = await loadAllKnowledgePages(project, { userId: input.userId });
+  const ids = new Set<string>();
+  for (const page of pages) {
+    for (const id of page.connections) {
+      ids.add(id);
+    }
+  }
+  return [...ids].sort();
 }
 
 function scorePage(page: LocalKnowledgePage, terms: string[]): number {
@@ -266,9 +304,12 @@ function tokenLaneCandidates(pages: LocalKnowledgePage[], terms: string[]) {
 
 async function loadAllKnowledgePages(
   project: KtxLocalProject,
-  input: { userId?: string } = {},
+  input: { userId?: string; connectionId?: string } = {},
 ): Promise<LocalKnowledgePage[]> {
-  const summaries = await listLocalKnowledgePages(project, { userId: input.userId });
+  const summaries = await listLocalKnowledgePages(project, {
+    userId: input.userId,
+    connectionId: input.connectionId,
+  });
   const pages: LocalKnowledgePage[] = [];
   for (const summary of summaries) {
     const page = await readPageAtPath(project, summary.key, summary.path, summary.scope);
@@ -281,10 +322,27 @@ async function loadAllKnowledgePages(
 
 async function searchLocalKnowledgePagesWithSqlite(
   project: KtxLocalProject,
-  input: { query: string; userId?: string; embeddingService?: KtxEmbeddingPort | null; limit?: number },
+  input: {
+    query: string;
+    userId?: string;
+    connectionId?: string;
+    embeddingService?: KtxEmbeddingPort | null;
+    limit?: number;
+  },
 ): Promise<LocalKnowledgeSearchResult[]> {
+  // The sqlite index is shared across connections and `index.sync` deletes any
+  // page not in its input, so sync the FULL corpus and apply the connection
+  // filter only to the candidate/result set (`allowedPaths`), never to sync.
   const pages = await loadAllKnowledgePages(project, { userId: input.userId });
-  const byPath = new Map(pages.map((page) => [page.path, page]));
+  const allowedPaths = new Set(
+    pages.filter((page) => pageMatchesConnection(page.connections, input.connectionId)).map((page) => page.path),
+  );
+  const allowedPages = pages.filter((page) => allowedPaths.has(page.path));
+  // Scope the lexical/semantic lanes inside the query so their LIMIT applies to
+  // in-scope rows; only narrow when a connection is requested (otherwise every
+  // path is allowed and the filter is a no-op).
+  const scopedPaths = input.connectionId === undefined ? undefined : [...allowedPaths];
+  const byPath = new Map(allowedPages.map((page) => [page.path, page]));
   const embeddingService = input.embeddingService ?? null;
   const index = new SqliteKnowledgeIndex({ dbPath: sqliteKnowledgeDbPath(project) });
   const existingPages = index.getExistingPages();
@@ -309,7 +367,7 @@ async function searchLocalKnowledgePagesWithSqlite(
 
   index.sync(indexPages);
 
-  const finalLimit = input.limit ?? Math.max(1, indexPages.length);
+  const finalLimit = input.limit ?? Math.max(1, allowedPages.length);
   const core = new HybridSearchCore();
   const generators: SearchCandidateGenerator[] = [
     {
@@ -318,6 +376,7 @@ async function searchLocalKnowledgePagesWithSqlite(
         const rows = index.searchLexicalCandidates({
           queryText: args.queryText,
           limit: args.laneCandidatePoolLimit,
+          allowedPaths: scopedPaths,
         });
         return {
           candidates: rows.map((row) => ({ id: row.id, rank: row.rank, rawScore: row.rawScore })),
@@ -327,7 +386,10 @@ async function searchLocalKnowledgePagesWithSqlite(
     {
       lane: 'token',
       async generate(args) {
-        const rows = tokenLaneCandidates(pages, args.normalizedQuery.terms).slice(0, args.laneCandidatePoolLimit);
+        const rows = tokenLaneCandidates(allowedPages, args.normalizedQuery.terms).slice(
+          0,
+          args.laneCandidatePoolLimit,
+        );
         return {
           candidates: rows.map((row, index) => ({
             id: row.page.path,
@@ -349,6 +411,7 @@ async function searchLocalKnowledgePagesWithSqlite(
           const rows = index.searchSemanticCandidates({
             queryEmbedding,
             limit: args.laneCandidatePoolLimit,
+            allowedPaths: scopedPaths,
           });
           return {
             candidates: rows
@@ -387,14 +450,14 @@ async function searchLocalKnowledgePagesWithSqlite(
 
 async function searchLocalKnowledgePagesWithScan(
   project: KtxLocalProject,
-  input: { query: string; userId?: string; limit?: number },
+  input: { query: string; userId?: string; connectionId?: string; limit?: number },
 ): Promise<LocalKnowledgeSearchResult[]> {
   const terms = input.query
     .toLowerCase()
     .split(/\s+/)
     .map((term) => term.trim())
     .filter(Boolean);
-  const pages = await loadAllKnowledgePages(project, { userId: input.userId });
+  const pages = await loadAllKnowledgePages(project, { userId: input.userId, connectionId: input.connectionId });
   const results: LocalKnowledgeSearchResult[] = [];
   for (const page of pages) {
     const score = scorePage(page, terms);
@@ -416,7 +479,13 @@ async function searchLocalKnowledgePagesWithScan(
 
 export async function searchLocalKnowledgePages(
   project: KtxLocalProject,
-  input: { query: string; userId?: string; embeddingService?: KtxEmbeddingPort | null; limit?: number },
+  input: {
+    query: string;
+    userId?: string;
+    connectionId?: string;
+    embeddingService?: KtxEmbeddingPort | null;
+    limit?: number;
+  },
 ): Promise<LocalKnowledgeSearchResult[]> {
   if (project.config.storage.search === 'sqlite-fts5') {
     return searchLocalKnowledgePagesWithSqlite(project, input);

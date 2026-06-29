@@ -8,6 +8,13 @@ import type { KtxCliIo } from './cli-runtime.js';
 import { createRepainter, initViewState, renderContextBuildView, type ContextBuildTargetState } from './context-build-view.js';
 import { formatDuration } from './demo-metrics.js';
 import type { KtxPublicIngestPlanTarget } from './public-ingest.js';
+import {
+  createLocalProjectVerbatimIngestor,
+  type VerbatimIngestItem,
+  type VerbatimIngestOrigin,
+  type VerbatimIngestorPort,
+  type VerbatimIngestResult,
+} from './verbatim-ingest.js';
 
 export interface KtxTextIngestArgs {
   projectDir: string;
@@ -17,6 +24,8 @@ export interface KtxTextIngestArgs {
   userId: string;
   json: boolean;
   failFast: boolean;
+  /** Code-driven verbatim ingest: store the document body unchanged, LLM derives metadata only. */
+  verbatim?: boolean;
 }
 
 /** @internal */
@@ -29,6 +38,7 @@ export interface TextMemoryIngestPort {
 interface TextIngestItem {
   label: string;
   content: string;
+  origin: VerbatimIngestOrigin;
 }
 
 interface TextIngestResult {
@@ -43,6 +53,7 @@ interface TextIngestResult {
 export interface KtxTextIngestDeps {
   loadProject?: (options: { projectDir: string }) => Promise<KtxLocalProject>;
   createMemoryIngest?: (project: KtxLocalProject) => TextMemoryIngestPort;
+  createVerbatimIngestor?: (project: KtxLocalProject) => VerbatimIngestorPort;
   readFile?: (path: string) => Promise<string>;
   readStdin?: () => Promise<string>;
   now?: () => number;
@@ -53,6 +64,10 @@ const ANSI_ESCAPE_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 
 function defaultCreateMemoryIngest(project: KtxLocalProject): TextMemoryIngestPort {
   return createLocalProjectMemoryIngest(project);
+}
+
+function defaultCreateVerbatimIngestor(project: KtxLocalProject): VerbatimIngestorPort {
+  return createLocalProjectVerbatimIngestor(project);
 }
 
 async function defaultReadStdin(): Promise<string> {
@@ -129,17 +144,17 @@ async function loadItems(args: KtxTextIngestArgs, deps: KtxTextIngestDeps): Prom
   args.texts.forEach((content, index) => {
     const label = textLabel(content, index, usedTextLabels);
     usedTextLabels.add(label);
-    items.push({ label, content });
+    items.push({ label, content, origin: { kind: 'text' } });
   });
 
   const readFile = deps.readFile ?? defaultReadFile;
   const readStdin = deps.readStdin ?? defaultReadStdin;
   for (const file of args.files) {
     if (file === '-') {
-      items.push({ label: stdinLabel(items), content: await readStdin() });
+      items.push({ label: stdinLabel(items), content: await readStdin(), origin: { kind: 'stdin' } });
     } else {
       const path = resolve(file);
-      items.push({ label: basename(path), content: await readFile(path) });
+      items.push({ label: basename(path), content: await readFile(path), origin: { kind: 'file', path } });
     }
   }
 
@@ -175,13 +190,13 @@ function allTargets(state: ReturnType<typeof initViewState>): ContextBuildTarget
   return [...state.primarySources, ...state.contextSources];
 }
 
-function renderTextIngestView(state: ReturnType<typeof initViewState>, styled: boolean): string {
+function renderTextIngestView(state: ReturnType<typeof initViewState>, styled: boolean, verbatim: boolean): string {
   return renderContextBuildView(state, {
     styled,
-    title: 'Ingesting text memory',
-    contextGroupLabel: 'Texts',
-    sourceIngestRunningText: 'capturing...',
-    completedItemName: { singular: 'text', plural: 'texts' },
+    title: verbatim ? 'Writing verbatim pages' : 'Ingesting text memory',
+    contextGroupLabel: verbatim ? 'Documents' : 'Texts',
+    sourceIngestRunningText: verbatim ? 'writing...' : 'capturing...',
+    completedItemName: verbatim ? { singular: 'page', plural: 'pages' } : { singular: 'text', plural: 'texts' },
   });
 }
 
@@ -254,7 +269,9 @@ export async function runKtxTextIngest(
   }
 
   const project = await (deps.loadProject ?? loadKtxProject)({ projectDir: args.projectDir });
-  const memoryIngest = (deps.createMemoryIngest ?? defaultCreateMemoryIngest)(project);
+  const isVerbatim = args.verbatim === true;
+  const verbatimIngestor = isVerbatim ? (deps.createVerbatimIngestor ?? defaultCreateVerbatimIngestor)(project) : null;
+  const memoryIngest = isVerbatim ? null : (deps.createMemoryIngest ?? defaultCreateMemoryIngest)(project);
   const now = deps.now ?? (() => Date.now());
   const batchId = now();
   const state = initViewState(items.map((item) => makeTarget(item.label)));
@@ -264,7 +281,7 @@ export async function runKtxTextIngest(
   const results: TextIngestResult[] = [];
 
   state.startedAt = now();
-  const paint = () => repainter?.paint(renderTextIngestView(state, true));
+  const paint = () => repainter?.paint(renderTextIngestView(state, true, isVerbatim));
   paint();
 
   let spinnerInterval: ReturnType<typeof setInterval> | null = null;
@@ -288,29 +305,50 @@ export async function runKtxTextIngest(
       const target = targets[index]!;
       target.status = 'running';
       target.startedAt = now();
-      target.detailLine = 'capturing...';
+      target.detailLine = isVerbatim ? 'writing...' : 'capturing...';
       target.progressUpdatedAtMs = target.startedAt;
       paint();
 
       let runId: string | null = null;
       let result: TextIngestResult;
       try {
-        const ingestInput: MemoryAgentInput = {
-          userId: args.userId,
-          chatId: `cli-text-ingest-${batchId}-${index + 1}`,
-          userMessage: `Ingest external text artifact ${artifactReference(item.label)} into ktx memory.`,
-          assistantMessage: item.content.trim(),
-          ...(args.connectionId ? { connectionId: args.connectionId } : {}),
-          sourceType: 'external_ingest',
-        };
-        const ingest = await memoryIngest.ingest(ingestInput);
-        runId = ingest.runId;
-        await memoryIngest.waitForRun(runId);
-        const status = await memoryIngest.status(runId);
-        if (!status) {
-          throw new Error(`Memory ingest run "${runId}" was not found.`);
+        if (verbatimIngestor) {
+          const verbatimItem: VerbatimIngestItem = {
+            origin: item.origin,
+            content: item.content,
+            ...(args.connectionId ? { connectionId: args.connectionId } : {}),
+          };
+          const outcome: VerbatimIngestResult = await verbatimIngestor.ingest(verbatimItem);
+          result = {
+            label: item.label,
+            runId: null,
+            status: 'done',
+            captured: { wiki: [outcome.pageKey], sl: [], xrefs: [] },
+            commitHash: outcome.commitHash,
+            error: null,
+          };
+        } else {
+          // memoryIngest is set whenever verbatim is off — they are mutually exclusive.
+          if (!memoryIngest) {
+            throw new Error('Memory ingest was not initialized.');
+          }
+          const ingestInput: MemoryAgentInput = {
+            userId: args.userId,
+            chatId: `cli-text-ingest-${batchId}-${index + 1}`,
+            userMessage: `Ingest external text artifact ${artifactReference(item.label)} into ktx memory.`,
+            assistantMessage: item.content.trim(),
+            ...(args.connectionId ? { connectionId: args.connectionId } : {}),
+            sourceType: 'external_ingest',
+          };
+          const ingest = await memoryIngest.ingest(ingestInput);
+          runId = ingest.runId;
+          await memoryIngest.waitForRun(runId);
+          const status = await memoryIngest.status(runId);
+          if (!status) {
+            throw new Error(`Memory ingest run "${runId}" was not found.`);
+          }
+          result = resultFromStatus(item.label, status);
         }
-        result = resultFromStatus(item.label, status);
       } catch (error) {
         result = errorResult(item.label, runId, error);
       }
@@ -340,17 +378,18 @@ export async function runKtxTextIngest(
   if (args.json) {
     writeJsonResult(args, results, io);
   } else if (repainter) {
-    repainter.paint(renderTextIngestView(state, true));
+    repainter.paint(renderTextIngestView(state, true, isVerbatim));
     writePlainFailures(results, io);
   } else {
-    io.stdout.write(renderTextIngestView(state, false));
+    io.stdout.write(renderTextIngestView(state, false, isVerbatim));
     writePlainFailures(results, io);
   }
 
   if (!args.json && results.length > 0) {
     const duration = state.totalElapsedMs > 0 ? ` in ${formatDuration(state.totalElapsedMs)}` : '';
     const outcome = results.some((result) => result.status === 'error') ? 'finished with failures' : 'finished';
-    io.stdout.write(`Text memory ingest ${outcome}${duration}.\n`);
+    const label = isVerbatim ? 'Verbatim ingest' : 'Text memory ingest';
+    io.stdout.write(`${label} ${outcome}${duration}.\n`);
   }
 
   return results.some((result) => result.status === 'error') ? 1 : 0;

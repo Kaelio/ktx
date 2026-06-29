@@ -1,4 +1,4 @@
-import type { KtxDialect } from '../../context/connections/dialects.js';
+import type { KtxSqlDialect } from '../../context/connections/dialects.js';
 import {
   columnDisplayPartCount,
   formatDialectDisplayRef,
@@ -11,7 +11,7 @@ import type { KtxSchemaDimensionType, KtxTableRef } from '../../context/scan/typ
 type SnowflakeTableNameRef = Pick<KtxTableRef, 'name'> & Partial<Pick<KtxTableRef, 'catalog' | 'db'>>;
 
 /** @internal */
-export class KtxSnowflakeDialect implements KtxDialect {
+export class KtxSnowflakeDialect implements KtxSqlDialect {
   readonly type = 'snowflake' as const;
 
   private readonly typeMappings: Record<string, KtxSchemaDimensionType> = {

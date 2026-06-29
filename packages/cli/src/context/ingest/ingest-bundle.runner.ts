@@ -1081,6 +1081,7 @@ export class IngestBundleRunner {
       skillsPrompt: input.skillsPrompt,
       syncId: input.syncId,
       sourceKey: input.job.sourceKey,
+      connectionId: input.job.connectionId,
       canonicalPins: input.canonicalPins,
     });
 

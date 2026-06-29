@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getDialectForDriver } from '../../../src/context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../../src/context/connections/dialects.js';
 import type { KtxEnrichedColumn, KtxEnrichedSchema, KtxEnrichedTable } from '../../../src/context/scan/enrichment-types.js';
 import { snapshotToKtxEnrichedSchema } from '../../../src/context/scan/local-enrichment.js';
 import { loadKtxRelationshipBenchmarkFixture, maskKtxRelationshipBenchmarkSnapshot } from '../../../src/context/scan/relationship-benchmarks.js';
@@ -121,7 +121,8 @@ describe('relationship profiling', () => {
 
     const result = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: schema([
         table('accounts', [
           column('accounts', 'id', { primaryKey: false, nullable: false }),
@@ -183,7 +184,8 @@ describe('relationship profiling', () => {
 
     const result = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: schema([
         table('accounts', [
           column('accounts', 'id', { nullable: false }),
@@ -226,7 +228,8 @@ describe('relationship profiling', () => {
 
     const profiles = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: schema([
         table('accounts', [
           column('accounts', 'id', { nullable: false }),
@@ -277,7 +280,8 @@ describe('relationship profiling', () => {
 
     const first = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: relationshipSchema,
       executor,
       ctx: { runId: 'profile-cache-run' },
@@ -285,7 +289,8 @@ describe('relationship profiling', () => {
     });
     const second = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: relationshipSchema,
       executor,
       ctx: { runId: 'profile-cache-run' },
@@ -293,7 +298,8 @@ describe('relationship profiling', () => {
     });
     const third = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: relationshipSchema,
       executor,
       ctx: { runId: 'profile-cache-fresh-run' },
@@ -322,7 +328,8 @@ describe('relationship profiling', () => {
     try {
       const result = await profileKtxRelationshipSchema({
         connectionId: fixture.snapshot.connectionId,
-        dialect: getDialectForDriver(fixture.snapshot.driver),
+        driver: fixture.snapshot.driver,
+        dialect: getSqlDialectForDriver(fixture.snapshot.driver),
         schema: snapshotToKtxEnrichedSchema(maskedSnapshot, new Map()),
         executor: scaleExecutor,
         ctx: { runId: 'scale-stress-profile-query-count' },
@@ -367,7 +374,8 @@ describe('relationship profiling', () => {
 
     await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: schemaWithTables(['accounts', 'orders', 'payments', 'refunds']),
       executor,
       ctx: { runId: 'profile-concurrency' },
@@ -403,7 +411,8 @@ describe('relationship profiling', () => {
 
     const result = await profileKtxRelationshipSchema({
       connectionId: 'warehouse',
-      dialect: getDialectForDriver('sqlite'),
+      driver: 'sqlite',
+      dialect: getSqlDialectForDriver('sqlite'),
       schema: schemaWithTables(['accounts', 'orders']),
       executor,
       ctx: { runId: 'profile-error-isolated' },

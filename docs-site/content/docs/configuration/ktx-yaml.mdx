@@ -124,8 +124,10 @@ context-source drivers share the map.
 
 Warehouse connections are open objects: the listed fields are validated, and
 any other field is preserved and passed through to the connector. Use
-`enabled_tables` to scope ingest to a specific list of
-`schema.table` names - useful for smoke tests.
+`enabled_tables` to scope ingest to a specific list of objects - useful for
+smoke tests. Each entry accepts a `catalog.db.name`, `db.name`, or bare `name`
+qualifier. ktx restricts the scan to the listed objects and fails with a clear
+error (naming the available objects) if none match.
 
 ```yaml
 connections:
@@ -135,6 +137,18 @@ connections:
     enabled_tables:
       - public.orders
       - public.customers
+```
+
+For SQLite, which exposes a single `main` schema, the qualified `main.<name>`
+and the bare `<name>` forms select the same object:
+
+```yaml
+connections:
+  local-db:
+    driver: sqlite
+    path: ./warehouse.db
+    enabled_tables:
+      - customers # equivalent to main.customers
 ```
 
 Connector-specific scope fields let setup and scan use the same warehouse
@@ -157,6 +171,12 @@ connections:
     location: US
     dataset_ids: [analytics, mart]
 ```
+
+A BigQuery `dataset_ids` / `dataset_id` entry may be written `project.dataset`
+to introspect a dataset hosted in another project (for example
+`bigquery-public-data.austin_311`); jobs still bill to the `project_id` in
+`credentials_json`. A bare `dataset` keeps using your own project. See
+[Primary sources → BigQuery](/docs/integrations/primary-sources#cross-project-datasets).
 
 For Postgres, MySQL, SQL Server, and Snowflake connections, set
 `maxConnections` when scan or ingest work needs to stay below the target's
@@ -554,6 +574,7 @@ scan:
     profileConcurrency: 4
     validationConcurrency: 4
     validationBudget: all
+    detectionBudgetMs: 600000
 ```
 
 ### Enrichment
@@ -582,6 +603,7 @@ the manifest.
 | `relationships.profileConcurrency` | `int > 0` | `4` | Parallel relationship-profile queries against the database. For pooled connectors, effective database concurrency is also bounded by the connection's `maxConnections`. |
 | `relationships.validationConcurrency` | `int > 0` | `4` | Parallel relationship validation queries against the database. |
 | `relationships.validationBudget` | `all` \| `int ≥ 0` | runtime default | Cap on validation queries per scan. `all` means unlimited. |
+| `relationships.detectionBudgetMs` | `int > 0` | `600000` | Wall-clock budget (ms) for the whole relationship-detection stage, checked at table-profile, candidate-validation, and composite-probe boundaries. On exhaustion the stage stops scheduling new work and writes the joins found so far, marked partial; descriptions and embeddings are already durable. Sits above the per-query deadline. Raise it to trigger a fresher, fuller run. |
 
 ## `agent`
 

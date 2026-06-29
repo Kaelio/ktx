@@ -1,4 +1,4 @@
-const FLAT_WIKI_KEY_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+const FLAT_WIKI_KEY_PATTERN = /^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/;
 
 export function suggestFlatWikiKey(key: string): string {
   const suggested = key

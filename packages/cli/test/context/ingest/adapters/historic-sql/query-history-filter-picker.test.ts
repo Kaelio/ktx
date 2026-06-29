@@ -91,6 +91,7 @@ function llm(decisions: Array<{ role: string; exclude: boolean; reason: string }
     generateText: vi.fn(),
     generateObject,
     runAgentLoop: vi.fn(),
+    subprocessForkSpec: () => null,
   };
 }
 

@@ -1,0 +1,14 @@
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      # Non-default host port so the example does not clash with a local MongoDB.
+      - "27117:27017"
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" | grep -q 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      # MongoDB runs *.js here once, on first start, against an empty data dir.
+      - ./init:/docker-entrypoint-initdb.d:ro

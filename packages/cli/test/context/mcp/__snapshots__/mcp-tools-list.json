@@ -63,7 +63,7 @@
   {
     "name": "wiki_search",
     "title": "Wiki Search",
-    "description": "Search ktx wiki pages for reusable business context. Example: wiki_search({ query: \"revenue recognition\", limit: 5 }).",
+    "description": "Search ktx wiki pages for reusable business context. Pass connectionId to scope results to one warehouse (unscoped pages plus pages tagged with that connection) when a concept name collides across databases. Example: wiki_search({ query: \"revenue recognition\", connectionId: \"warehouse\", limit: 5 }).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -78,6 +78,11 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 50
+        },
+        "connectionId": {
+          "description": "Scope results to one connection: returns unscoped pages plus pages tagged with this connection. Omit to search all pages.",
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -1472,6 +1477,55 @@
     "annotations": {
       "title": "SQL Execution",
       "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "sql_dialect_notes",
+    "title": "SQL Dialect Notes",
+    "description": "Return the SQL syntax conventions for the dialect of a ktx connection: fully-qualified table-name form, identifier quoting and case-folding, date/time functions, top-N / window-filtering idiom, and JSON access. Call this before writing raw sql_execution SQL against a connection so the SQL matches that engine. Example: sql_dialect_notes({ connectionId: \"warehouse\" }).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "connectionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Connection id whose engine dialect conventions to return."
+        }
+      },
+      "required": [
+        "connectionId"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "connectionId": {
+          "type": "string"
+        },
+        "dialect": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "connectionId",
+        "dialect",
+        "notes"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "SQL Dialect Notes",
+      "readOnlyHint": true,
+      "idempotentHint": true,
       "openWorldHint": false
     },
     "execution": {

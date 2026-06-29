@@ -27,6 +27,7 @@ export function registerWikiCommands(program: Command, context: KtxCliCommandCon
     .usage('[options] [query...]')
     .argument('[query...]', 'Search query; omit to list all pages')
     .option('--user-id <id>', 'Local user id', 'local')
+    .option('-c, --connection <id>', 'Scope results to one connection (unscoped pages plus pages tagged with it)')
     .option('--limit <number>', 'Maximum search results (search mode only)', parsePositiveIntegerOption)
     .addOption(
       new Option('--output <mode>', 'Output mode: pretty (default in TTY), plain (TSV), or json').choices([
@@ -46,6 +47,7 @@ export function registerWikiCommands(program: Command, context: KtxCliCommandCon
         query: string[],
         options: {
           userId: string;
+          connection?: string;
           limit?: number;
           output?: 'pretty' | 'plain' | 'json';
           json?: boolean;
@@ -57,6 +59,7 @@ export function registerWikiCommands(program: Command, context: KtxCliCommandCon
             command: 'list',
             projectDir: resolveCommandProjectDir(command),
             userId: options.userId,
+            ...(options.connection !== undefined ? { connectionId: options.connection } : {}),
             output: options.output,
             json: options.json,
             cliVersion: context.packageInfo.version,
@@ -68,6 +71,7 @@ export function registerWikiCommands(program: Command, context: KtxCliCommandCon
           projectDir: resolveCommandProjectDir(command),
           query: query.join(' '),
           userId: options.userId,
+          ...(options.connection !== undefined ? { connectionId: options.connection } : {}),
           output: options.output,
           json: options.json,
           ...(isDebugEnabled(command) ? { debug: true } : {}),

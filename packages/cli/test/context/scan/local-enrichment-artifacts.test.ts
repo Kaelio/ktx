@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import YAML from 'yaml';
 import { initKtxProject, type KtxLocalProject } from '../../../src/context/project/project.js';
 import type { KtxLocalScanEnrichmentResult } from '../../../src/context/scan/local-enrichment.js';
-import { writeLocalScanEnrichmentArtifacts, writeLocalScanManifestShards } from '../../../src/context/scan/local-enrichment-artifacts.js';
+import {
+  loadOnDiskDescriptionUpdates,
+  writeLocalScanEnrichmentArtifacts,
+  writeLocalScanManifestShards,
+} from '../../../src/context/scan/local-enrichment-artifacts.js';
 import type { KtxSchemaSnapshot } from '../../../src/context/scan/types.js';
 
 const snapshot: KtxSchemaSnapshot = {
@@ -220,6 +224,7 @@ function enrichment(): KtxLocalScanEnrichmentResult {
       },
     ],
     compositeRelationships: null,
+    relationshipPartial: null,
   };
 }
 
@@ -236,6 +241,86 @@ describe('writeLocalScanEnrichmentArtifacts', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('scopes manifest descriptions by full table identity across same-named tables in different schemas', async () => {
+    const multiSchemaSnapshot: KtxSchemaSnapshot = {
+      connectionId: 'warehouse',
+      driver: 'postgres',
+      extractedAt: '2026-04-29T12:00:00.000Z',
+      scope: { schemas: ['analytics', 'staging'] },
+      metadata: {},
+      tables: ['analytics', 'staging'].map((schema) => ({
+        catalog: null,
+        db: schema,
+        name: 'orders',
+        kind: 'table',
+        comment: null,
+        estimatedRows: 1,
+        foreignKeys: [],
+        columns: [
+          {
+            name: 'id',
+            nativeType: 'integer',
+            normalizedType: 'integer',
+            dimensionType: 'number',
+            nullable: false,
+            primaryKey: true,
+            comment: null,
+          },
+        ],
+      })),
+    };
+    const descriptionUpdates = [
+      {
+        table: { catalog: null, db: 'analytics', name: 'orders' },
+        tableDescription: 'Curated analytics orders',
+        columnDescriptions: { id: 'Analytics order id' },
+      },
+      {
+        table: { catalog: null, db: 'staging', name: 'orders' },
+        tableDescription: 'Raw staging orders',
+        columnDescriptions: { id: 'Staging order id' },
+      },
+    ];
+
+    await writeLocalScanManifestShards({
+      project,
+      connectionId: 'warehouse',
+      syncId: 'sync-multi',
+      driver: 'postgres',
+      snapshot: multiSchemaSnapshot,
+      descriptionUpdates,
+      dryRun: false,
+    });
+
+    type Shard = {
+      tables: Record<
+        string,
+        { descriptions?: Record<string, string>; columns: Array<{ name: string; descriptions?: Record<string, string> }> }
+      >;
+    };
+    const analyticsShard = YAML.parse(
+      await readFile(join(project.projectDir, 'semantic-layer/warehouse/_schema/analytics.yaml'), 'utf-8'),
+    ) as Shard;
+    const stagingShard = YAML.parse(
+      await readFile(join(project.projectDir, 'semantic-layer/warehouse/_schema/staging.yaml'), 'utf-8'),
+    ) as Shard;
+
+    expect(analyticsShard.tables.orders?.descriptions?.ai).toBe('Curated analytics orders');
+    expect(stagingShard.tables.orders?.descriptions?.ai).toBe('Raw staging orders');
+    expect(analyticsShard.tables.orders?.columns[0]?.descriptions?.ai).toBe('Analytics order id');
+    expect(stagingShard.tables.orders?.columns[0]?.descriptions?.ai).toBe('Staging order id');
+
+    // The on-disk reconstruction (used by selective `--stages` runs that skip the
+    // descriptions stage) must also resolve per identity, not collapse names.
+    const reconstructed = await loadOnDiskDescriptionUpdates(project, 'warehouse', multiSchemaSnapshot);
+    const analytics = reconstructed.find((update) => update.table.db === 'analytics');
+    const staging = reconstructed.find((update) => update.table.db === 'staging');
+    expect(analytics?.tableDescription).toBe('Curated analytics orders');
+    expect(staging?.tableDescription).toBe('Raw staging orders');
+    expect(analytics?.columnDescriptions.id).toBe('Analytics order id');
+    expect(staging?.columnDescriptions.id).toBe('Staging order id');
   });
 
   it('writes enrichment artifacts and manifest shards while preserving external descriptions', async () => {
@@ -291,6 +376,7 @@ describe('writeLocalScanEnrichmentArtifacts', () => {
         profileSampleRows: 500,
         profileConcurrency: 3,
         validationConcurrency: 2,
+        detectionBudgetMs: 600000,
       },
     });
 
@@ -476,6 +562,7 @@ describe('writeLocalScanEnrichmentArtifacts', () => {
         profileSampleRows: 10000,
         profileConcurrency: 4,
         validationConcurrency: 4,
+        detectionBudgetMs: 600000,
       },
       dryRun: false,
     });
@@ -746,6 +833,7 @@ describe('writeLocalScanEnrichmentArtifacts', () => {
         profileSampleRows: 10000,
         profileConcurrency: 4,
         validationConcurrency: 4,
+        detectionBudgetMs: 600000,
       },
       dryRun: false,
     });

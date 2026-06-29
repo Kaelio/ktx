@@ -26,14 +26,16 @@ export function buildWuSystemPrompt(params: {
   skillsPrompt: string;
   syncId: string;
   sourceKey: string;
+  connectionId?: string;
   canonicalPins?: CanonicalPin[];
 }): string {
+  const connectionLine = params.connectionId ? `\nconnectionId: ${params.connectionId}` : '';
   const parts = [
     params.baseFraming.trimEnd(),
     VERIFICATION_LEDGER_PROMPT,
     params.skillsPrompt.trimEnd(),
     buildCanonicalPinsPromptBlock(params.canonicalPins ?? []),
-    `\n<context>\nsyncId: ${params.syncId}\nsource: ${params.sourceKey}\n</context>`,
+    `\n<context>\nsyncId: ${params.syncId}\nsource: ${params.sourceKey}${connectionLine}\n</context>`,
   ];
   return parts.filter(Boolean).join('\n');
 }

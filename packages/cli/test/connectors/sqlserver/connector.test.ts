@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { KtxQueryError } from '../../../src/errors.js';
 import { createSqlServerLiveDatabaseIntrospection } from '../../../src/connectors/sqlserver/live-database-introspection.js';
 import { isKtxSqlServerConnectionConfig, KtxSqlServerScanConnector, prepareSqlServerReadOnlyQuery, sqlServerConnectionPoolConfigFromConfig, type KtxSqlServerConnectionConfig, type KtxSqlServerPoolFactory, type KtxSqlServerQueryResult } from '../../../src/connectors/sqlserver/connector.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
@@ -402,6 +403,52 @@ describe('KtxSqlServerScanConnector', () => {
     ).resolves.toBeNull();
 
     await connector.cleanup();
+  });
+
+  it('sets requestTimeout to the resolved deadline and maps an ETIMEOUT to KtxQueryError', async () => {
+    expect(
+      sqlServerConnectionPoolConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'sqlserver',
+          host: 'db.example.test',
+          database: 'analytics',
+          username: 'reader',
+          query_timeout_ms: 5_000,
+        },
+      }),
+    ).toMatchObject({ requestTimeout: 5_000 });
+
+    const timeoutError = Object.assign(new Error('Timeout: Request failed to complete in 5000ms'), { code: 'ETIMEOUT' });
+    const poolFactory: KtxSqlServerPoolFactory = {
+      createPool: vi.fn(async () => {
+        const request = {
+          input: vi.fn(() => request),
+          query: vi.fn(async () => {
+            throw timeoutError;
+          }),
+        };
+        return { request: () => request, close: vi.fn(async () => undefined) };
+      }),
+    };
+    const connector = new KtxSqlServerScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'sqlserver',
+        host: 'db.example.test',
+        database: 'analytics',
+        username: 'reader',
+        query_timeout_ms: 5_000,
+      },
+      poolFactory,
+    });
+
+    const execution = connector.executeReadOnly(
+      { connectionId: 'warehouse', sql: 'select count(*) from dbo.orders' },
+      { runId: 'scan-run-1' },
+    );
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('query exceeded 5s');
   });
 
   it('hoists leading CTEs before applying the SQL Server TOP wrapper', async () => {

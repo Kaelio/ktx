@@ -91,6 +91,7 @@ describe('createLocalBundleIngestRuntime', () => {
       generateText: vi.fn(),
       generateObject: vi.fn(),
       runAgentLoop: vi.fn(async () => ({ stopReason: 'natural' as const })),
+      subprocessForkSpec: vi.fn(() => null),
     };
     project.config.llm = {
       provider: { backend: 'claude-code' },

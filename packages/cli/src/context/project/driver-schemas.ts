@@ -30,7 +30,15 @@ function warehouseConnectionSchema<const Driver extends WarehouseDriver>(driver:
         .array(z.string().min(1))
         .optional()
         .describe(
-          'Optional allowlist of fully-qualified table names ("schema.table") to ingest. When set, live-database ingest discards any table whose schema-qualified name is not in this list. Useful for smoke-testing ingest on a single table.',
+          'Optional allowlist of object names to ingest. Accepted forms: "catalog.db.name", "db.name" (schema-qualified), or bare "name". When set, live-database ingest restricts the scan to the listed objects and fails with a clear error if none match. For SQLite, "main.<name>" and the bare "<name>" are equivalent (SQLite exposes a single "main" schema). Useful for smoke-testing ingest on a single table.',
+        ),
+      query_timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'Maximum execution time for a single read-only query, in milliseconds (default 30000). Enforced as a server-side statement timeout for remote engines and by SIGKILL-ing a forked query subprocess for in-process SQLite. A query exceeding it is cancelled and returns a "query exceeded Ns" error so the agent can revise.',
         ),
     })
     .describe(
@@ -47,6 +55,41 @@ const warehouseConnectionSchemas = [
   warehouseConnectionSchema('clickhouse'),
   warehouseConnectionSchema('sqlserver'),
 ] as const;
+
+const mongodbConnectionSchema = z
+  .looseObject({
+    driver: z.literal('mongodb'),
+    url: z
+      .string()
+      .min(1)
+      .describe(
+        'MongoDB connection string (mongodb:// or mongodb+srv://, including TLS/Atlas); may contain a reference like env:MONGO_URL.',
+      ),
+    database: z.string().min(1).optional().describe('Single database to introspect when not using databases or a URL path.'),
+    databases: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Databases whose collections ktx introspects as tables. Falls back to the URL path database.'),
+    enabled_tables: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Optional allowlist of "database.collection" names to introspect.'),
+    sample_size: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('How many recent documents to sample per collection when inferring the schema (default 1000).'),
+    order_by: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Field to sort by descending when sampling. Defaults to _id; set this when _id is not an ObjectId. ' +
+          'Should be indexed — an unindexed sort hits MongoDB\'s in-memory sort limit on large collections.',
+      ),
+  })
+  .describe('MongoDB primary-source connection. Schema is inferred by sampling the most recent documents.');
 
 const positiveIntKeyMessage = (field: string) => `${field} keys must be positive-integer strings (e.g. "1", "42")`;
 
@@ -168,6 +211,18 @@ const notionConnectionSchema = z
   })
   .describe('Notion context-source connection.');
 
+const gdriveConnectionSchema = z
+  .looseObject({
+    driver: z.literal('gdrive'),
+    service_account_key_ref: z
+      .string()
+      .min(1)
+      .describe('Reference to a Google service-account JSON key file. Must use file:/absolute/path/to/key.json.'),
+    folder_id: z.string().min(1).describe('Google Drive folder ID to ingest.'),
+    recursive: z.boolean().optional().describe('When true, recursively traverse subfolders beneath folder_id.'),
+  })
+  .describe('Google Drive Google Docs context-source connection.');
+
 const dbtConnectionSchema = z
   .looseObject({
     driver: z.literal('dbt'),
@@ -198,10 +253,12 @@ const metricflowConnectionSchema = z
 
 export const connectionConfigSchema = z.discriminatedUnion('driver', [
   ...warehouseConnectionSchemas,
+  mongodbConnectionSchema,
   metabaseConnectionSchema,
   lookerConnectionSchema,
   lookmlConnectionSchema,
   notionConnectionSchema,
+  gdriveConnectionSchema,
   dbtConnectionSchema,
   metricflowConnectionSchema,
 ]);

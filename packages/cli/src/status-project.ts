@@ -9,6 +9,7 @@ import { runCodexAuthProbe } from './context/llm/codex-runtime.js';
 import type { KtxConfigIssue, KtxProjectConfig, KtxProjectConnectionConfig, KtxProjectEmbeddingConfig, KtxProjectLlmConfig } from './context/project/config.js';
 import type { KtxLocalProject } from './context/project/project.js';
 import { ktxLocalStateDbPath } from './context/project/local-state-db.js';
+import { listReferencedConnectionIds } from './context/wiki/local-knowledge.js';
 import {
   isQueryHistoryEnabled,
   queryHistoryDialectForConnection,
@@ -109,6 +110,7 @@ interface LocalStatsIngestPerConnection {
   connectionId: string;
   adapter: string;
   lastCompletedAt: string;
+  skippedObjects: Array<{ name: string; reason: string }>;
 }
 
 interface LocalStatsSemanticLayerEntry {
@@ -581,6 +583,29 @@ function buildStorageStatus(config: KtxProjectConfig): StorageStatus {
   };
 }
 
+/**
+ * Warn (never fail) when stored wiki pages reference connection ids that are no
+ * longer in `ktx.yaml`. Config and page content evolve independently, so a
+ * dangling reference is a soft condition — the pages still load, search, and
+ * read; it just signals a typo or a removed connection.
+ */
+async function buildUnknownConnectionWarning(project: KtxLocalProject): Promise<WarningItem | null> {
+  let referenced: string[];
+  try {
+    referenced = await listReferencedConnectionIds(project);
+  } catch {
+    return null;
+  }
+  const unknown = referenced.filter((id) => !Object.hasOwn(project.config.connections, id));
+  if (unknown.length === 0) {
+    return null;
+  }
+  return {
+    message: `Wiki pages reference connection id(s) not in ktx.yaml: ${unknown.join(', ')}. Those pages still load and search.`,
+    fix: 'Add the connection(s) via `ktx setup`, or update the pages’ `connections` frontmatter.',
+  };
+}
+
 function buildWarnings(
   config: KtxProjectConfig,
   connections: ConnectionStatus[],
@@ -782,6 +807,20 @@ function tryQuery<T>(run: () => T, fallback: T): T {
   }
 }
 
+function skippedObjectsFromReportBody(bodyJson: string): Array<{ name: string; reason: string }> {
+  try {
+    const body = JSON.parse(bodyJson) as { fetch?: { skipped?: Array<{ entityId?: unknown; message?: unknown }> } };
+    const skipped = body.fetch?.skipped;
+    if (!Array.isArray(skipped)) return [];
+    return skipped.map((issue) => ({
+      name: typeof issue.entityId === 'string' && issue.entityId.length > 0 ? issue.entityId : 'object',
+      reason: typeof issue.message === 'string' ? issue.message : 'introspection failed',
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** @internal */
 export async function buildLocalStatsStatus(project: KtxLocalProject): Promise<LocalStatsStatus> {
   const dbPath = ktxLocalStateDbPath(project);
@@ -819,17 +858,19 @@ export async function buildLocalStatsStatus(project: KtxLocalProject): Promise<L
       0,
     );
 
+    type IngestStatsRow = { connection_id: string; adapter: string; last_completed_at: string; body_json: string };
     const ingestRows = tryQuery(
       () =>
+        // SQLite returns body_json from the MAX(completed_at) row for each group.
         db
           .prepare(
-            `SELECT connection_id, adapter, MAX(completed_at) AS last_completed_at
+            `SELECT connection_id, adapter, MAX(completed_at) AS last_completed_at, body_json
              FROM local_ingest_reports
              WHERE status = 'done'
              GROUP BY connection_id, adapter`,
           )
-          .all() as Array<{ connection_id: string; adapter: string; last_completed_at: string }>,
-      [] as Array<{ connection_id: string; adapter: string; last_completed_at: string }>,
+          .all() as IngestStatsRow[],
+      [] as IngestStatsRow[],
     );
     const perConnectionMap = new Map<string, LocalStatsIngestPerConnection>();
     for (const row of ingestRows) {
@@ -839,6 +880,7 @@ export async function buildLocalStatsStatus(project: KtxLocalProject): Promise<L
           connectionId: row.connection_id,
           adapter: row.adapter,
           lastCompletedAt: row.last_completed_at,
+          skippedObjects: skippedObjectsFromReportBody(row.body_json),
         });
       }
     }
@@ -953,6 +995,10 @@ export async function buildProjectStatus(project: KtxLocalProject, options: Buil
   const queryHistory = await buildQueryHistoryStatus(project, options);
   const pipeline = buildPipelineStatus(config);
   const warnings = buildWarnings(config, connections, llm, embeddings);
+  const unknownConnectionWarning = await buildUnknownConnectionWarning(project);
+  if (unknownConnectionWarning) {
+    warnings.push(unknownConnectionWarning);
+  }
   const localStats = await buildLocalStatsStatus(project);
   const { verdict, reason, nextActions } = buildVerdict(llm, embeddings, connections, queryHistory, warnings);
 
@@ -1084,6 +1130,14 @@ function renderLocalStats(
       lines.push(
         `      ${entry.connectionId.padEnd(nameWidth)}   ${dim(entry.adapter.padEnd(adapterWidth))}   ${dim(`last ${formatRelativeFromNow(entry.lastCompletedAt)}`)}`,
       );
+      if (entry.skippedObjects.length > 0) {
+        const first = entry.skippedObjects[0]!;
+        const extra = entry.skippedObjects.length - 1;
+        const detail = `${first.name}: ${first.reason}${extra > 0 ? ` (+${extra} more)` : ''}`;
+        lines.push(
+          `      ${' '.repeat(nameWidth)}   ${dim(`${entry.skippedObjects.length} object${entry.skippedObjects.length === 1 ? '' : 's'} skipped — ${detail}`)}`,
+        );
+      }
     }
   }
 

@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { initKtxProject, loadKtxProject } from '../src/context/project/project.js';
+import { serializeKtxProjectConfig } from '../src/context/project/config.js';
 import type { KtxEmbeddingPort } from '../src/context/core/embedding.js';
-import { writeLocalKnowledgePage } from '../src/context/wiki/local-knowledge.js';
+import { searchLocalKnowledgePages, writeLocalKnowledgePage } from '../src/context/wiki/local-knowledge.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runKtxKnowledge } from '../src/knowledge.js';
 
@@ -96,6 +97,118 @@ describe('runKtxKnowledge', () => {
       ),
     ).resolves.toBe(0);
     expect(searchIo.stdout()).toContain('metrics-revenue');
+  });
+
+  it('scopes wiki list/search by --connection and rejects unknown ids', async () => {
+    const projectDir = join(tempDir, 'connection-project');
+    await initKtxProject({ projectDir });
+    const project = await loadKtxProject({ projectDir });
+    project.config.connections.sales_db = { driver: 'sqlite', url: 'file:sales.db' };
+    project.config.connections.events_db = { driver: 'sqlite', url: 'file:events.db' };
+    await project.fileStore.writeFile(
+      'ktx.yaml',
+      serializeKtxProjectConfig(project.config),
+      'ktx',
+      'ktx@example.com',
+      'configure connections',
+    );
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-sales',
+      scope: 'GLOBAL',
+      summary: 'Sales orders',
+      content: 'Orders are paid in sales.',
+      connections: ['sales_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-events',
+      scope: 'GLOBAL',
+      summary: 'Events orders',
+      content: 'Orders are paid in events.',
+      connections: ['events_db'],
+    });
+    await writeLocalKnowledgePage(project, {
+      key: 'orders-global',
+      scope: 'GLOBAL',
+      summary: 'Org-wide orders',
+      content: 'Orders are paid everywhere.',
+    });
+
+    const listIo = makeIo();
+    await expect(
+      runKtxKnowledge(
+        { command: 'list', projectDir, userId: 'local', connectionId: 'sales_db', cliVersion: '0.0.0-test' },
+        listIo.io,
+      ),
+    ).resolves.toBe(0);
+    expect(listIo.stdout()).toContain('orders-sales');
+    expect(listIo.stdout()).toContain('orders-global');
+    expect(listIo.stdout()).not.toContain('orders-events');
+
+    const searchIo = makeIo();
+    await expect(
+      runKtxKnowledge(
+        {
+          command: 'search',
+          projectDir,
+          query: 'orders paid',
+          userId: 'local',
+          connectionId: 'events_db',
+          cliVersion: '0.0.0-test',
+        },
+        searchIo.io,
+      ),
+    ).resolves.toBe(0);
+    expect(searchIo.stdout()).toContain('orders-events');
+    expect(searchIo.stdout()).toContain('orders-global');
+    expect(searchIo.stdout()).not.toContain('orders-sales');
+
+    const badIo = makeIo();
+    await expect(
+      runKtxKnowledge(
+        { command: 'search', projectDir, query: 'orders', userId: 'local', connectionId: 'warehouse', cliVersion: '0.0.0-test' },
+        badIo.io,
+      ),
+    ).resolves.toBe(1);
+    expect(badIo.stderr()).toContain('Unknown connection "warehouse". Configured connections: events_db, sales_db.');
+  });
+
+  it('keeps a connection-scoped page that ranks below the lane candidate pool limit', async () => {
+    const projectDir = join(tempDir, 'scoped-pool-project');
+    await initKtxProject({ projectDir });
+    const project = await loadKtxProject({ projectDir });
+
+    // The lane candidate pool floor is 25; seed >25 other-connection pages so the
+    // single target-connection page only survives if scope is applied before the
+    // lane limit, not after.
+    for (let i = 0; i < 30; i++) {
+      await writeLocalKnowledgePage(project, {
+        key: `noise-${String(i).padStart(2, '0')}`,
+        scope: 'GLOBAL',
+        summary: 'Revenue',
+        content: 'Revenue is paid order value.',
+        connections: ['noise_db'],
+      });
+    }
+    // Path sorts after every noise page, so a slice-before-filter lane drops it.
+    await writeLocalKnowledgePage(project, {
+      key: 'zzz-target',
+      scope: 'GLOBAL',
+      summary: 'Revenue',
+      content: 'Revenue is paid order value.',
+      connections: ['target_db'],
+    });
+
+    // "arr" matches the target only semantically (FakeEmbeddingPort), never by
+    // literal token, so the token lane cannot mask a dropped semantic hit.
+    const results = await searchLocalKnowledgePages(project, {
+      query: 'arr',
+      userId: 'local',
+      connectionId: 'target_db',
+      embeddingService: new FakeEmbeddingPort(),
+      limit: 5,
+    });
+
+    expect(results.map((result) => result.key)).toContain('zzz-target');
   });
 
   it('reads a wiki page as raw markdown with frontmatter', async () => {

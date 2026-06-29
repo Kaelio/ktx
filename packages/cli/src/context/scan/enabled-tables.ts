@@ -10,19 +10,32 @@ import type { KtxTableRef } from './types.js';
  *   "catalog.db.name"  — fully qualified
  *   "db.name"          — schema-qualified (catalog = null)
  *   "name"             — bare (catalog = db = null; SQLite-shape)
+ *
+ * SQLite exposes a single schema named `main` but the connector emits objects
+ * with `db: null`, so the `"main.<name>"` form is normalized to the bare shape
+ * to match. Both `"main.customers"` and `"customers"` therefore select the same
+ * object.
  */
 export function resolveEnabledTables(
   connection: Record<string, unknown> | undefined,
 ): ReadonlySet<KtxTableRefKey> | null {
   const raw = connection?.enabled_tables;
   if (!Array.isArray(raw) || raw.length === 0) return null;
+  const driver = typeof connection?.driver === 'string' ? connection.driver : undefined;
   const refs: KtxTableRef[] = [];
   for (const value of raw) {
     const parsed = parseEnabledTableEntry(value);
-    if (parsed) refs.push(parsed);
+    if (parsed) refs.push(normalizeRefForDriver(parsed, driver));
   }
   if (refs.length === 0) return null;
   return tableRefSet(refs);
+}
+
+function normalizeRefForDriver(ref: KtxTableRef, driver: string | undefined): KtxTableRef {
+  if (driver === 'sqlite' && ref.catalog === null && ref.db === 'main') {
+    return { catalog: null, db: null, name: ref.name };
+  }
+  return ref;
 }
 
 function parseEnabledTableEntry(value: unknown): KtxTableRef | null {

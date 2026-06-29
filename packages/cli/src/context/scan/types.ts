@@ -7,7 +7,8 @@ export type KtxConnectionDriver =
   | 'bigquery'
   | 'snowflake'
   | 'mysql'
-  | 'clickhouse';
+  | 'clickhouse'
+  | 'mongodb';
 
 export type KtxScanMode = 'structural' | 'relationships' | 'enriched';
 
@@ -384,12 +385,17 @@ type KtxScanWarningCode =
   | 'embedding_unavailable'
   | 'scan_enrichment_backend_not_configured'
   | 'relationship_validation_failed'
+  | 'relationship_detection_partial'
+  | 'enrichment_stage_skipped'
+  | 'enrichment_stage_stale'
   | 'relationship_llm_invalid_reference'
   | 'relationship_llm_proposal_failed'
   | 'credential_redacted'
   | 'enrichment_failed'
+  | 'enrichment_timeout'
   | 'description_fallback_used'
-  | 'constraint_discovery_unauthorized';
+  | 'constraint_discovery_unauthorized'
+  | 'object_introspection_failed';
 
 export interface KtxScanWarning {
   code: KtxScanWarningCode;
