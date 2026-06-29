@@ -160,6 +160,7 @@ FROM account_txns;
 ```
 
 **Numeric precision**
+- **Integer division truncates on postgres/sqlite/tsql.** The `/` operator between two integers does integer division on **postgres, sqlite, and SQL Server** — `5 / 2` is `2`, `wins / games` is `0` — so a rate, share, or `SUM(a) / COUNT(*)` silently floors to an integer. Cast one operand to a fractional type before dividing: `wins * 1.0 / games`, `CAST(wins AS REAL) / games`, or `SUM(a)::numeric / COUNT(*)`, then round at the end. mysql and bigquery already return a fractional result from `/` (on bigquery prefer `SAFE_DIVIDE` to also guard a zero denominator).
 - **Round only at the end.** Compute at full precision and round in the final projection, never inside intermediate CTEs. Be explicit about truncation: an integer cast (`CAST(x AS INT)`) truncates toward zero, so use explicit rounding when rounding is what you mean.
 - **Macro vs micro average.** Match the average to the wording. "Average of per-group averages" is `AVG(group_metric)`; an "overall" or "weighted" average is `SUM(numerator) / SUM(denominator)`. The two diverge whenever group sizes differ.
 

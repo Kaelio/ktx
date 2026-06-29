@@ -236,7 +236,7 @@ class LocalVerbatimIngestor implements VerbatimIngestorPort {
       );
     }
 
-    const writeResult = await this.deps.wikiService.writePage(
+    const writeResult = await this.deps.wikiService.writePageAndSync(
       'GLOBAL',
       null,
       pageKey,
@@ -246,7 +246,6 @@ class LocalVerbatimIngestor implements VerbatimIngestorPort {
       this.deps.authorEmail,
       `Ingest verbatim document: ${pageKey}`,
     );
-    await this.deps.wikiService.syncSinglePage('GLOBAL', null, pageKey, frontmatter, body);
 
     return { pageKey, outcome: 'written', connections, commitHash: writeResult.commitHash ?? null };
   }

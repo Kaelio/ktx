@@ -356,7 +356,9 @@ export async function discoverKtxRelationships(
     profile,
     resolvedRelationships: graph.relationships,
     compositeRelationships,
-    statisticalValidation: profile.sqlAvailable ? 'completed' : 'skipped',
+    // A budget/abort stop means profiling did not finish, so report it as not
+    // completed even though the SQL capability was available.
+    statisticalValidation: profile.sqlAvailable && !stopReason ? 'completed' : 'skipped',
     llmRelationshipValidation: llmProposalResult.summary,
     warnings,
     partial: stopReason ? { reason: stopReason } : null,

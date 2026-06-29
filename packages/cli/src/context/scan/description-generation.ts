@@ -894,6 +894,11 @@ export class KtxDescriptionGenerator {
         });
       }
     } catch (error) {
+      // A genuine cancellation propagates so the stage fails and resumes; a
+      // per-table timeout (context.signal not aborted) still degrades to null.
+      if (input.context.signal?.aborted) {
+        throw error;
+      }
       const elapsedMs = llmStartedAt ? Date.now() - llmStartedAt : 0;
       const timedOut = lastTimedOut;
       this.logger?.warn(

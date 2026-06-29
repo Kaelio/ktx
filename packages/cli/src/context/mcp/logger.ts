@@ -29,7 +29,7 @@ export function mcpSlowToolMs(env: NodeJS.ProcessEnv = process.env): number {
  */
 export function serializeMcpError(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
-    return pino.stdSerializers.err(error) as unknown as Record<string, unknown>;
+    return { ...pino.stdSerializers.err(error) };
   }
   return { message: typeof error === 'string' ? error : String(error) };
 }

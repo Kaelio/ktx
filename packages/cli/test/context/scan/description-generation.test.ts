@@ -692,6 +692,41 @@ describe('KtxDescriptionGenerator resilience', () => {
     expect(warnings).toEqual([]);
   });
 
+  it('propagates a genuine context abort during the batched LLM call instead of degrading to null', async () => {
+    const controller = new AbortController();
+    const llmRuntime = createLlmProvider('unused');
+    llmRuntime.generateObject = vi.fn(async () => {
+      controller.abort();
+      throw new Error('The operation was aborted');
+    });
+    const warnings: string[] = [];
+    const generator = new KtxDescriptionGenerator({
+      llmRuntime,
+      onWarning: (warning) => warnings.push(warning.code),
+      settings: { columnMaxWords: 12, tableMaxWords: 18, dataSourceMaxWords: 24 },
+    });
+
+    await expect(
+      generator.generateBatchedTableDescriptions({
+        connectionId: 'conn-1',
+        connector: createConnector(),
+        context: { runId: 'run-1', signal: controller.signal },
+        dataSourceType: 'POSTGRESQL',
+        supportsNestedAnalysis: false,
+        table: {
+          catalog: null,
+          db: 'public',
+          name: 'orders',
+          rawDescriptions: {},
+          columns: [{ name: 'status', type: 'text' }],
+        },
+      }),
+    ).rejects.toThrow();
+
+    // A genuine cancellation must not be filed as a per-table failure/timeout.
+    expect(warnings).toEqual([]);
+  });
+
   it('generates column descriptions from rawDescriptions when sampleColumn is unavailable', async () => {
     const samplerWithoutColumn: KtxScanConnector = {
       ...createConnector(),

@@ -455,6 +455,8 @@ describe('production relationship discovery', () => {
     });
 
     expect(result.partial).toEqual({ reason: 'aborted' });
+    // A stop-before-completion must not be reported as completed statistical validation.
+    expect(result.statisticalValidation).toBe('skipped');
   });
 
   it('accepts a profile-driven natural-key relationship without declared metadata', async () => {
