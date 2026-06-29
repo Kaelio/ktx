@@ -6,6 +6,7 @@ import { KtxPostgresDialect } from '../../connectors/postgres/dialect.js';
 import { KtxSqliteDialect } from '../../connectors/sqlite/dialect.js';
 import { KtxSnowflakeDialect } from '../../connectors/snowflake/dialect.js';
 import { KtxSqlServerDialect } from '../../connectors/sqlserver/dialect.js';
+import { KtxExpectedError } from '../../errors.js';
 import type { KtxConnectionDriver, KtxSchemaDimensionType, KtxTableRef } from '../scan/types.js';
 import type { KtxDialectTableRef } from './dialect-helpers.js';
 
@@ -96,4 +97,19 @@ export function getSqlDialectForDriver(driver: string): KtxSqlDialect {
 export function isSqlQueryableDriver(driver: string | undefined): boolean {
   const normalized = (driver ?? '').toLowerCase().trim();
   return Object.prototype.hasOwnProperty.call(sqlDialectFactories, normalized);
+}
+
+/**
+ * Refuse a non-SQL connection (e.g. mongodb) at a read-only-SQL entry point before
+ * any dialect selection or parser/daemon work, so it is never validated as Postgres.
+ * The federated `duckdb` connection has no driver — callers skip this guard for it.
+ */
+export function assertSqlQueryableConnection(connectionId: string, driver: string | undefined): void {
+  if (!isSqlQueryableDriver(driver)) {
+    throw new KtxExpectedError(
+      `Connection '${connectionId}' uses the non-SQL driver '${driver ?? 'unknown'}'. ` +
+        'Read-only SQL (ktx sql, the sql_execution tool) requires a SQL warehouse connection; ' +
+        'MongoDB and other context-only sources are searchable and ingestable, not SQL-queryable.',
+    );
+  }
 }

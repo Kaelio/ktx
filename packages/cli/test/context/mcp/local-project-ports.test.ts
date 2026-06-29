@@ -282,6 +282,33 @@ describe('createLocalProjectMcpContextPorts', () => {
     expect(createConnector).not.toHaveBeenCalled();
   });
 
+  it('refuses sql_execution against a non-SQL (MongoDB) connection before SQL analysis', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.mongo = { driver: 'mongodb', url: 'mongodb://localhost:27017/app' };
+    const createConnector = vi.fn(async () => testConnector());
+    const sqlAnalysis = {
+      analyzeForFingerprint: vi.fn(),
+      analyzeBatch: vi.fn(),
+      validateReadOnly: vi.fn(async () => ({ ok: true, error: null })),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis,
+      localScan: { createConnector },
+      embeddingService: null,
+    });
+
+    const execution = ports.sqlExecution?.execute({
+      connectionId: 'mongo',
+      sql: 'select 1',
+      maxRows: 5,
+    });
+    await expect(execution).rejects.toBeInstanceOf(KtxExpectedError);
+    await expect(execution).rejects.toThrow("non-SQL driver 'mongodb'");
+    // Refused before the parser dialect is chosen and before any connector is built.
+    expect(sqlAnalysis.validateReadOnly).not.toHaveBeenCalled();
+    expect(createConnector).not.toHaveBeenCalled();
+  });
+
   it('emits sql_execution progress stages from local MCP ports', async () => {
     const project = await initKtxProject({ projectDir: tempDir });
     project.config.connections.warehouse = {
