@@ -2,10 +2,6 @@ import { z } from 'zod';
 
 const sigmaLocalConnectionIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
 
-/**
- * The lean config the adapter needs at `fetch()` time. Lives in the BullMQ payload's
- * `bundleRef.config` when the runner invokes the adapter.
- */
 /** Filters applied when listing workbooks. Shared with ListWorkbooksOptions in client-port.ts. */
 const workbookFilterSchema = z.object({
   includeArchived: z.boolean().default(false),
@@ -22,6 +18,7 @@ const dataModelFilterSchema = z.object({
   updatedSince: z.string().optional(),
 });
 
+/** The lean config the adapter needs at `fetch()` time, stored in the ingest job's `bundleRef.config`. */
 const sigmaPullConfigSchema = z.object({
   /** The ktx connection ID for the Sigma instance being swept. */
   sigmaConnectionId: sigmaLocalConnectionIdSchema,

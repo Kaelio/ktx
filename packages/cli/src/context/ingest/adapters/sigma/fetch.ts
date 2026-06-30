@@ -92,8 +92,9 @@ export async function fetchSigmaBundle({
 
     logger.log('Listing Sigma data models...');
     const summaries = await client.listDataModels();
-    const nonArchivedIds = new Set(summaries.filter((dm) => !dm.isArchived).map((dm) => dm.dataModelId));
-    let active = [...nonArchivedIds].map((id) => summaries.find((dm) => dm.dataModelId === id)!);
+    const nonArchived = summaries.filter((dm) => !dm.isArchived);
+    const nonArchivedIds = new Set(nonArchived.map((dm) => dm.dataModelId));
+    let active = nonArchived;
     if (config.dataModelFilter?.updatedSince) {
       const since = new Date(config.dataModelFilter.updatedSince).getTime();
       active = active.filter((dm) => new Date(dm.updatedAt).getTime() >= since);
