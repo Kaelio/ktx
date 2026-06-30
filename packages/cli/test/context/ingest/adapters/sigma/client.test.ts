@@ -18,7 +18,7 @@ function makeResponse(body: unknown, status = 200): Response {
 
 function makeClient(): DefaultSigmaClient {
   return new DefaultSigmaClient(
-    { apiUrl: BASE, clientId: 'cid', clientSecret: 'csec' },
+    { apiUrl: BASE, clientId: 'cid', clientSecret: 'csec' }, // pragma: allowlist secret
     { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0, timeoutMs: 5000 },
   );
 }

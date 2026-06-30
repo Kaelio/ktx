@@ -7,24 +7,20 @@ const sigmaLocalConnectionIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]
  * `bundleRef.config` when the runner invokes the adapter.
  */
 /** Filters applied when listing workbooks. Shared with ListWorkbooksOptions in client-port.ts. */
-export const workbookFilterSchema = z.object({
+const workbookFilterSchema = z.object({
   includeArchived: z.boolean().default(false),
   includeExplorations: z.boolean().default(false),
   /** ISO 8601 date string. Only workbooks updated on or after this date are included. */
   updatedSince: z.string().optional(),
 });
 
-/** Parsed/stored shape — booleans are always present after schema defaults are applied. */
-export type WorkbookFilter = z.infer<typeof workbookFilterSchema>;
 /** Input shape for listWorkbooks — all fields optional since the client applies its own defaults. */
 export type WorkbookFilterInput = z.input<typeof workbookFilterSchema>;
 
-export const dataModelFilterSchema = z.object({
+const dataModelFilterSchema = z.object({
   /** ISO 8601 date string. Only data models updated on or after this date are fetched. */
   updatedSince: z.string().optional(),
 });
-
-export type DataModelFilter = z.infer<typeof dataModelFilterSchema>;
 
 const sigmaPullConfigSchema = z.object({
   /** The ktx connection ID for the Sigma instance being swept. */

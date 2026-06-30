@@ -6,7 +6,7 @@ import type { SigmaClientFactory } from './client-port.js';
 import { detectSigmaStagedDir } from './detect.js';
 import { fetchSigmaBundle, type SigmaFetchLogger } from './fetch.js';
 import { projectSigmaDataModels } from './project.js';
-import { sigmaManifestSchema, sigmaProjectionConfigSchema, STAGED_FILES } from './types.js';
+import { sigmaProjectionConfigSchema, STAGED_FILES } from './types.js';
 
 export interface SigmaSourceAdapterDeps {
   clientFactory: SigmaClientFactory;
@@ -41,17 +41,7 @@ export class SigmaSourceAdapter implements SourceAdapter {
     try {
       const body = await readFile(join(stagedDir, STAGED_FILES.projectionConfig), 'utf-8');
       const config = sigmaProjectionConfigSchema.parse(JSON.parse(body));
-      const mappedIds = [...new Set(Object.values(config.connectionMappings))].sort();
-      if (mappedIds.length > 0) return mappedIds;
-    } catch {
-      // fall through to manifest fallback
-    }
-    // No warehouse mappings configured — fall back to the Sigma connection ID from
-    // the manifest so the runner still has a target to validate against.
-    try {
-      const body = await readFile(join(stagedDir, STAGED_FILES.manifest), 'utf-8');
-      const manifest = sigmaManifestSchema.parse(JSON.parse(body));
-      return [manifest.sigmaConnectionId];
+      return [...new Set(Object.values(config.connectionMappings))].sort();
     } catch {
       return [];
     }

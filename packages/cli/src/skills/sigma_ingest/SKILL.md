@@ -12,16 +12,20 @@ Sigma ingest turns staged data model specs and workbook summaries into durable k
 
 Sigma produces at minimum two work units per ingest run:
 
-- `sigma-data-models` or `sigma-data-models-N` — contains `data-models/<id>.json` files plus `sigma-manifest.json`. When the workspace has more than 50 data models, these are split into batches: `sigma-data-models-0`, `sigma-data-models-1`, … with `displayLabel` like `"Sigma: data models (1/8)"`. When ≤50 data models, the unitKey is simply `sigma-data-models` with no suffix.
-- `sigma-workbooks` or `sigma-workbooks-N` — contains `workbooks/<id>.json` files plus `sigma-manifest.json`. When the workspace has more than 2000 workbooks, these are split into batches: `sigma-workbooks-0`, `sigma-workbooks-1`, … with `displayLabel` like `"Sigma: workbooks (1/4)"`. When ≤2000 workbooks, the unitKey is simply `sigma-workbooks` with no suffix.
+- `sigma-data-models` or `sigma-data-models-N`
+  - `rawFiles`: `data-models/<id>.json` files (one per data model in this batch)
+  - `peerFileIndex`: `workbooks/<id>.json` files + `sigma-manifest.json` + `sigma-projection-config.json`
+  - When the workspace has more than 50 data models, split into batches: `sigma-data-models-0`, `sigma-data-models-1`, … with `displayLabel` like `"Sigma: data models (1/8)"`. When ≤50 data models, the unitKey is simply `sigma-data-models` with no suffix.
+- `sigma-workbooks` or `sigma-workbooks-N`
+  - `rawFiles`: `workbooks/<id>.json` files (one per workbook in this batch)
+  - `peerFileIndex`: `data-models/<id>.json` files + `sigma-manifest.json` + `sigma-projection-config.json`
+  - When the workspace has more than 2000 workbooks, split into batches: `sigma-workbooks-0`, `sigma-workbooks-1`, … with `displayLabel` like `"Sigma: workbooks (1/4)"`. When ≤2000 workbooks, the unitKey is simply `sigma-workbooks` with no suffix.
 
-Both unit types include `sigma-manifest.json` and `sigma-projection-config.json` is always in the staged dir root. The other unit type's files appear in `peerFileIndex`.
+`sigma-manifest.json` and `sigma-projection-config.json` are never in `rawFiles`. They live at the staged dir root and always appear in `peerFileIndex`.
 
 ## Staged file shapes
 
-Raw files for both unit types are:
-
-**`data-models/<id>.json`** — one per data model:
+**`data-models/<id>.json`** — one per data model (in `rawFiles` for data-model units):
 ```json
 {
   "sigmaId": "abc-123",
@@ -59,7 +63,7 @@ Raw files for both unit types are:
 - `warehouse-table` — element maps directly to a warehouse table. Has `connectionId` and `path` (array of path segments forming the fully-qualified table name). `project()` writes an SL source when `connectionMappings` covers this `connectionId`.
 - `table` — element is a derived view layered on top of another element; identified by `source.elementId`. No warehouse path. Wiki-only.
 
-**`workbooks/<id>.json`** — one per workbook (summary only; no spec endpoint exists):
+**`workbooks/<id>.json`** — one per workbook, in `rawFiles` for workbook units (summary only; no spec endpoint exists):
 ```json
 {
   "sigmaId": "wb-abc",
@@ -72,6 +76,8 @@ Raw files for both unit types are:
   "description": "Tracks ARR by segment and cohort for the finance team"
 }
 ```
+
+**Peer files (available via `peerFileIndex`, not `rawFiles`):**
 
 **`sigma-manifest.json`** — fetch summary; use for provenance only.
 

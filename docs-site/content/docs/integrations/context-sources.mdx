@@ -425,6 +425,22 @@ Generate a client in Sigma: **Administration → Developer Access → Add New Cl
 - Workbook metadata (name, path, description, version) — archived and exploration workbooks excluded by default
 - Models backed by CSV uploads or unsupported connector subtypes are listed in the manifest but skipped during spec fetch (a Sigma API limitation)
 
+### Warehouse connection mapping
+
+`connectionMappings` is optional. Without it, **ktx** produces wiki knowledge only — no semantic-layer sources are written and warehouse validation is skipped. To get semantic-layer output and enable `sl_validate`, map each Sigma internal connection UUID to a **ktx** warehouse connection ID:
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+    connectionMappings:
+      "<sigma-internal-uuid>": snowflake-prod   # data models using this connection get SL sources
+```
+
+Find the Sigma connection UUID in **Administration → Connections** or from the `source.connectionId` field in a fetched data model spec. Data model elements whose `connectionId` has no mapping are ingested as wiki-only.
+
 ### Workbook filter
 
 At large scale, you can limit which workbooks are fetched during ingest using `workbookFilter`:
@@ -449,7 +465,7 @@ connections:
 
 ### Notes
 
-- Unlike Metabase and Looker, Sigma does not require a warehouse mapping step — data models are self-contained
+- `connectionMappings` is optional for wiki-only ingest; it is required to generate semantic-layer sources and run warehouse validation
 - Context ingest (`ktx ingest sigma-main`) fetches from the Sigma API directly
 - Ingest is incremental: items whose `updatedAt` timestamp is unchanged since the last run are skipped
 - Models backed by CSV uploads or unsupported connector subtypes cannot have their spec exported; these are skipped with a warning (a Sigma API limitation)
