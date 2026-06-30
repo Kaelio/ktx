@@ -1,12 +1,14 @@
+import { KtxQueryError } from '../../errors.js';
 import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxRelationshipEndpoint } from './enrichment-types.js';
 import { applyKtxRelationshipValidationBudget, type KtxRelationshipValidationBudget } from './relationship-budget.js';
 import type { KtxRelationshipDiscoveryCandidate } from './relationship-candidates.js';
+import { type KtxRelationshipDetectionBudget, mapWithBudget } from './relationship-detection-budget.js';
 import {
   type KtxRelationshipProfileArtifact,
   type KtxRelationshipReadOnlyExecutor,
 } from './relationship-profiling.js';
-import type { KtxQueryResult, KtxScanContext, KtxTableRef } from './types.js';
+import type { KtxProgressPort, KtxQueryResult, KtxScanContext, KtxTableRef } from './types.js';
 
 type KtxValidatedRelationshipStatus = 'accepted' | 'review' | 'rejected';
 
@@ -51,6 +53,8 @@ export interface ValidateKtxRelationshipDiscoveryCandidatesInput {
   ctx: KtxScanContext;
   tableCount?: number;
   settings?: Partial<KtxRelationshipValidationSettings>;
+  budget?: KtxRelationshipDetectionBudget;
+  progress?: KtxProgressPort;
 }
 
 const DEFAULT_SETTINGS: KtxRelationshipValidationSettings = {
@@ -182,31 +186,10 @@ function statusFor(input: {
   return 'rejected';
 }
 
-export async function mapWithConcurrency<TInput, TOutput>(
-  inputs: readonly TInput[],
-  concurrency: number,
-  mapOne: (input: TInput) => Promise<TOutput>,
-): Promise<TOutput[]> {
-  const safeConcurrency = Math.max(1, Math.floor(concurrency));
-  const outputs: TOutput[] = new Array(inputs.length);
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (nextIndex < inputs.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      outputs[index] = await mapOne(inputs[index] as TInput);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(safeConcurrency, inputs.length) }, () => worker()));
-  return outputs;
-}
-
 function reviewWithoutValidation(
   candidate: KtxRelationshipDiscoveryCandidate,
   profiles: KtxRelationshipProfileArtifact,
-  reason: 'validation_unavailable' | 'profile_unavailable' | 'validation_unattempted',
+  reason: 'validation_unavailable' | 'profile_unavailable' | 'validation_unattempted' | 'validation_query_failed',
 ): KtxValidatedRelationshipDiscoveryCandidate {
   const sourceColumn = singleRelationshipColumn(candidate.from);
   const targetColumn = singleRelationshipColumn(candidate.to);
@@ -257,21 +240,35 @@ export async function validateKtxRelationshipDiscoveryCandidates(
       return reviewWithoutValidation(candidate, input.profiles, 'profile_unavailable');
     }
 
-    const result = await executor.executeReadOnly(
-      {
-        connectionId: input.connectionId,
-        sql: buildCoverageSql({
-          dialect,
-          childTable: candidate.from.table,
-          childColumn: sourceColumn,
-          parentTable: candidate.to.table,
-          parentColumn: targetColumn,
-          maxDistinctSourceValues: settings.maxDistinctSourceValues,
-        }),
-        maxRows: 1,
-      },
-      input.ctx,
-    );
+    let result: KtxQueryResult;
+    try {
+      result = await executor.executeReadOnly(
+        {
+          connectionId: input.connectionId,
+          sql: buildCoverageSql({
+            dialect,
+            childTable: candidate.from.table,
+            childColumn: sourceColumn,
+            parentTable: candidate.to.table,
+            parentColumn: targetColumn,
+            maxDistinctSourceValues: settings.maxDistinctSourceValues,
+          }),
+          maxRows: 1,
+        },
+        input.ctx,
+      );
+    } catch (error) {
+      // A bounded-query timeout (or other query rejection) on this one coverage
+      // probe is best-effort: skip the candidate to review rather than aborting
+      // the whole validation pass.
+      if (error instanceof KtxQueryError) {
+        input.ctx.logger?.warn(
+          `relationship validation query skipped for ${candidate.from.table.name}.${sourceColumn} -> ${candidate.to.table.name}.${targetColumn}: ${error.message}`,
+        );
+        return reviewWithoutValidation(candidate, input.profiles, 'validation_query_failed');
+      }
+      throw error;
+    }
     const childDistinct = numberAt(result, 'child_distinct');
     const parentDistinct = numberAt(result, 'parent_distinct');
     const overlap = numberAt(result, 'overlap');
@@ -330,18 +327,29 @@ export async function validateKtxRelationshipDiscoveryCandidates(
     budget: settings.validationBudget,
     score: (candidate) => candidate.confidence,
   });
-  const validated = await mapWithConcurrency(
-    budgeted.toValidate.map((entry) => entry.candidate),
-    settings.concurrency,
-    validateCandidate,
-  );
+  const { results: validated } = await mapWithBudget({
+    inputs: budgeted.toValidate,
+    concurrency: settings.concurrency,
+    budget: input.budget,
+    onStart: async (index, total) => {
+      await input.progress?.update((index + 1) / total, `Validating candidate ${index + 1}/${total}`, {
+        transient: true,
+      });
+    },
+    mapOne: (entry) => validateCandidate(entry.candidate),
+  });
   const byOriginalIndex = new Map<number, KtxValidatedRelationshipDiscoveryCandidate>();
   for (let index = 0; index < budgeted.toValidate.length; index += 1) {
-    const originalIndex = budgeted.toValidate[index]?.originalIndex;
-    const candidate = validated[index];
-    if (originalIndex !== undefined && candidate) {
-      byOriginalIndex.set(originalIndex, candidate);
+    const entry = budgeted.toValidate[index];
+    if (!entry) {
+      continue;
     }
+    // A candidate left unvalidated by the wall-clock budget degrades to the
+    // same review status as one deferred by the validation count budget.
+    byOriginalIndex.set(
+      entry.originalIndex,
+      validated[index] ?? reviewWithoutValidation(entry.candidate, input.profiles, 'validation_unattempted'),
+    );
   }
   for (const entry of budgeted.deferred) {
     byOriginalIndex.set(

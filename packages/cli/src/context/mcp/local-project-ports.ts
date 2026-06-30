@@ -1,5 +1,8 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
 import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
+import { isDatabaseDriver, normalizeConnectionDriver } from '../../connection-drivers.js';
+import { sqlDialectNotes } from '../../context/sql-analysis/dialect-notes.js';
+import type { KtxProjectConnectionConfig } from '../../context/project/config.js';
 import { executeProjectReadOnlySql } from '../../context/connections/project-sql-executor.js';
 import { FEDERATED_CONNECTION_ID, federatedConnectionListing } from '../../context/connections/federation.js';
 import { assertSqlQueryableConnection } from '../../context/connections/dialects.js';
@@ -20,6 +23,7 @@ import { compileLocalSlQuery } from '../../context/sl/local-query.js';
 import { createKtxDictionarySearchService } from '../../context/sl/dictionary-search.js';
 import { readLocalSlSource } from '../../context/sl/local-sl.js';
 import { assertSafeConnectionId } from '../../context/sl/source-files.js';
+import { assertConfiguredConnectionId } from '../../context/connections/configured-connections.js';
 import { readLocalKnowledgePage, searchLocalKnowledgePages } from '../wiki/local-knowledge.js';
 import type { KtxMcpContextPorts, KtxMcpProgressCallback, KtxSqlExecutionResponse } from './types.js';
 
@@ -94,6 +98,24 @@ async function executeValidatedReadOnlySql(
   return response;
 }
 
+/** @internal Resolves a connection's dialect SQL notes; throws KtxExpectedError for an unknown or non-SQL-warehouse connection. */
+export function resolveDialectNotesForConnection(
+  connectionId: string,
+  connection: KtxProjectConnectionConfig | undefined,
+): { connectionId: string; dialect: string; notes: string } {
+  if (!connection) {
+    throw new KtxExpectedError(`Connection "${connectionId}" is not configured in ktx.yaml`);
+  }
+  const driver = normalizeConnectionDriver(connection);
+  if (!isDatabaseDriver(driver)) {
+    throw new KtxExpectedError(
+      `Connection "${connectionId}" uses the "${driver}" context source, not a SQL warehouse; sql_dialect_notes applies only to SQL database connections.`,
+    );
+  }
+  const dialect = sqlAnalysisDialectForDriver(driver);
+  return { connectionId, dialect, notes: sqlDialectNotes(dialect) };
+}
+
 export function createLocalProjectMcpContextPorts(
   project: KtxLocalProject,
   options: CreateLocalProjectMcpContextPortsOptions,
@@ -121,11 +143,16 @@ export function createLocalProjectMcpContextPorts(
     },
     knowledge: {
       async search(input) {
+        const connectionId =
+          input.connectionId === undefined
+            ? undefined
+            : assertConfiguredConnectionId(project.config.connections, input.connectionId);
         const results = await searchLocalKnowledgePages(project, {
           query: input.query,
           userId: input.userId,
           limit: input.limit,
           embeddingService,
+          ...(connectionId !== undefined ? { connectionId } : {}),
         });
         return {
           results: results.slice(0, input.limit).map((result) => ({
@@ -194,6 +221,12 @@ export function createLocalProjectMcpContextPorts(
     discover: {
       async search(input) {
         return createKtxDiscoverDataService(project, { userId: 'local', embeddingService }).search(input);
+      },
+    },
+    dialectNotes: {
+      async read(input) {
+        const connectionId = assertSafeConnectionId(input.connectionId);
+        return resolveDialectNotesForConnection(connectionId, project.config.connections[connectionId]);
       },
     },
   };

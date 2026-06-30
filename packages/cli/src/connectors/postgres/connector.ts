@@ -1,5 +1,6 @@
 import { resolveStringReference } from '../shared/string-reference.js';
 import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
@@ -260,6 +261,11 @@ function isDeniedError(error: unknown): boolean {
   return code === '42501' || code === '42P01';
 }
 
+// 57014 = query_canceled, which is how statement_timeout surfaces.
+function isPostgresTimeoutError(error: unknown): boolean {
+  return Boolean(error) && typeof error === 'object' && (error as { code?: unknown }).code === '57014';
+}
+
 function queryRows(result: KtxPostgresQueryResult): unknown[][] {
   const headers = (result.fields ?? []).map((field) => field.name);
   return result.rows.map((row) => headers.map((header) => row[header]));
@@ -384,9 +390,13 @@ export function postgresPoolConfigFromConfig(input: {
       : { host, port: numberValue(merged.port) ?? 5432, database, user, password }),
   };
   const searchPathSchemas = searchPathSchemasFromConnection(merged);
+  // statement_timeout (ms) bounds every query on connections from this pool, so
+  // the server itself aborts a runaway query and frees the connection cleanly.
+  const serverOptions = [`-c statement_timeout=${resolveQueryDeadlineMs(merged)}`];
   if (searchPathSchemas.length > 0) {
-    config.options = `-c search_path=${searchPathSchemas.join(',')}`;
+    serverOptions.unshift(`-c search_path=${searchPathSchemas.join(',')}`);
   }
+  config.options = serverOptions.join(' ');
   if (merged.ssl && sslmode !== 'prefer' && sslmode !== 'disable') {
     config.ssl = { rejectUnauthorized: merged.rejectUnauthorized ?? true };
   }
@@ -412,6 +422,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
   private readonly poolFactory: KtxPostgresPoolFactory;
   private readonly endpointResolver?: KtxPostgresEndpointResolver;
   private readonly now: () => Date;
+  private readonly deadlineMs: number;
   private readonly dialect = getSqlDialectForDriver('postgres');
   private pool: KtxPostgresPool | null = null;
   private lastIdlePoolError: Error | null = null;
@@ -428,6 +439,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     this.poolFactory = options.poolFactory ?? new DefaultPostgresPoolFactory();
     this.endpointResolver = options.endpointResolver;
     this.now = options.now ?? (() => new Date());
+    this.deadlineMs = resolveQueryDeadlineMs(this.connection);
     this.id = `postgres:${options.connectionId}`;
   }
 
@@ -819,6 +831,11 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
         totalRows: result.rows.length,
         rowCount: result.rows.length,
       };
+    } catch (error) {
+      if (isPostgresTimeoutError(error)) {
+        throw queryDeadlineExceededError(this.deadlineMs, { cause: error });
+      }
+      throw error;
     } finally {
       client.release();
     }

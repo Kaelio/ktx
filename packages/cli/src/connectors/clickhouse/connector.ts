@@ -1,5 +1,6 @@
 import { createClient } from '@clickhouse/client';
 import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { connectorTestFailure, createKtxConnectorCapabilities, type KtxConnectorTestResult, type KtxColumnSampleInput, type KtxColumnSampleResult, type KtxColumnStatsInput, type KtxColumnStatsResult, type KtxQueryResult, type KtxReadOnlyQueryInput, type KtxScanConnector, type KtxScanContext, type KtxScanInput, type KtxSchemaColumn, type KtxSchemaSnapshot, type KtxSchemaTable, type KtxTableRef, type KtxTableSampleInput, type KtxTableListEntry, type KtxTableSampleResult } from '../../context/scan/types.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
@@ -144,6 +145,21 @@ function maybeNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+// ClickHouse error code 159 = TIMEOUT_EXCEEDED, raised when max_execution_time
+// is hit. The client surfaces it via a numeric/string `code` or a "Code: 159"
+// message prefix depending on transport.
+function isClickHouseTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  if (code === 159 || code === '159') {
+    return true;
+  }
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' && (/\bCode:\s*159\b/.test(message) || message.includes('TIMEOUT_EXCEEDED'));
+}
+
 function parseClickHouseUrl(url: string): Partial<KtxClickHouseConnectionConfig> {
   const parsed = new URL(url);
   return {
@@ -284,6 +300,7 @@ export class KtxClickHouseScanConnector implements KtxScanConnector {
   private readonly clientFactory: KtxClickHouseClientFactory;
   private readonly endpointResolver?: KtxClickHouseEndpointResolver;
   private readonly now: () => Date;
+  private readonly deadlineMs: number;
   private readonly dialect = getSqlDialectForDriver('clickhouse');
   private client: KtxClickHouseClient | null = null;
   private resolvedEndpoint: KtxClickHouseResolvedEndpoint | null = null;
@@ -299,6 +316,7 @@ export class KtxClickHouseScanConnector implements KtxScanConnector {
     this.clientFactory = options.clientFactory ?? new DefaultClickHouseClientFactory();
     this.endpointResolver = options.endpointResolver;
     this.now = options.now ?? (() => new Date());
+    this.deadlineMs = resolveQueryDeadlineMs(this.connection);
     this.id = `clickhouse:${options.connectionId}`;
   }
 
@@ -584,9 +602,13 @@ export class KtxClickHouseScanConnector implements KtxScanConnector {
         username: config.username,
         password: config.password ?? '',
         database: config.database,
-        request_timeout: 30_000,
+        // The server aborts at max_execution_time (seconds); request_timeout must
+        // outlast it so the HTTP client receives the code-159 error instead of
+        // giving up first and leaving the query running.
+        request_timeout: this.deadlineMs + 5_000,
         clickhouse_settings: {
           output_format_json_quote_64bit_integers: 1,
+          max_execution_time: Math.ceil(this.deadlineMs / 1000),
         },
         ...(isProxied && config.ssl
           ? {
@@ -613,19 +635,26 @@ export class KtxClickHouseScanConnector implements KtxScanConnector {
 
   private async query(sql: string, params?: Record<string, unknown>): Promise<Omit<KtxQueryResult, 'rowCount'>> {
     const client = await this.clientForQuery();
-    const resultSet = await client.query({
-      query: assertReadOnlySql(sql),
-      format: 'JSONCompact',
-      ...(params ? { query_params: params } : {}),
-    });
-    const response = (await resultSet.json()) as ClickHouseCompactResponse;
-    const meta = response.meta ?? [];
-    return {
-      headers: meta.map((field) => field.name),
-      headerTypes: meta.map((field) => field.type),
-      rows: response.data ?? [],
-      totalRows: response.rows ?? response.data?.length ?? 0,
-    };
+    try {
+      const resultSet = await client.query({
+        query: assertReadOnlySql(sql),
+        format: 'JSONCompact',
+        ...(params ? { query_params: params } : {}),
+      });
+      const response = (await resultSet.json()) as ClickHouseCompactResponse;
+      const meta = response.meta ?? [];
+      return {
+        headers: meta.map((field) => field.name),
+        headerTypes: meta.map((field) => field.type),
+        rows: response.data ?? [],
+        totalRows: response.rows ?? response.data?.length ?? 0,
+      };
+    } catch (error) {
+      if (isClickHouseTimeoutError(error)) {
+        throw queryDeadlineExceededError(this.deadlineMs, { cause: error });
+      }
+      throw error;
+    }
   }
 
   private assertConnection(connectionId: string): void {

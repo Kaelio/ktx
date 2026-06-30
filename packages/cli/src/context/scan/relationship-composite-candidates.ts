@@ -1,10 +1,11 @@
 import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxEnrichedColumn, KtxEnrichedSchema, KtxEnrichedTable, KtxRelationshipType } from './enrichment-types.js';
+import type { KtxRelationshipDetectionBudget } from './relationship-detection-budget.js';
 import {
   type KtxRelationshipProfileArtifact,
   type KtxRelationshipReadOnlyExecutor,
 } from './relationship-profiling.js';
-import type { KtxQueryResult, KtxScanContext, KtxTableRef } from './types.js';
+import type { KtxProgressPort, KtxQueryResult, KtxScanContext, KtxTableRef } from './types.js';
 
 type KtxCompositeRelationshipStatus = 'accepted' | 'review' | 'rejected';
 
@@ -66,6 +67,8 @@ export interface DiscoverKtxCompositeRelationshipsInput {
   minPrimaryKeyUniqueness?: number;
   minSourceCoverage?: number;
   maxViolationRatio?: number;
+  budget?: KtxRelationshipDetectionBudget;
+  progress?: KtxProgressPort;
 }
 
 export interface DiscoverKtxCompositeRelationshipsResult {
@@ -536,7 +539,13 @@ export async function discoverKtxCompositeRelationships(
   const primaryKeys: KtxCompositePrimaryKeyCandidate[] = [];
   let queryCount = 0;
 
-  for (const table of tables) {
+  for (const [index, table] of tables.entries()) {
+    if (input.budget?.check()) {
+      break;
+    }
+    await input.progress?.update((index + 1) / tables.length, `Probing composite keys ${index + 1}/${tables.length}`, {
+      transient: true,
+    });
     const result = await detectCompositePrimaryKeys({
       connectionId: input.connectionId,
       dialect: input.dialect,
@@ -554,6 +563,9 @@ export async function discoverKtxCompositeRelationships(
 
   const relationships: KtxCompositeRelationshipCandidate[] = [];
   for (const targetKey of primaryKeys) {
+    if (input.budget?.check()) {
+      break;
+    }
     const targetTable = tableByName.get(targetKey.table.name);
     if (!targetTable) {
       continue;
@@ -568,6 +580,9 @@ export async function discoverKtxCompositeRelationships(
     }
 
     for (const sourceTable of tables) {
+      if (input.budget?.check()) {
+        break;
+      }
       if (sourceTable.id === targetTable.id) {
         continue;
       }

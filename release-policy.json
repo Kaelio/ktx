@@ -19,7 +19,7 @@
   },
   "publishedPackageSmoke": {
     "packageName": "@kaelio/ktx",
-    "version": "0.13.1",
+    "version": "0.14.0",
     "registry": null
   },
   "runtimeInstaller": {

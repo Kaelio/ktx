@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type ChildProcess } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>();
@@ -14,6 +18,7 @@ import {
   KtxDescriptionGenerator,
 } from '../../../src/context/scan/description-generation.js';
 import { createKtxConnectorCapabilities, type KtxScanConnector } from '../../../src/context/scan/types.js';
+import { HANGING_CHILD, killTestChildren, spawnTestChild } from '../llm/subprocess-test-children.test-utils.js';
 
 function createCache(initial: Record<string, string> = {}): KtxDescriptionCachePort {
   const data = new Map(Object.entries(initial));
@@ -41,6 +46,7 @@ function createLlmProvider(text = 'generated description') {
     }),
     generateObject: vi.fn(),
     runAgentLoop: vi.fn(),
+    subprocessForkSpec: () => null,
   } as any;
 }
 
@@ -57,6 +63,7 @@ function createFailingLlmProvider(message = 'timeout exceeded when trying to con
     }),
     generateObject: vi.fn(),
     runAgentLoop: vi.fn(),
+    subprocessForkSpec: () => null,
   } as any;
 }
 
@@ -492,7 +499,8 @@ describe('KtxDescriptionGenerator', () => {
     expect(result.tableDescription).toBeNull();
     expect(Object.fromEntries(result.columnDescriptions)).toEqual({ status: null });
     expect(warnings).toContain('enrichment_failed');
-    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
+    // A transient (non-timeout) failure retries up to the attempt limit (default 3).
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(3);
     expect(llmRuntime.generateText).not.toHaveBeenCalled();
   });
 });
@@ -684,6 +692,41 @@ describe('KtxDescriptionGenerator resilience', () => {
     expect(warnings).toEqual([]);
   });
 
+  it('propagates a genuine context abort during the batched LLM call instead of degrading to null', async () => {
+    const controller = new AbortController();
+    const llmRuntime = createLlmProvider('unused');
+    llmRuntime.generateObject = vi.fn(async () => {
+      controller.abort();
+      throw new Error('The operation was aborted');
+    });
+    const warnings: string[] = [];
+    const generator = new KtxDescriptionGenerator({
+      llmRuntime,
+      onWarning: (warning) => warnings.push(warning.code),
+      settings: { columnMaxWords: 12, tableMaxWords: 18, dataSourceMaxWords: 24 },
+    });
+
+    await expect(
+      generator.generateBatchedTableDescriptions({
+        connectionId: 'conn-1',
+        connector: createConnector(),
+        context: { runId: 'run-1', signal: controller.signal },
+        dataSourceType: 'POSTGRESQL',
+        supportsNestedAnalysis: false,
+        table: {
+          catalog: null,
+          db: 'public',
+          name: 'orders',
+          rawDescriptions: {},
+          columns: [{ name: 'status', type: 'text' }],
+        },
+      }),
+    ).rejects.toThrow();
+
+    // A genuine cancellation must not be filed as a per-table failure/timeout.
+    expect(warnings).toEqual([]);
+  });
+
   it('generates column descriptions from rawDescriptions when sampleColumn is unavailable', async () => {
     const samplerWithoutColumn: KtxScanConnector = {
       ...createConnector(),
@@ -780,5 +823,91 @@ describe('KtxDescriptionGenerator resilience', () => {
 
     expect(result.columnDescriptions).toEqual([['opaque_blob', null]]);
     expect(generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe('KtxDescriptionGenerator subprocess kill boundary', () => {
+  const children: ChildProcess[] = [];
+  let workDir: string;
+  let priorTimeout: string | undefined;
+
+  beforeEach(() => {
+    workDir = mkdtempSync(join(tmpdir(), 'ktx-enrich-'));
+    priorTimeout = process.env.KTX_ENRICH_LLM_TIMEOUT_MS;
+    process.env.KTX_ENRICH_LLM_TIMEOUT_MS = '300';
+  });
+
+  afterEach(() => {
+    killTestChildren(children);
+    children.length = 0;
+    if (priorTimeout === undefined) {
+      delete process.env.KTX_ENRICH_LLM_TIMEOUT_MS;
+    } else {
+      process.env.KTX_ENRICH_LLM_TIMEOUT_MS = priorTimeout;
+    }
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it('skips a wedged subprocess-backed table with enrichment_timeout and settles within deadline+grace', async () => {
+    const pidFile = join(workDir, 'gc.pid');
+    const llmRuntime = createLlmProvider('unused');
+    llmRuntime.subprocessForkSpec = () => ({ backend: 'codex', projectDir: '/tmp', modelSlots: { default: 'codex' } });
+    const warnings: string[] = [];
+    const generator = new KtxDescriptionGenerator({
+      llmRuntime,
+      onWarning: (warning) => warnings.push(warning.code),
+      settings: { columnMaxWords: 12, tableMaxWords: 18, dataSourceMaxWords: 24 },
+      spawnSubprocessGenerateChild: () => spawnTestChild(children, HANGING_CHILD, { KTX_TEST_GC_PID_FILE: pidFile }),
+    });
+
+    const start = Date.now();
+    const result = await generator.generateBatchedTableDescriptions({
+      connectionId: 'conn-1',
+      connector: createConnector(),
+      context: { runId: 'run-1' },
+      dataSourceType: 'POSTGRESQL',
+      supportsNestedAnalysis: false,
+      table: { catalog: null, db: 'public', name: 'orders', columns: [{ name: 'status', type: 'text' }] },
+    });
+
+    expect(Date.now() - start).toBeLessThan(5000);
+    expect(result.tableDescription).toBeNull();
+    expect(Object.fromEntries(result.columnDescriptions)).toEqual({ status: null });
+    expect(warnings).toContain('enrichment_timeout');
+    // One wedge = one timeout: the hung table is not retried.
+    expect(children).toHaveLength(1);
+    const child = children[0]!;
+    await vi.waitFor(() => expect(child.exitCode !== null || child.signalCode !== null).toBe(true), { timeout: 5000 });
+  });
+
+  it('runs HTTP-backed enrichment in-process without spawning a child', async () => {
+    const spawnSpy = vi.fn(() => {
+      throw new Error('HTTP backend must not spawn a kill-boundary child');
+    });
+    const llmRuntime = createLlmProvider('unused');
+    llmRuntime.subprocessForkSpec = () => null;
+    llmRuntime.generateObject = vi.fn(async () => ({
+      tableDescription: 'Orders fact table',
+      columns: [{ name: 'status', description: 'Order lifecycle status' }],
+    }));
+    const generator = new KtxDescriptionGenerator({
+      llmRuntime,
+      settings: { columnMaxWords: 12, tableMaxWords: 18, dataSourceMaxWords: 24 },
+      spawnSubprocessGenerateChild: spawnSpy,
+    });
+
+    const result = await generator.generateBatchedTableDescriptions({
+      connectionId: 'conn-1',
+      connector: createConnector(),
+      context: { runId: 'run-1' },
+      dataSourceType: 'POSTGRESQL',
+      supportsNestedAnalysis: false,
+      table: { catalog: null, db: 'public', name: 'orders', columns: [{ name: 'status', type: 'text' }] },
+    });
+
+    expect(spawnSpy).not.toHaveBeenCalled();
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
+    expect(result.tableDescription).toBe('Orders fact table');
+    expect(Object.fromEntries(result.columnDescriptions)).toEqual({ status: 'Order lifecycle status' });
   });
 });

@@ -59,6 +59,24 @@ describe('ingestReportOutcome', () => {
     ).toBe('partial');
   });
 
+  it('returns partial when final gates pruned or dropped artifacts from a saved run', () => {
+    expect(
+      ingestReportOutcome(
+        report({
+          workUnits: [savingWorkUnit],
+          finalGatePrunedReferences: [
+            {
+              kind: 'join',
+              artifact: 'semantic-layer/warehouse/orders',
+              removedRef: 'customers',
+              absentTarget: 'customers',
+            },
+          ],
+        }),
+      ),
+    ).toBe('partial');
+  });
+
   it('returns error when failed work units produced no saved memory', () => {
     expect(ingestReportOutcome(report({ workUnits: [failedWorkUnit], failedWorkUnits: ['bad'] }))).toBe('error');
   });

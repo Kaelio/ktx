@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { KtxQueryError } from '../../../src/errors.js';
 import { clickHouseClientConfigFromConfig, isKtxClickHouseConnectionConfig, KtxClickHouseScanConnector, prepareClickHouseReadOnlyQuery, type KtxClickHouseClientFactory } from '../../../src/connectors/clickhouse/connector.js';
 import { createClickHouseLiveDatabaseIntrospection } from '../../../src/connectors/clickhouse/live-database-introspection.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
@@ -383,6 +384,43 @@ describe('KtxClickHouseScanConnector', () => {
     ).resolves.toBeNull();
 
     await connector.cleanup();
+  });
+
+  it('applies max_execution_time + an outlasting request_timeout and maps code 159 to KtxQueryError', async () => {
+    let capturedConfig: { request_timeout?: number; clickhouse_settings?: Record<string, unknown> } | undefined;
+    const timeoutError = Object.assign(new Error('Code: 159. DB::Exception: Timeout exceeded'), { code: 159 });
+    const clientFactory: KtxClickHouseClientFactory = {
+      createClient: vi.fn((config) => {
+        capturedConfig = config as { request_timeout?: number; clickhouse_settings?: Record<string, unknown> };
+        return {
+          query: vi.fn(async () => {
+            throw timeoutError;
+          }),
+          close: vi.fn(async () => undefined),
+        };
+      }),
+    };
+    const connector = new KtxClickHouseScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'clickhouse',
+        host: 'ch.example.test',
+        database: 'analytics',
+        username: 'reader',
+        password: 'test-pass', // pragma: allowlist secret
+        query_timeout_ms: 5_000,
+      },
+      clientFactory,
+    });
+
+    const execution = connector.executeReadOnly(
+      { connectionId: 'warehouse', sql: 'select count(*) from events' },
+      { runId: 'scan-run-1' },
+    );
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('query exceeded 5s');
+    expect(capturedConfig?.clickhouse_settings?.max_execution_time).toBe(5);
+    expect(capturedConfig?.request_timeout).toBe(10_000);
   });
 
   it('adapts native ClickHouse snapshots to live-database introspection for local ingest', async () => {

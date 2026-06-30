@@ -11,6 +11,7 @@ export function createKtxMcpServer(deps: KtxMcpServerDeps): KtxMcpServerDeps['se
       userContext: deps.userContext,
       projectDir: deps.projectDir,
       io: deps.io,
+      logger: deps.logger,
       getClientInfo: deps.getClientInfo,
     });
   }
@@ -31,6 +32,7 @@ export function createDefaultKtxMcpServer(
     contextTools: deps.contextTools,
     projectDir: deps.projectDir,
     io: deps.io,
+    logger: deps.logger,
     // The SDK populates the client identity after the initialize handshake, so
     // read it lazily at emit time rather than at registration (undefined here).
     getClientInfo: () => server.server.getClientVersion(),

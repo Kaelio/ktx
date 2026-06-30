@@ -79,6 +79,8 @@ export interface KtxRelationshipDiagnosticsArtifact {
   generatedAt: string;
   summary: KtxRelationshipDiagnosticsSummary;
   noAcceptedReason: string | null;
+  partial: boolean;
+  partialReason: string | null;
   candidateCountsBySource: Record<string, number>;
   validation: KtxRelationshipDiagnosticsValidation;
   thresholds: KtxRelationshipDiagnosticsThresholds;
@@ -101,6 +103,7 @@ export interface BuildKtxRelationshipDiagnosticsInput {
   warnings?: readonly KtxScanWarning[];
   thresholds?: Partial<KtxRelationshipDiagnosticsThresholds>;
   policy?: Partial<KtxRelationshipDiagnosticsPolicy>;
+  partial?: { reason: string } | null;
   generatedAt?: string;
 }
 
@@ -352,6 +355,8 @@ export function buildKtxRelationshipDiagnostics(
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     summary,
     noAcceptedReason: noAcceptedReason({ artifacts: input.artifacts, profile: input.profile }),
+    partial: Boolean(input.partial),
+    partialReason: input.partial?.reason ?? null,
     candidateCountsBySource: candidateCountsBySource(input.artifacts),
     validation: {
       available: input.profile.sqlAvailable,

@@ -320,7 +320,7 @@ function unique(values: string[]): string[] {
 }
 
 function assertSafeDatabaseConnectionId(connectionId: string): void {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(connectionId)) {
+  if (!/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(connectionId)) {
     throw new Error(`Unsafe connection id: ${connectionId}`);
   }
 }

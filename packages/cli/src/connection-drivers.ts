@@ -1,6 +1,7 @@
 import type { KtxProjectConnectionConfig } from './context/project/config.js';
 
-const KTX_DATABASE_DRIVER_IDS = new Set([
+/** @internal Canonical SQL-warehouse driver ids; the dialect-notes coverage test derives its required coverage from this set. */
+export const KTX_DATABASE_DRIVER_IDS = [
   'sqlite',
   'postgres',
   'mysql',
@@ -8,8 +9,11 @@ const KTX_DATABASE_DRIVER_IDS = new Set([
   'sqlserver',
   'bigquery',
   'snowflake',
-  'mongodb',
-]);
+] as const;
+
+// mongodb is a database driver but has no SQL dialect, so it sits outside the
+// dialect-notes coverage set above.
+const databaseDriverIds = new Set<string>([...KTX_DATABASE_DRIVER_IDS, 'mongodb']);
 
 export function normalizeConnectionDriver(connection: KtxProjectConnectionConfig): string {
   return String(connection.driver ?? '')
@@ -18,5 +22,5 @@ export function normalizeConnectionDriver(connection: KtxProjectConnectionConfig
 }
 
 export function isDatabaseDriver(driver: string): boolean {
-  return KTX_DATABASE_DRIVER_IDS.has(driver.trim().toLowerCase());
+  return databaseDriverIds.has(driver.trim().toLowerCase());
 }

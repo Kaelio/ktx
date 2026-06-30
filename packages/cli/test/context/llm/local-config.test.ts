@@ -137,16 +137,19 @@ describe('local ktx LLM config', () => {
       generateText: vi.fn(),
       generateObject: vi.fn(),
       runAgentLoop: vi.fn(),
+      subprocessForkSpec: vi.fn(() => null),
     }));
     const createCodexRuntime = vi.fn(() => ({
       generateText: vi.fn(),
       generateObject: vi.fn(),
       runAgentLoop: vi.fn(),
+      subprocessForkSpec: vi.fn(() => null),
     }));
     const createAiSdkRuntime = vi.fn(() => ({
       generateText: vi.fn(),
       generateObject: vi.fn(),
       runAgentLoop: vi.fn(),
+      subprocessForkSpec: vi.fn(() => null),
     }));
     const createKtxLlmProvider = vi.fn(() => ({
       getModel: vi.fn(),

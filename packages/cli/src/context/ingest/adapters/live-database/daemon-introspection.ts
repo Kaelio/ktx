@@ -3,8 +3,9 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { URL } from 'node:url';
 import type { KtxProjectConnectionConfig } from '../../../project/config.js';
+import { isKtxScanWarningCode } from '../../../scan/local-structural-artifacts.js';
 import { tableRefFromKey } from '../../../scan/table-ref.js';
-import type { KtxSchemaColumn, KtxSchemaForeignKey, KtxSchemaSnapshot, KtxSchemaTable } from '../../../scan/types.js';
+import type { KtxScanWarning, KtxSchemaColumn, KtxSchemaForeignKey, KtxSchemaSnapshot, KtxSchemaTable } from '../../../scan/types.js';
 import { inferKtxDimensionType, normalizeKtxNativeType } from '../../../scan/type-normalization.js';
 import type { LiveDatabaseIntrospectionOptions, LiveDatabaseIntrospectionPort } from './types.js';
 
@@ -206,10 +207,32 @@ function mapTable(raw: Record<string, unknown>): KtxSchemaTable {
   };
 }
 
+function mapWarning(raw: Record<string, unknown>): KtxScanWarning | null {
+  const code = optionalString(raw.code);
+  // Drop codes Node cannot render, keeping the daemon and Node warning catalogs
+  // in parity rather than surfacing an unknown code downstream.
+  if (!code || !isKtxScanWarningCode(code)) return null;
+  const table = optionalString(raw.table);
+  const column = optionalString(raw.column);
+  return {
+    code,
+    message: requiredString(raw.message, 'warnings[].message'),
+    recoverable: raw.recoverable !== false,
+    ...(table ? { table } : {}),
+    ...(column ? { column } : {}),
+    ...(raw.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)
+      ? { metadata: recordValue(raw.metadata) }
+      : {}),
+  };
+}
+
 function mapDaemonSnapshot(
   raw: Record<string, unknown>,
   input: { connectionId: string; extractedAt: string; schemas: string[] },
 ): KtxSchemaSnapshot {
+  const warnings = recordArray(raw.warnings)
+    .map(mapWarning)
+    .filter((warning): warning is KtxScanWarning => warning !== null);
   return {
     connectionId: requiredString(raw.connection_id, 'connection_id') || input.connectionId,
     driver: 'postgres',
@@ -217,6 +240,7 @@ function mapDaemonSnapshot(
     scope: { schemas: input.schemas },
     metadata: recordValue(raw.metadata),
     tables: recordArray(raw.tables).map(mapTable),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 

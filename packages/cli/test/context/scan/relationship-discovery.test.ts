@@ -224,6 +224,7 @@ function llmRuntime(output: unknown): KtxLlmRuntimePort {
     generateText: vi.fn(),
     generateObject: vi.fn(async () => output) as KtxLlmRuntimePort['generateObject'],
     runAgentLoop: vi.fn(),
+    subprocessForkSpec: () => null,
   };
 }
 
@@ -336,6 +337,126 @@ describe('production relationship discovery', () => {
       validation: expect.objectContaining({ reasons: expect.arrayContaining(['validation_passed']) }),
       graph: expect.objectContaining({ reasons: expect.arrayContaining(['fk_score_passed']) }),
     });
+  });
+
+  it('emits per-table profiling and per-candidate validation progress', async () => {
+    executor = new InMemorySqliteExecutor();
+    executor.db.exec(`
+      CREATE TABLE accounts (id INTEGER NOT NULL, name TEXT NOT NULL);
+      CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+      INSERT INTO accounts (id, name) VALUES (1, 'Acme'), (2, 'Globex');
+      INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+    `);
+    const messages: string[] = [];
+    const progress = {
+      async update(_progress: number, message?: string) {
+        if (message) {
+          messages.push(message);
+        }
+      },
+      startPhase() {
+        return progress;
+      },
+    };
+
+    const result = await discoverKtxRelationships({
+      connectionId: 'warehouse',
+      dialect: getSqlDialectForDriver('sqlite'),
+      connector: connector(executor),
+      schema: snapshotToKtxEnrichedSchema(snapshot()),
+      context: { runId: 'relationship-progress' },
+      settings: relationshipSettings(),
+      progress,
+    });
+
+    expect(result.partial).toBeNull();
+    expect(messages).toContain('Profiling table 1/2');
+    expect(messages).toContain('Profiling table 2/2');
+    expect(messages.some((message) => message.startsWith('Validating candidate '))).toBe(true);
+  });
+
+  it('returns a partial result when the wall-clock budget is exhausted, without throwing', async () => {
+    executor = new InMemorySqliteExecutor();
+    executor.db.exec(`
+      CREATE TABLE accounts (id INTEGER NOT NULL, name TEXT NOT NULL);
+      CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+      INSERT INTO accounts (id, name) VALUES (1, 'Acme'), (2, 'Globex');
+      INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+    `);
+    // A clock that jumps a full second per read against a 1ms budget exhausts
+    // the budget at the very first unit boundary.
+    let calls = 0;
+    const now = () => calls++ * 1000;
+
+    const result = await discoverKtxRelationships({
+      connectionId: 'warehouse',
+      dialect: getSqlDialectForDriver('sqlite'),
+      connector: connector(executor),
+      schema: snapshotToKtxEnrichedSchema(snapshot()),
+      context: { runId: 'relationship-budget' },
+      settings: { ...relationshipSettings(), detectionBudgetMs: 1 },
+      now,
+    });
+
+    expect(result.partial).toEqual({ reason: 'budget' });
+    expect(result.relationships.accepted).toBe(0);
+  });
+
+  it('does not start the LLM relationship proposal once the budget is exhausted', async () => {
+    executor = new InMemorySqliteExecutor();
+    executor.db.exec(`
+      CREATE TABLE accounts (id INTEGER NOT NULL, name TEXT NOT NULL);
+      CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+      INSERT INTO accounts (id, name) VALUES (1, 'Acme'), (2, 'Globex');
+      INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+    `);
+    let calls = 0;
+    const now = () => calls++ * 1000;
+    const generateObject = vi.fn(async () => ({ pkCandidates: [], fkCandidates: [] }));
+    const runtime: KtxLlmRuntimePort = {
+      generateText: vi.fn(),
+      generateObject: generateObject as KtxLlmRuntimePort['generateObject'],
+      runAgentLoop: vi.fn(),
+      subprocessForkSpec: () => null,
+    };
+
+    const result = await discoverKtxRelationships({
+      connectionId: 'warehouse',
+      dialect: getSqlDialectForDriver('sqlite'),
+      connector: connector(executor),
+      schema: snapshotToKtxEnrichedSchema(snapshot()),
+      context: { runId: 'relationship-budget-llm' },
+      settings: { ...relationshipSettings(), detectionBudgetMs: 1 },
+      llmRuntime: runtime,
+      now,
+    });
+
+    expect(result.partial).toEqual({ reason: 'budget' });
+    expect(result.llmRelationshipValidation).toBe('skipped');
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+
+  it('returns a partial result when the scan signal is already aborted', async () => {
+    executor = new InMemorySqliteExecutor();
+    executor.db.exec(`
+      CREATE TABLE accounts (id INTEGER NOT NULL, name TEXT NOT NULL);
+      CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+      INSERT INTO accounts (id, name) VALUES (1, 'Acme'), (2, 'Globex');
+      INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+    `);
+
+    const result = await discoverKtxRelationships({
+      connectionId: 'warehouse',
+      dialect: getSqlDialectForDriver('sqlite'),
+      connector: connector(executor),
+      schema: snapshotToKtxEnrichedSchema(snapshot()),
+      context: { runId: 'relationship-aborted', signal: AbortSignal.abort() },
+      settings: relationshipSettings(),
+    });
+
+    expect(result.partial).toEqual({ reason: 'aborted' });
+    // A stop-before-completion must not be reported as completed statistical validation.
+    expect(result.statisticalValidation).toBe('skipped');
   });
 
   it('accepts a profile-driven natural-key relationship without declared metadata', async () => {

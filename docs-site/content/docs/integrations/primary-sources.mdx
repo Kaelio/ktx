@@ -35,7 +35,7 @@ Agents should prefer environment or file references over literal secrets.
 | `context.queryHistory` | No | PostgreSQL, Snowflake, BigQuery | Enables query-history ingestion when the warehouse supports it |
 | `path` | Yes for path-style SQLite | SQLite | Local SQLite database path or `env:NAME` reference |
 | `max_bytes_billed` | No | BigQuery | Maximum bytes billed per query job |
-| `job_timeout_ms` | No | BigQuery | BigQuery query job timeout in milliseconds |
+| `query_timeout_ms` | No | all warehouses | Maximum execution time for a single read-only query, in milliseconds (default 30000). A query exceeding it is cancelled server-side (or, for SQLite, by terminating the off-process executor) and returns a `query exceeded Ns` error so the agent can revise. |
 | `project_id` | No | BigQuery | Optional local descriptor and mapping metadata; not used for BigQuery authentication |
 
 ## PostgreSQL
@@ -220,6 +220,37 @@ BigQuery dataset scope is stored in `connections.<id>.dataset_ids`. Interactive
 setup discovers datasets from credentials plus location, then writes the chosen
 dataset ids as the scan scope.
 
+### Cross-project datasets
+
+To introspect a dataset hosted in a **different project** than the one your
+credentials bill to — for example Google's `bigquery-public-data`, a partner's
+shared project, or an organization's central data project — qualify the entry
+as `project.dataset`:
+
+```yaml title="ktx.yaml"
+connections:
+  public-bq:
+    driver: bigquery
+    credentials_json: file:~/.config/gcloud/bq-service-account.json
+    location: US
+    dataset_ids:
+      - bigquery-public-data.austin_311
+      - bigquery-public-data.census_bureau_usa
+      - analytics
+```
+
+**ktx** introspects each dataset in its host project while every query job still
+bills to the `project_id` inside your `credentials_json`. A bare `dataset` entry
+(no prefix) is scanned in your own project, exactly as before. A single
+connection may mix datasets from several projects, and two projects may host
+datasets with the same name without colliding.
+
+Interactive setup does not enumerate datasets in projects your credentials don't
+own, so hand-write `project.dataset` entries for foreign datasets. The wizard's
+table picker also only lists datasets in your connection's `location` region;
+this affects table selection only — ingest and `discover_data` introspect a
+cross-project dataset regardless of region.
+
 ### Authentication
 
 | Method | Config |
@@ -269,7 +300,7 @@ staged artifact shape as Postgres and Snowflake.
 - Parameter binding uses named `@param` syntax
 - Arrays flattened to comma-separated strings in results
 - Location specified at query execution time
-- Supports `max_bytes_billed` and `job_timeout_ms` limits from `ktx.yaml`
+- Supports the `max_bytes_billed` limit from `ktx.yaml`; the shared `query_timeout_ms` field maps to the query job's `jobTimeoutMs`
 
 ---
 

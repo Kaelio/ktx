@@ -1,8 +1,14 @@
 import { BigQuery, type TableField } from '@google-cloud/bigquery';
-import { normalizeBigQueryProjectId, normalizeBigQueryRegion } from '../../context/connections/bigquery-identifiers.js';
+import {
+  normalizeBigQueryDatasetId,
+  normalizeBigQueryProjectId,
+  normalizeBigQueryRegion,
+} from '../../context/connections/bigquery-identifiers.js';
 import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
+import { tryIntrospectObject } from '../../context/scan/object-introspection.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
 import {
   connectorTestFailure,
@@ -35,14 +41,25 @@ export interface KtxBigQueryConnectionConfig {
   credentials_json?: string;
   location?: string;
   max_bytes_billed?: number | string;
-  job_timeout_ms?: number;
+  query_timeout_ms?: number;
   [key: string]: unknown;
+}
+
+/**
+ * A dataset to introspect, paired with the project that hosts it. `project`
+ * defaults to the billing project (`credentials.project_id`) when an entry has
+ * no `project.` prefix; a fully-qualified `project.dataset` entry resolves to
+ * its own host project. Jobs always bill in `credentials.project_id`.
+ */
+export interface BigQueryDatasetRef {
+  project: string;
+  dataset: string;
 }
 
 export interface KtxBigQueryResolvedConnectionConfig {
   projectId: string;
   credentials: Record<string, unknown>;
-  datasetIds: string[];
+  datasetIds: BigQueryDatasetRef[];
   location?: string;
 }
 
@@ -95,7 +112,7 @@ export interface KtxBigQueryDataset {
 
 export interface KtxBigQueryClient {
   getDatasets(input?: { maxResults?: number }): Promise<[Array<{ id?: string }>, ...unknown[]]>;
-  dataset(datasetId: string): KtxBigQueryDataset;
+  dataset(datasetId: string, projectId: string): KtxBigQueryDataset;
   createQueryJob(input: {
     query: string;
     location?: string;
@@ -116,7 +133,6 @@ export interface KtxBigQueryScanConnectorOptions {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   maxBytesBilled?: number | string;
-  queryTimeoutMs?: number;
 }
 
 class DefaultBigQueryClientFactory implements KtxBigQueryClientFactory {
@@ -124,8 +140,8 @@ class DefaultBigQueryClientFactory implements KtxBigQueryClientFactory {
     const client = new BigQuery(input);
     return {
       getDatasets: (options) => client.getDatasets(options) as Promise<[Array<{ id?: string }>, ...unknown[]]>,
-      dataset: (datasetId) => {
-        const dataset = client.dataset(datasetId);
+      dataset: (datasetId, projectId) => {
+        const dataset = client.dataset(datasetId, { projectId });
         return {
           get: () => dataset.get() as Promise<unknown>,
           getTables: () => dataset.getTables() as Promise<[KtxBigQueryTableRef[], ...unknown[]]>,
@@ -145,14 +161,48 @@ function stringConfigValue(
   return typeof value === 'string' && value.trim().length > 0 ? resolveStringReference(value.trim(), env) : undefined;
 }
 
-function datasetIds(connection: KtxBigQueryConnectionConfig, env: NodeJS.ProcessEnv): string[] {
-  if (Array.isArray(connection.dataset_ids) && connection.dataset_ids.length > 0) {
-    return connection.dataset_ids
-      .filter((dataset) => dataset.trim().length > 0)
-      .map((dataset) => resolveStringReference(dataset, env));
+/**
+ * Parse one `dataset_ids` / `dataset_id` entry into a canonical
+ * {@link BigQueryDatasetRef}. A `project.dataset` prefix selects the host
+ * project; a bare entry defaults to `defaultProject` (the billing project).
+ * More than one dot, or an empty segment, is a config error naming the
+ * connection — never a silent mis-introspection at scan time.
+ */
+function parseBigQueryDatasetEntry(entry: string, defaultProject: string, connectionId: string): BigQueryDatasetRef {
+  const context = `connections.${connectionId}.dataset_ids entry "${entry}"`;
+  const parts = entry.split('.');
+  if (parts.length === 1) {
+    return { project: defaultProject, dataset: normalizeBigQueryDatasetId(parts[0]!, context) };
   }
-  const datasetId = stringConfigValue(connection, 'dataset_id', env);
-  return datasetId ? [datasetId] : [];
+  if (parts.length === 2) {
+    const [project, dataset] = parts;
+    if (!project || !dataset) {
+      throw new Error(`Invalid BigQuery dataset entry for ${context}: empty project or dataset segment`);
+    }
+    return {
+      project: normalizeBigQueryProjectId(project, context),
+      dataset: normalizeBigQueryDatasetId(dataset, context),
+    };
+  }
+  throw new Error(
+    `Invalid BigQuery dataset entry for ${context}: expected "dataset" or "project.dataset", got more than one "."`,
+  );
+}
+
+function resolveDatasetRefs(
+  connection: KtxBigQueryConnectionConfig,
+  env: NodeJS.ProcessEnv,
+  defaultProject: string,
+  connectionId: string,
+): BigQueryDatasetRef[] {
+  const rawEntries =
+    Array.isArray(connection.dataset_ids) && connection.dataset_ids.length > 0
+      ? connection.dataset_ids.map((dataset) => resolveStringReference(dataset, env))
+      : [stringConfigValue(connection, 'dataset_id', env)].filter((value): value is string => Boolean(value));
+  return rawEntries
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => parseBigQueryDatasetEntry(entry, defaultProject, connectionId));
 }
 
 function bigQueryMaxBytesBilledFromConnection(
@@ -169,12 +219,25 @@ function bigQueryMaxBytesBilledFromConnection(
   return undefined;
 }
 
-function bigQueryJobTimeoutMsFromConnection(connection: KtxBigQueryConnectionConfig | undefined): number | undefined {
-  const value = connection?.job_timeout_ms;
-  if (typeof value !== 'number') {
-    return undefined;
+// jobTimeoutMs cancels the job with a "Job timed out" message (or a timeout
+// reason in the errors array) once the deadline elapses.
+function isBigQueryTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
   }
-  return Number.isInteger(value) && value > 0 ? value : undefined;
+  const topMessage = (error as { message?: unknown }).message;
+  if (typeof topMessage === 'string' && /timed out|timeout/i.test(topMessage)) {
+    return true;
+  }
+  const errors = (error as { errors?: unknown }).errors;
+  return (
+    Array.isArray(errors) &&
+    errors.some((entry) => {
+      const reason = (entry as { reason?: unknown })?.reason;
+      const message = (entry as { message?: unknown })?.message;
+      return reason === 'timeout' || (typeof message === 'string' && /timed out|timeout/i.test(message));
+    })
+  );
 }
 
 function tableKind(metadataType: string | undefined): KtxSchemaTable['kind'] {
@@ -267,7 +330,7 @@ export function bigQueryConnectionConfigFromConfig(input: {
   if (!projectId) {
     throw new Error(`Native BigQuery connector requires credentials_json.project_id for connections.${input.connectionId}`);
   }
-  const resolvedDatasetIds = datasetIds(input.connection, env);
+  const resolvedDatasetIds = resolveDatasetRefs(input.connection, env, projectId, input.connectionId);
   const location = stringConfigValue(input.connection, 'location', env);
   return { projectId, credentials, datasetIds: resolvedDatasetIds, ...(location ? { location } : {}) };
 }
@@ -290,7 +353,7 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
   private readonly clientFactory: KtxBigQueryClientFactory;
   private readonly now: () => Date;
   private readonly maxBytesBilled?: number | string;
-  private readonly queryTimeoutMs?: number;
+  private readonly deadlineMs: number;
   private readonly dialect = getSqlDialectForDriver('bigquery');
   private client: KtxBigQueryClient | null = null;
 
@@ -304,7 +367,7 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     this.clientFactory = options.clientFactory ?? new DefaultBigQueryClientFactory();
     this.now = options.now ?? (() => new Date());
     this.maxBytesBilled = options.maxBytesBilled ?? bigQueryMaxBytesBilledFromConnection(options.connection);
-    this.queryTimeoutMs = options.queryTimeoutMs ?? bigQueryJobTimeoutMsFromConnection(options.connection);
+    this.deadlineMs = resolveQueryDeadlineMs(options.connection);
     this.id = `bigquery:${options.connectionId}`;
   }
 
@@ -312,8 +375,8 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     try {
       const client = this.getClient();
       await client.getDatasets({ maxResults: 1 });
-      for (const datasetId of this.resolved.datasetIds) {
-        await client.dataset(datasetId).get();
+      for (const ref of this.resolved.datasetIds) {
+        await client.dataset(ref.dataset, ref.project).get();
       }
       return { success: true };
     } catch (error) {
@@ -324,22 +387,23 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
   async introspect(input: KtxScanInput, _ctx: KtxScanContext): Promise<KtxSchemaSnapshot> {
     this.assertConnection(input.connectionId);
     const tables: KtxSchemaTable[] = [];
-    const datasetIds = this.requireDatasetIdsForScan();
+    const datasetRefs = this.requireDatasetIdsForScan();
     const snapshotWarnings: KtxScanWarning[] = [];
-    for (const datasetId of datasetIds) {
+    for (const ref of datasetRefs) {
       const scopedNames = input.tableScope
-        ? scopedTableNames(input.tableScope, { catalog: this.resolved.projectId, db: datasetId })
+        ? scopedTableNames(input.tableScope, { catalog: ref.project, db: ref.dataset })
         : null;
-      tables.push(...(await this.introspectDataset(datasetId, scopedNames, snapshotWarnings)));
+      tables.push(...(await this.introspectDataset(ref, scopedNames, snapshotWarnings)));
     }
+    const datasetLabels = datasetRefs.map((ref) => this.qualifiedDatasetLabel(ref));
     return {
       connectionId: this.connectionId,
       driver: 'bigquery',
       extractedAt: this.now().toISOString(),
-      scope: { catalogs: [this.resolved.projectId], datasets: datasetIds },
+      scope: { catalogs: [...new Set(datasetRefs.map((ref) => ref.project))], datasets: datasetLabels },
       metadata: {
         project_id: this.resolved.projectId,
-        datasets: datasetIds,
+        datasets: datasetLabels,
         table_count: tables.length,
         total_columns: tables.reduce((sum, table) => sum + table.columns.length, 0),
       },
@@ -400,11 +464,14 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     return { values: valueRows.filter((row) => row.val !== null).map((row) => String(row.val)), cardinality };
   }
 
-  async getTableRowCount(tableName: string, datasetId = this.resolved.datasetIds[0]): Promise<number> {
-    if (!datasetId) {
+  async getTableRowCount(
+    tableName: string,
+    ref: BigQueryDatasetRef | undefined = this.resolved.datasetIds[0],
+  ): Promise<number> {
+    if (!ref) {
       return 0;
     }
-    const tables = await this.introspectDataset(datasetId, null, []);
+    const tables = await this.introspectDataset(ref, null, []);
     return tables.find((table) => table.name === tableName)?.estimatedRows ?? 0;
   }
 
@@ -422,12 +489,28 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
   }
 
   async listTables(datasetIds?: string[]): Promise<KtxTableListEntry[]> {
-    const projectId = normalizeBigQueryProjectId(this.resolved.projectId, 'table discovery');
     const region = normalizeBigQueryRegion(this.resolved.location ?? 'US', 'table discovery');
+    if (!datasetIds || datasetIds.length === 0) {
+      return this.listTablesInProject(this.resolved.projectId, region);
+    }
+    const datasetsByProject = new Map<string, string[]>();
+    for (const entry of datasetIds) {
+      const ref = parseBigQueryDatasetEntry(entry.trim(), this.resolved.projectId, this.connectionId);
+      datasetsByProject.set(ref.project, [...(datasetsByProject.get(ref.project) ?? []), ref.dataset]);
+    }
+    const entries: KtxTableListEntry[] = [];
+    for (const [project, datasets] of datasetsByProject) {
+      entries.push(...(await this.listTablesInProject(project, region, datasets)));
+    }
+    return entries;
+  }
+
+  private async listTablesInProject(project: string, region: string, datasets?: string[]): Promise<KtxTableListEntry[]> {
+    const projectId = normalizeBigQueryProjectId(project, 'table discovery');
     const params: Record<string, unknown> = {};
-    const filter = datasetIds && datasetIds.length > 0 ? 'AND table_schema IN UNNEST(@dataset_ids)' : '';
-    if (datasetIds && datasetIds.length > 0) {
-      params.dataset_ids = datasetIds;
+    const filter = datasets && datasets.length > 0 ? 'AND table_schema IN UNNEST(@dataset_ids)' : '';
+    if (datasets && datasets.length > 0) {
+      params.dataset_ids = datasets;
     }
     const rows = await this.queryRaw<{ table_schema: string; table_name: string; table_type: string }>(
       `
@@ -442,7 +525,7 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
       params,
     );
     return rows.map((row) => ({
-      catalog: this.resolved.projectId,
+      catalog: project,
       schema: row.table_schema,
       name: row.table_name,
       kind:
@@ -466,34 +549,48 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     return this.client;
   }
 
-  private requireDatasetIdsForScan(): string[] {
+  private requireDatasetIdsForScan(): BigQueryDatasetRef[] {
     if (this.resolved.datasetIds.length === 0) {
       throw new Error(`Native BigQuery scan requires connections.${this.connectionId}.dataset_ids or dataset_id`);
     }
     return this.resolved.datasetIds;
   }
 
+  // Bare in the billing project, qualified `project.dataset` otherwise, so the
+  // snapshot's scope/metadata stay unambiguous when two projects host the same
+  // dataset name. The dotless form is the unchanged single-project label.
+  private qualifiedDatasetLabel(ref: BigQueryDatasetRef): string {
+    return ref.project === this.resolved.projectId ? ref.dataset : `${ref.project}.${ref.dataset}`;
+  }
+
   private async query(sql: string, params?: Record<string, unknown>): Promise<KtxQueryResult> {
-    const [job] = await this.getClient().createQueryJob({
-      query: sql,
-      ...(this.resolved.location ? { location: this.resolved.location } : {}),
-      ...(params && Object.keys(params).length > 0 ? { params } : {}),
-      ...(this.maxBytesBilled ? { maximumBytesBilled: String(this.maxBytesBilled) } : {}),
-      ...(this.queryTimeoutMs ? { jobTimeoutMs: this.queryTimeoutMs } : {}),
-    });
-    const [rows, , response] = await job.getQueryResults();
-    let headers = response?.schema?.fields?.map((field) => field.name || '') ?? [];
-    const headerTypes = response?.schema?.fields?.map((field) => String(field.type || 'STRING')) ?? [];
-    if (headers.length === 0 && rows.length > 0) {
-      headers = Object.keys(rows[0]!);
+    try {
+      const [job] = await this.getClient().createQueryJob({
+        query: sql,
+        ...(this.resolved.location ? { location: this.resolved.location } : {}),
+        ...(params && Object.keys(params).length > 0 ? { params } : {}),
+        ...(this.maxBytesBilled ? { maximumBytesBilled: String(this.maxBytesBilled) } : {}),
+        jobTimeoutMs: this.deadlineMs,
+      });
+      const [rows, , response] = await job.getQueryResults();
+      let headers = response?.schema?.fields?.map((field) => field.name || '') ?? [];
+      const headerTypes = response?.schema?.fields?.map((field) => String(field.type || 'STRING')) ?? [];
+      if (headers.length === 0 && rows.length > 0) {
+        headers = Object.keys(rows[0]!);
+      }
+      return {
+        headers,
+        headerTypes: headerTypes.length > 0 ? headerTypes : undefined,
+        rows: rows.map((row) => headers.map((header) => normalizeValue(row[header]))),
+        totalRows: rows.length,
+        rowCount: rows.length,
+      };
+    } catch (error) {
+      if (isBigQueryTimeoutError(error)) {
+        throw queryDeadlineExceededError(this.deadlineMs, { cause: error });
+      }
+      throw error;
     }
-    return {
-      headers,
-      headerTypes: headerTypes.length > 0 ? headerTypes : undefined,
-      rows: rows.map((row) => headers.map((header) => normalizeValue(row[header]))),
-      totalRows: rows.length,
-      rowCount: rows.length,
-    };
   }
 
   private async queryRaw<T extends Record<string, unknown>>(sql: string, params?: Record<string, unknown>): Promise<T[]> {
@@ -507,18 +604,18 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
   }
 
   private async introspectDataset(
-    datasetId: string,
+    ref: BigQueryDatasetRef,
     scopedNames: readonly string[] | null,
     snapshotWarnings: KtxScanWarning[],
   ): Promise<KtxSchemaTable[]> {
     if (scopedNames && scopedNames.length === 0) return [];
-    const dataset = this.getClient().dataset(datasetId);
+    const dataset = this.getClient().dataset(ref.dataset, ref.project);
     const [tableRefs] = await dataset.getTables();
     const scopeSet = scopedNames ? new Set(scopedNames) : null;
     const filteredTableRefs = scopeSet ? tableRefs.filter((tableRef) => scopeSet.has(tableRef.id ?? '')) : tableRefs;
     const primaryKeysResult = await tryConstraintQuery(
-      { schema: datasetId, kind: 'primary_key', isDeniedError },
-      () => this.primaryKeys(datasetId),
+      { schema: ref.dataset, kind: 'primary_key', isDeniedError },
+      () => this.primaryKeys(ref),
     );
     const primaryKeys = primaryKeysResult.ok ? primaryKeysResult.value : new Map<string, Set<string>>();
     if (!primaryKeysResult.ok) {
@@ -527,41 +624,51 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     const tables: KtxSchemaTable[] = [];
     for (const tableRef of filteredTableRefs) {
       const tableName = tableRef.id || '';
-      const [table] = await tableRef.get();
-      const fields = table.metadata.schema?.fields ?? [];
-      tables.push({
-        catalog: this.resolved.projectId,
-        db: datasetId,
-        name: tableName,
-        kind: tableKind(table.metadata.type),
-        comment: table.metadata.description || null,
-        estimatedRows: firstNumber(table.metadata.numRows) ?? 0,
-        columns: fields.map((field) => this.toSchemaColumn(tableName, field, primaryKeys)),
-        foreignKeys: [],
-      });
+      const outcome = await tryIntrospectObject<KtxSchemaTable>(
+        { object: tableName, catalog: ref.project, db: ref.dataset },
+        async () => {
+          const [table] = await tableRef.get();
+          const fields = table.metadata.schema?.fields ?? [];
+          return {
+            catalog: ref.project,
+            db: ref.dataset,
+            name: tableName,
+            kind: tableKind(table.metadata.type),
+            comment: table.metadata.description || null,
+            estimatedRows: firstNumber(table.metadata.numRows) ?? 0,
+            columns: fields.map((field) => this.toSchemaColumn(tableName, field, primaryKeys)),
+            foreignKeys: [],
+          };
+        },
+      );
+      if (outcome.ok) {
+        tables.push(outcome.table);
+      } else {
+        snapshotWarnings.push(outcome.warning);
+      }
     }
     return tables;
   }
 
-  private async primaryKeys(datasetId: string): Promise<Map<string, Set<string>>> {
+  private async primaryKeys(ref: BigQueryDatasetRef): Promise<Map<string, Set<string>>> {
     const rows = await this.queryRaw<{ table_name: string; column_name: string }>(
       'SELECT tc.table_name, kcu.column_name ' +
         'FROM `' +
-        this.resolved.projectId +
+        ref.project +
         '.' +
-        datasetId +
+        ref.dataset +
         '.INFORMATION_SCHEMA.TABLE_CONSTRAINTS` tc ' +
         'JOIN `' +
-        this.resolved.projectId +
+        ref.project +
         '.' +
-        datasetId +
+        ref.dataset +
         '.INFORMATION_SCHEMA.KEY_COLUMN_USAGE` kcu ' +
         'ON tc.constraint_name = kcu.constraint_name ' +
         'AND tc.table_schema = kcu.table_schema ' +
         'AND tc.table_name = kcu.table_name ' +
         "WHERE tc.constraint_type = 'PRIMARY KEY' " +
         "AND tc.table_schema = '" +
-        datasetId +
+        ref.dataset +
         "' " +
         "AND NOT REGEXP_CONTAINS(kcu.column_name, r'^(stacksync_record_id|sync_primary_key)_') " +
         'ORDER BY tc.table_name, kcu.ordinal_position',

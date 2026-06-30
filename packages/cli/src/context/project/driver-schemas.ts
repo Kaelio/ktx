@@ -30,7 +30,15 @@ function warehouseConnectionSchema<const Driver extends WarehouseDriver>(driver:
         .array(z.string().min(1))
         .optional()
         .describe(
-          'Optional allowlist of fully-qualified table names ("schema.table") to ingest. When set, live-database ingest discards any table whose schema-qualified name is not in this list. Useful for smoke-testing ingest on a single table.',
+          'Optional allowlist of object names to ingest. Accepted forms: "catalog.db.name", "db.name" (schema-qualified), or bare "name". When set, live-database ingest restricts the scan to the listed objects and fails with a clear error if none match. For SQLite, "main.<name>" and the bare "<name>" are equivalent (SQLite exposes a single "main" schema). Useful for smoke-testing ingest on a single table.',
+        ),
+      query_timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'Maximum execution time for a single read-only query, in milliseconds (default 30000). Enforced as a server-side statement timeout for remote engines and by SIGKILL-ing a forked query subprocess for in-process SQLite. A query exceeding it is cancelled and returns a "query exceeded Ns" error so the agent can revise.',
         ),
     })
     .describe(

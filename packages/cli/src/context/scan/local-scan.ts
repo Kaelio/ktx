@@ -6,25 +6,36 @@ import { getLocalStageOnlyIngestStatus, type LocalIngestRunRecord, runLocalStage
 import type { SourceAdapter } from '../../context/ingest/types.js';
 import { createLocalKtxLlmRuntimeFromConfig } from '../../context/llm/local-config.js';
 import { KtxScanEmbeddingPortAdapter } from '../../context/llm/embedding-port.js';
-import type { KtxProjectLlmConfig, KtxScanEnrichmentConfig, KtxScanRelationshipConfig } from '../project/config.js';
+import type { KtxProjectLlmConfig, KtxScanEnrichmentConfig } from '../project/config.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { ktxLocalStateDbPath } from '../project/local-state-db.js';
 import { redactKtxScanReport } from './credentials.js';
 import { resolveEnabledTables } from './enabled-tables.js';
-import { completedKtxScanEnrichmentStateSummary } from './enrichment-state.js';
+import {
+  completedKtxScanEnrichmentStateSummary,
+  type KtxScanEmbeddingIdentity,
+  type KtxScanLlmIdentity,
+} from './enrichment-state.js';
 import { failedKtxScanEnrichmentSummary, ktxScanErrorMessage } from './enrichment-summary.js';
 import {
   createDeterministicLocalScanEnrichmentProviders,
   type KtxLocalScanEnrichmentProviders,
   runLocalScanEnrichment,
 } from './local-enrichment.js';
-import { writeLocalScanEnrichmentArtifacts, writeLocalScanManifestShards } from './local-enrichment-artifacts.js';
+import {
+  createKtxScanDescriptionResumeStore,
+  loadOnDiskDescriptionUpdates,
+  writeLocalScanEnrichmentArtifacts,
+  writeLocalScanEnrichmentCheckpoint,
+  writeLocalScanManifestShards,
+} from './local-enrichment-artifacts.js';
 import { readLocalScanStructuralSnapshot } from './local-structural-artifacts.js';
 import { SqliteLocalScanEnrichmentStateStore } from './sqlite-local-enrichment-state-store.js';
 import type {
   KtxConnectionDriver,
   KtxProgressPort,
   KtxScanConnector,
+  KtxScanEnrichmentStage,
   KtxScanEnrichmentStateSummary,
   KtxScanMode,
   KtxScanReport,
@@ -68,6 +79,8 @@ export interface RunLocalScanOptions {
   connectionId: string;
   mode?: KtxScanMode;
   detectRelationships?: boolean;
+  /** Enrichment stages to (re)run; omit to run all eligible stages. */
+  stages?: KtxScanEnrichmentStage[];
   dryRun?: boolean;
   trigger?: KtxScanTrigger;
   databaseIntrospectionUrl?: string;
@@ -80,6 +93,7 @@ export interface RunLocalScanOptions {
   enrichmentStateStore?: SqliteLocalScanEnrichmentStateStore | null;
   progress?: KtxProgressPort;
   embeddingProvider?: KtxEmbeddingProvider | null;
+  signal?: AbortSignal;
 }
 
 export interface LocalScanRunResult {
@@ -233,19 +247,18 @@ function createLocalScanEnrichmentStateStore(options: RunLocalScanOptions): Sqli
   return new SqliteLocalScanEnrichmentStateStore({ dbPath: ktxLocalStateDbPath(options.project) });
 }
 
-function localScanProviderIdentity(
-  config: KtxScanEnrichmentConfig,
-  llmConfig: KtxProjectLlmConfig,
-  relationships: KtxScanRelationshipConfig,
-): Record<string, unknown> {
+function localScanLlmIdentity(llmConfig: KtxProjectLlmConfig): KtxScanLlmIdentity {
   return {
-    mode: config.mode,
-    embeddingDimensions: config.embeddings?.dimensions ?? null,
-    llmModel: llmConfig.models.default ?? null,
-    embeddingModel: config.embeddings?.model ?? null,
-    batchSize: config.embeddings?.batchSize ?? null,
+    model: llmConfig.models.default ?? null,
     baseUrlConfigured: Boolean(llmConfig.provider.gateway?.base_url),
-    relationships,
+  };
+}
+
+function localScanEmbeddingIdentity(config: KtxScanEnrichmentConfig): KtxScanEmbeddingIdentity {
+  return {
+    model: config.embeddings?.model ?? null,
+    dimensions: config.embeddings?.dimensions ?? null,
+    batchSize: config.embeddings?.batchSize ?? null,
   };
 }
 
@@ -458,6 +471,13 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
   const enrichmentStateStore = connector ? createLocalScanEnrichmentStateStore(options) : null;
   let enrichmentState: KtxScanEnrichmentStateSummary = completedKtxScanEnrichmentStateSummary();
   let enrichmentSnapshot: KtxSchemaSnapshot | null = null;
+  // On a `--stages` subset run, the structural manifest write below (and the
+  // later enrichment write) merge with on-disk shards, but the merge treats ai/db
+  // descriptions as scan-managed and overwrites them with whatever the run emits.
+  // A subset that skips `descriptions` emits none, so without this the structural
+  // write would delete the prior descriptions before enrichment can preserve them.
+  // Capture them up front (only for subset runs) and feed them to both writes.
+  let priorDescriptionUpdates: Awaited<ReturnType<typeof loadOnDiskDescriptionUpdates>> | null = null;
   if (!reusedExistingScanArtifacts && !report.dryRun && report.artifactPaths.rawSourcesDir) {
     await options.progress?.update(0.7, 'Writing schema artifacts');
     const rawSnapshot = await readLocalScanStructuralSnapshot({
@@ -471,12 +491,20 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
     if (rawSnapshot.warnings?.length) {
       report.warnings.push(...rawSnapshot.warnings);
     }
+    if (options.stages !== undefined && connector) {
+      priorDescriptionUpdates = await loadOnDiskDescriptionUpdates(
+        options.project,
+        options.connectionId,
+        rawSnapshot,
+      );
+    }
     const manifestArtifacts = await writeLocalScanManifestShards({
       project: options.project,
       connectionId: options.connectionId,
       syncId: record.syncId,
       driver,
       snapshot: rawSnapshot,
+      ...(priorDescriptionUpdates ? { descriptionUpdates: priorDescriptionUpdates } : {}),
       dryRun: false,
     });
     report.artifactPaths.manifestShards = manifestArtifacts.manifestShards;
@@ -494,19 +522,43 @@ export async function runLocalScan(options: RunLocalScanOptions): Promise<LocalS
         connectionId: options.connectionId,
         mode,
         detectRelationships: options.detectRelationships,
+        ...(options.stages ? { stages: options.stages } : {}),
         connector,
         ...(enrichmentSnapshot ? { snapshot: enrichmentSnapshot } : {}),
-        context: { runId: record.runId, progress: options.progress?.startPhase(0.18) },
+        context: {
+          runId: record.runId,
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.progress ? { progress: options.progress.startPhase(0.18) } : {}),
+        },
         providers: enrichmentProviders,
         stateStore: enrichmentStateStore,
+        descriptionResumeStore: options.dryRun
+          ? null
+          : createKtxScanDescriptionResumeStore({
+              project: options.project,
+              connectionId: options.connectionId,
+              syncId: record.syncId,
+              driver,
+            }),
         syncId: record.syncId,
-        providerIdentity: localScanProviderIdentity(
-          options.project.config.scan.enrichment,
-          options.project.config.llm,
-          options.project.config.scan.relationships,
-        ),
+        loadPriorDescriptions: (enrichedSnapshot) =>
+          priorDescriptionUpdates
+            ? Promise.resolve(priorDescriptionUpdates)
+            : loadOnDiskDescriptionUpdates(options.project, options.connectionId, enrichedSnapshot),
+        llmIdentity: localScanLlmIdentity(options.project.config.llm),
+        embeddingIdentity: localScanEmbeddingIdentity(options.project.config.scan.enrichment),
         relationshipSettings: options.project.config.scan.relationships,
         now: options.now,
+        onCheckpoint: async (checkpoint) => {
+          await writeLocalScanEnrichmentCheckpoint({
+            project: options.project,
+            connectionId: options.connectionId,
+            syncId: record.syncId,
+            driver,
+            enrichment: checkpoint,
+            dryRun: options.dryRun ?? false,
+          });
+        },
       });
       const artifacts = await writeLocalScanEnrichmentArtifacts({
         project: options.project,

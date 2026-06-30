@@ -1,8 +1,9 @@
 import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxEnrichedColumn, KtxEnrichedSchema, KtxEnrichedTable } from './enrichment-types.js';
-import { mapWithConcurrency } from './relationship-validation.js';
+import { type KtxRelationshipDetectionBudget, mapWithBudget } from './relationship-detection-budget.js';
 import type {
   KtxConnectionDriver,
+  KtxProgressPort,
   KtxQueryResult,
   KtxReadOnlyQueryInput,
   KtxScanContext,
@@ -65,6 +66,8 @@ export interface ProfileKtxRelationshipSchemaInput {
   profileSampleRows?: number;
   profileConcurrency?: number;
   cache?: KtxRelationshipProfileCache;
+  budget?: KtxRelationshipDetectionBudget;
+  progress?: KtxProgressPort;
 }
 
 export function createKtxRelationshipProfileCache(): KtxRelationshipProfileCache {
@@ -341,10 +344,14 @@ export async function profileKtxRelationshipSchema(
   const dialect = input.dialect;
 
   const enabledTables = input.schema.tables.filter((candidate) => candidate.enabled);
-  const tableResults = await mapWithConcurrency<KtxEnrichedTable, TableProfileResult>(
-    enabledTables,
-    input.profileConcurrency ?? 4,
-    async (table) => {
+  const { results: tableResults } = await mapWithBudget<KtxEnrichedTable, TableProfileResult>({
+    inputs: enabledTables,
+    concurrency: input.profileConcurrency ?? 4,
+    budget: input.budget,
+    onStart: async (index, total) => {
+      await input.progress?.update((index + 1) / total, `Profiling table ${index + 1}/${total}`, { transient: true });
+    },
+    mapOne: async (table) => {
       const sampleValuesPerColumn = input.sampleValuesPerColumn ?? 5;
       const profileSampleRows = input.profileSampleRows ?? 10000;
       const cacheKey = tableProfileCacheKey({
@@ -387,9 +394,12 @@ export async function profileKtxRelationshipSchema(
         return { cached: cachedFailure, queryCount: 0 };
       }
     },
-  );
+  });
 
   for (const result of tableResults) {
+    if (!result) {
+      continue;
+    }
     if ('tableProfile' in result) {
       queryTotal += result.tableProfile.queryCount;
       tables.push(result.tableProfile.table);

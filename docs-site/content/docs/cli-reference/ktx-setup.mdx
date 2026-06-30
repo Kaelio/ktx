@@ -134,6 +134,13 @@ incomplete.
 MySQL, and SQL Server; `schema_names` for Snowflake; `dataset_ids` for
 BigQuery; and `databases` for ClickHouse.
 
+A BigQuery `--database-schema` value may be qualified as `project.dataset` to
+scan a dataset hosted in another project (such as
+`bigquery-public-data.austin_311`); a bare value stays in the credentials'
+project. Setup does not discover foreign-project datasets, so supply qualified
+entries explicitly. See
+[Primary sources → BigQuery](/docs/integrations/primary-sources#cross-project-datasets).
+
 With `--no-input`, scope for a scope-bearing driver (PostgreSQL, MySQL,
 ClickHouse, SQL Server, BigQuery, Snowflake) must come from `--database-schema`
 or from existing connection config in `ktx.yaml` (for example

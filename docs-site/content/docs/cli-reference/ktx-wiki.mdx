@@ -28,9 +28,16 @@ Edit the Markdown files under `wiki/` directly, or ingest source content with
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--user-id <id>` | Local user id | `local` |
+| `-c, --connection <id>` | Scope results to one connection: unscoped pages plus pages tagged with that connection | - |
 | `--limit <number>` | Maximum search results (search mode only) | - |
 | `--output <mode>` | Output mode: `pretty` (default in TTY), `plain` (TSV), or `json` | `pretty` |
 | `--json` | Shortcut for `--output=json` (overrides `--output`) | `false` |
+
+`-c, --connection <id>` takes a connection id from the `connections` map in
+`ktx.yaml` (an unknown id is rejected). It narrows both list and search to
+pages that are not tied to any connection plus pages tagged with that
+connection, so an agent working against one database sees only the wiki
+knowledge relevant to it.
 
 `ktx wiki <query>` uses hybrid search when `storage.search` is `sqlite-fts5`.
 **ktx** combines lexical SQLite FTS5 matches, token matches, and semantic matches
@@ -49,6 +56,12 @@ ktx wiki --json
 
 # Search wiki pages
 ktx wiki "monthly recurring revenue"
+
+# List pages scoped to one connection (unscoped + connection-tagged)
+ktx wiki --connection warehouse
+
+# Search within one connection's scope
+ktx wiki "monthly recurring revenue" -c warehouse
 
 # Search wiki pages as JSON
 ktx wiki "monthly recurring revenue" --json --limit 10

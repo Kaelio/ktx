@@ -1,5 +1,6 @@
 import mysql, { type FieldPacket, type Pool, type RowDataPacket } from 'mysql2/promise';
 import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { resolveStringReference } from '../shared/string-reference.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import {
@@ -282,6 +283,11 @@ function isDeniedError(error: unknown): boolean {
   );
 }
 
+// errno 3024 = ER_QUERY_TIMEOUT, raised when max_execution_time is exceeded.
+function isMysqlTimeoutError(error: unknown): boolean {
+  return Boolean(error) && typeof error === 'object' && (error as { errno?: unknown }).errno === 3024;
+}
+
 function pushConstraintWarnings(
   warnings: KtxScanWarning[],
   schemas: readonly string[],
@@ -391,6 +397,7 @@ export class KtxMysqlScanConnector implements KtxScanConnector {
   private readonly poolFactory: KtxMysqlPoolFactory;
   private readonly endpointResolver?: KtxMysqlEndpointResolver;
   private readonly now: () => Date;
+  private readonly deadlineMs: number;
   private readonly dialect = getSqlDialectForDriver('mysql');
   private pool: KtxMysqlPool | null = null;
   private resolvedEndpoint: KtxMysqlResolvedEndpoint | null = null;
@@ -406,6 +413,7 @@ export class KtxMysqlScanConnector implements KtxScanConnector {
     this.poolFactory = options.poolFactory ?? new DefaultMysqlPoolFactory();
     this.endpointResolver = options.endpointResolver;
     this.now = options.now ?? (() => new Date());
+    this.deadlineMs = resolveQueryDeadlineMs(this.connection);
     this.id = `mysql:${options.connectionId}`;
   }
 
@@ -763,6 +771,9 @@ export class KtxMysqlScanConnector implements KtxScanConnector {
     const pool = await this.poolForQuery();
     const connection = await pool.getConnection();
     try {
+      // max_execution_time (ms) bounds read-only SELECTs server-side; our path
+      // only runs SELECT/WITH, so the session setting always applies.
+      await connection.query('SET SESSION max_execution_time = ?', [this.deadlineMs]);
       const [rows, fields] = await connection.query(assertReadOnlySql(sql), queryParams(params));
       const headers = fields.map((field) => field.name);
       const headerTypes = fields.map((field) => String(field.type ?? 'unknown'));
@@ -772,6 +783,11 @@ export class KtxMysqlScanConnector implements KtxScanConnector {
         rows: rows.map((row) => headers.map((header) => row[header])),
         totalRows: rows.length,
       };
+    } catch (error) {
+      if (isMysqlTimeoutError(error)) {
+        throw queryDeadlineExceededError(this.deadlineMs, { cause: error });
+      }
+      throw error;
     } finally {
       connection.release();
     }

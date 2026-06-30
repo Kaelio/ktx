@@ -1,5 +1,6 @@
 import type { MemoryIngestService } from '../../context/memory/memory-runs.js';
 import type { KtxCliIo } from '../../cli-runtime.js';
+import type { KtxMcpLogger } from './logger.js';
 import type { KtxEntityDetailsInput, KtxEntityDetailsResponse } from '../scan/entity-details.js';
 import type { KtxDiscoverDataInput, KtxDiscoverDataResponse } from '../../context/search/discover.js';
 import type { KtxDictionarySearchInput, KtxDictionarySearchResponse } from '../../context/sl/dictionary-search.js';
@@ -28,6 +29,8 @@ interface KtxMcpProgressEvent {
 export type KtxMcpProgressCallback = (event: KtxMcpProgressEvent) => void | Promise<void>;
 
 export interface KtxMcpToolHandlerContext {
+  /** Present for the HTTP StreamableHTTP transport (one per session); absent for stdio. */
+  sessionId?: string;
   _meta?: { progressToken?: string | number; [key: string]: unknown };
   sendNotification?: (notification: {
     method: 'notifications/progress';
@@ -113,7 +116,12 @@ interface KtxKnowledgePage {
 
 /** @internal */
 export interface KtxKnowledgeMcpPort {
-  search(input: { userId: string; query: string; limit: number }): Promise<KtxKnowledgeSearchResponse>;
+  search(input: {
+    userId: string;
+    query: string;
+    limit: number;
+    connectionId?: string;
+  }): Promise<KtxKnowledgeSearchResponse>;
   read(input: { userId: string; key: string }): Promise<KtxKnowledgePage | null>;
 }
 
@@ -172,6 +180,11 @@ export interface KtxSqlExecutionMcpPort {
   ): Promise<KtxSqlExecutionResponse>;
 }
 
+/** @internal */
+export interface KtxDialectNotesMcpPort {
+  read(input: { connectionId: string }): Promise<{ connectionId: string; dialect: string; notes: string }>;
+}
+
 export interface KtxMcpContextPorts {
   connections?: KtxConnectionsMcpPort;
   knowledge?: KtxKnowledgeMcpPort;
@@ -180,6 +193,7 @@ export interface KtxMcpContextPorts {
   dictionarySearch?: KtxDictionarySearchMcpPort;
   discover?: KtxDiscoverDataMcpPort;
   sqlExecution?: KtxSqlExecutionMcpPort;
+  dialectNotes?: KtxDialectNotesMcpPort;
   memoryIngest?: MemoryIngestPort;
 }
 
@@ -189,6 +203,8 @@ export interface KtxMcpServerDeps {
   contextTools?: KtxMcpContextPorts;
   projectDir?: string;
   io?: KtxCliIo;
+  /** Shared per-process logger for tool-call observability; tool-call logging is off when absent. */
+  logger?: KtxMcpLogger;
   /** Reads the connected client's identity once the initialize handshake completes. */
   getClientInfo?: () => KtxMcpClientInfo | undefined;
 }

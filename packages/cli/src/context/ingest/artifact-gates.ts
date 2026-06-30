@@ -3,7 +3,7 @@ import type { TouchedSlSource } from '../../context/tools/touched-sl-sources.js'
 import type { KnowledgeWikiService } from '../../context/wiki/knowledge-wiki.service.js';
 import { findMissingWikiRefs } from '../wiki/wiki-ref-validation.js';
 import type { WuValidationResult } from './stages/validate-wu-sources.js';
-import { findInvalidWikiBodyRefs } from './wiki-body-refs.js';
+import { findInvalidWikiBodyRefIssues, type WikiBodyRefIssue } from './wiki-body-refs.js';
 
 export interface FinalArtifactGateInput {
   connectionIds: string[];
@@ -19,6 +19,31 @@ export interface ProvenanceRawPathValidationInput {
   rows: Array<{ rawPath: string }>;
   currentRawPaths: Set<string>;
   deletedRawPaths: Set<string>;
+}
+
+export type FinalArtifactGateFinding =
+  | { kind: 'invalid_source'; connectionId: string; sourceName: string; errors: string[] }
+  | {
+      kind: 'missing_join_target';
+      ownerConnectionId: string;
+      ownerSourceName: string;
+      targetSourceName: string;
+      message: string;
+    }
+  | { kind: 'missing_wiki_ref'; pageKey: string; targetPageKey: string; message: string }
+  | {
+      kind: 'missing_wiki_sl_ref';
+      pageKey: string;
+      ref: string;
+      sourceName: string;
+      entityName: string | null;
+      message: string;
+    }
+  | WikiBodyRefIssue;
+
+export interface FinalArtifactGateResult {
+  ok: boolean;
+  findings: FinalArtifactGateFinding[];
 }
 
 function normalizeRawPath(path: string): string {
@@ -40,8 +65,8 @@ function slEntityNames(source: Awaited<ReturnType<SemanticLayerService['loadAllS
   ]);
 }
 
-async function validateWikiSlRefs(input: FinalArtifactGateInput): Promise<string[]> {
-  const errors: string[] = [];
+async function validateWikiSlRefs(input: FinalArtifactGateInput): Promise<FinalArtifactGateFinding[]> {
+  const findings: FinalArtifactGateFinding[] = [];
   const sourcesByConnection = new Map<string, Awaited<ReturnType<SemanticLayerService['loadAllSources']>>['sources']>();
   for (const connectionId of input.connectionIds) {
     const { sources } = await input.semanticLayerService.loadAllSources(connectionId);
@@ -64,19 +89,33 @@ async function validateWikiSlRefs(input: FinalArtifactGateInput): Promise<string
         }
       }
       if (!source) {
-        errors.push(`${pageKey}: unknown sl_refs entry ${ref}`);
+        findings.push({
+          kind: 'missing_wiki_sl_ref',
+          pageKey,
+          ref,
+          sourceName: parsed.sourceName,
+          entityName: parsed.entityName,
+          message: `${pageKey}: unknown sl_refs entry ${ref}`,
+        });
         continue;
       }
       if (parsed.entityName && !slEntityNames(source).has(parsed.entityName)) {
-        errors.push(`${pageKey}: unknown sl_refs entity ${ref}`);
+        findings.push({
+          kind: 'missing_wiki_sl_ref',
+          pageKey,
+          ref,
+          sourceName: parsed.sourceName,
+          entityName: parsed.entityName,
+          message: `${pageKey}: unknown sl_refs entity ${ref}`,
+        });
       }
     }
   }
-  return errors;
+  return findings;
 }
 
-async function validateWikiRefs(input: FinalArtifactGateInput): Promise<string[]> {
-  const dangling: string[] = [];
+async function validateWikiRefs(input: FinalArtifactGateInput): Promise<FinalArtifactGateFinding[]> {
+  const findings: FinalArtifactGateFinding[] = [];
   for (const pageKey of input.changedWikiPageKeys) {
     const page = await input.wikiService.readPage('GLOBAL', null, pageKey);
     if (!page) {
@@ -91,33 +130,82 @@ async function validateWikiRefs(input: FinalArtifactGateInput): Promise<string[]
       content: page.content,
     });
     for (const missingRef of missingRefs) {
-      dangling.push(`${pageKey} -> ${missingRef}`);
+      findings.push({
+        kind: 'missing_wiki_ref',
+        pageKey,
+        targetPageKey: missingRef,
+        message: `${pageKey} -> ${missingRef}`,
+      });
     }
   }
-  return dangling;
+  return findings;
 }
 
-export async function validateFinalIngestArtifacts(input: FinalArtifactGateInput): Promise<void> {
+export function formatFinalArtifactGateFindings(findings: FinalArtifactGateFinding[]): string {
+  const errors = findings.map((finding) => {
+    if (finding.kind === 'invalid_source') {
+      return `semantic-layer validation failed for ${finding.connectionId}:${finding.sourceName}: ${finding.errors.join('; ')}`;
+    }
+    if (finding.kind === 'missing_wiki_ref') {
+      return `wiki reference targets missing page: ${finding.message}`;
+    }
+    return finding.message;
+  });
+  return `final artifact gates failed:\n${errors.join('\n')}`;
+}
+
+export function isFinalArtifactGateFindingPruneable(finding: FinalArtifactGateFinding): boolean {
+  switch (finding.kind) {
+    case 'invalid_source':
+    case 'missing_join_target':
+    case 'missing_wiki_ref':
+    case 'missing_wiki_sl_ref':
+    case 'missing_wiki_body_sl_entity':
+    case 'missing_wiki_body_sl_source':
+    case 'missing_wiki_body_table':
+      return true;
+    default: {
+      const exhaustive: never = finding;
+      return exhaustive;
+    }
+  }
+}
+
+export async function validateFinalIngestArtifacts(input: FinalArtifactGateInput): Promise<FinalArtifactGateResult> {
   // Join-neighbor expansion happens inside validateTouchedSources so work-unit
   // validation and this gate check the same set — a source that passes one
   // passes the other.
   const validation = await input.validateTouchedSources(input.touchedSlSources);
-  const errors: string[] = validation.invalidSources.map(
-    (invalid) => `semantic-layer validation failed for ${invalid.source}: ${invalid.errors.join('; ')}`,
-  );
-  errors.push(...(await validateWikiSlRefs(input)));
-  const danglingWikiRefs = await validateWikiRefs(input);
-  if (danglingWikiRefs.length > 0) {
-    errors.push(`wiki references target missing page(s): ${danglingWikiRefs.join(', ')}`);
+  const findings: FinalArtifactGateFinding[] = [];
+  for (const invalid of validation.invalidSources) {
+    const [connectionId = '', sourceName = ''] = invalid.source.split(':', 2);
+    const issues = invalid.issues ?? invalid.errors.map((message) => ({ kind: 'source_validation' as const, message }));
+    const sourceErrors = issues.filter((issue) => issue.kind === 'source_validation').map((issue) => issue.message);
+    if (sourceErrors.length > 0) {
+      findings.push({ kind: 'invalid_source', connectionId, sourceName, errors: sourceErrors });
+    }
+    for (const issue of issues) {
+      if (issue.kind === 'missing_join_target') {
+        findings.push({
+          kind: 'missing_join_target',
+          ownerConnectionId: connectionId,
+          ownerSourceName: sourceName,
+          targetSourceName: issue.targetSourceName,
+          message: issue.message,
+        });
+      }
+    }
   }
+  findings.push(...(await validateWikiSlRefs(input)));
+  findings.push(...(await validateWikiRefs(input)));
 
   for (const pageKey of input.changedWikiPageKeys) {
     const page = await input.wikiService.readPage('GLOBAL', null, pageKey);
     if (!page) {
       continue;
     }
-    errors.push(
-      ...(await findInvalidWikiBodyRefs({
+    findings.push(
+      ...(await findInvalidWikiBodyRefIssues({
         pageKey,
         body: page.content,
         visibleConnectionIds: input.connectionIds,
@@ -130,9 +218,7 @@ export async function validateFinalIngestArtifacts(input: FinalArtifactGateInput
     );
   }
 
-  if (errors.length > 0) {
-    throw new Error(`final artifact gates failed:\n${errors.join('\n')}`);
-  }
+  return { ok: findings.length === 0, findings };
 }
 
 export function validateProvenanceRawPaths(input: ProvenanceRawPathValidationInput): void {

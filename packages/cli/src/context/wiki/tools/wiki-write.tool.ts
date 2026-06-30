@@ -35,6 +35,12 @@ const wikiWriteInputSchema = z.object({
   tags: z.array(z.string()).optional(),
   refs: z.array(z.string()).optional(),
   sl_refs: z.array(z.string()).optional(),
+  connections: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .describe(
+      'Connection ids this page applies to. Set [connectionId] on database-specific pages (with a connection-distinctive key); omit or leave empty for org-wide content. REPLACE semantics like tags.',
+    ),
   source: z.string().optional(),
   intent: z.string().optional(),
   tables: z.array(z.string()).optional(),
@@ -150,6 +156,33 @@ Keys must be flat file names, not directory paths. Use tags/source frontmatter f
     const resolvedTags = input.tags === undefined ? existingFm?.tags : input.tags;
     const resolvedRefs = input.refs === undefined ? existingFm?.refs : input.refs;
     const resolvedSlRefs = input.sl_refs === undefined ? existingFm?.sl_refs : input.sl_refs;
+    const incomingConnections =
+      input.connections === undefined
+        ? undefined
+        : typeof input.connections === 'string'
+          ? [input.connections]
+          : input.connections;
+    const resolvedConnections = incomingConnections === undefined ? existingFm?.connections : incomingConnections;
+
+    // Data-loss guard: page keys are a flat global namespace, so a write whose
+    // incoming connection scope is disjoint from an existing same-key page would
+    // silently overwrite a different connection's page. Surface it instead.
+    const existingConnections = existingFm?.connections ?? [];
+    if (
+      existing &&
+      incomingConnections !== undefined &&
+      incomingConnections.length > 0 &&
+      existingConnections.length > 0 &&
+      !incomingConnections.some((id) => existingConnections.includes(id))
+    ) {
+      return {
+        markdown:
+          `Error: page "${input.key}" already exists scoped to a different connection ` +
+          `(connections: ${existingConnections.join(', ')}); writing it for ${incomingConnections.join(', ')} ` +
+          `would overwrite that page. Use a connection-distinctive key (e.g. "${input.key}_${incomingConnections[0]}").`,
+        structured: { success: false, key: input.key },
+      };
+    }
 
     let finalContent: string;
     const finalFm: WikiFrontmatter = {
@@ -159,6 +192,7 @@ Keys must be flat file names, not directory paths. Use tags/source frontmatter f
       tags: resolvedTags,
       refs: resolvedRefs,
       sl_refs: resolvedSlRefs,
+      connections: resolvedConnections,
       source: input.source === undefined ? existingFm?.source : input.source,
       intent: input.intent === undefined ? existingFm?.intent : input.intent,
       tables: input.tables === undefined ? existingFm?.tables : input.tables,

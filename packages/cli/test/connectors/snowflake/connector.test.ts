@@ -7,6 +7,7 @@ vi.mock('snowflake-sdk', () => ({
   createPool,
 }));
 
+import { KtxQueryError } from '../../../src/errors.js';
 import { createSnowflakeLiveDatabaseIntrospection } from '../../../src/connectors/snowflake/live-database-introspection.js';
 import { isKtxSnowflakeConnectionConfig, KtxSnowflakeScanConnector, prepareSnowflakeReadOnlyQuery, snowflakeConnectionConfigFromConfig, type KtxSnowflakeConnectionConfig, type KtxSnowflakeDriver, type KtxSnowflakeDriverFactory } from '../../../src/connectors/snowflake/connector.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
@@ -269,6 +270,57 @@ describe('KtxSnowflakeScanConnector', () => {
     expect(pool.drain).toHaveBeenCalledBefore(pool.clear);
     expect(pool.clear).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets STATEMENT_TIMEOUT_IN_SECONDS to the resolved deadline and maps a Snowflake timeout to KtxQueryError', async () => {
+    createPool.mockReset();
+    const executedSql: string[] = [];
+    const timeoutError = Object.assign(
+      new Error('Statement reached its statement or warehouse timeout of 5 second(s) and was canceled.'),
+      { code: 604 },
+    );
+    const connection = {
+      execute: vi.fn(
+        (input: {
+          sqlText: string;
+          complete: (error: Error | null, statement: ReturnType<typeof fakeSnowflakeStatement>, rows: unknown[]) => void;
+        }) => {
+          executedSql.push(input.sqlText);
+          if (/^ALTER SESSION/i.test(input.sqlText)) {
+            input.complete(null, fakeSnowflakeStatement(), [{ ONE: 1 }]);
+          } else {
+            input.complete(timeoutError, fakeSnowflakeStatement(), []);
+          }
+        },
+      ),
+    };
+    createPool.mockReturnValue({
+      use: vi.fn(async (fn: (conn: typeof connection) => Promise<unknown>) => fn(connection)),
+      drain: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined),
+    });
+    const connector = new KtxSnowflakeScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'snowflake',
+        authMethod: 'password',
+        account: 'acct',
+        warehouse: 'WH',
+        database: 'ANALYTICS',
+        schema_name: 'PUBLIC',
+        username: 'reader',
+        password: 'fixture-pass', // pragma: allowlist secret
+        query_timeout_ms: 5_000,
+      },
+    });
+
+    const execution = connector.executeReadOnly(
+      { connectionId: 'warehouse', sql: 'select count(*) from orders' },
+      { runId: 'run-1' },
+    );
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('query exceeded 5s');
+    expect(executedSql[0]).toBe('ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 5');
   });
 
   it('introspects schema, primary keys, comments, row counts, and dimensions', async () => {

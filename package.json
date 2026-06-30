@@ -1,6 +1,6 @@
 {
   "name": "ktx-workspace",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Workspace root for ktx packages",
   "private": true,
   "type": "module",

@@ -3,18 +3,43 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fork, type ChildProcess } from 'node:child_process';
 import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { normalizeQueryRows } from '../../context/connections/query-executor.js';
-import { connectorTestFailure, createKtxConnectorCapabilities, type KtxConnectorTestResult, type KtxColumnSampleInput, type KtxColumnSampleResult, type KtxColumnStatsInput, type KtxColumnStatsResult, type KtxQueryResult, type KtxReadOnlyQueryInput, type KtxScanConnector, type KtxScanContext, type KtxScanInput, type KtxSchemaForeignKey, type KtxSchemaSnapshot, type KtxSchemaTable, type KtxTableListEntry, type KtxTableRef, type KtxTableSampleInput, type KtxTableSampleResult } from '../../context/scan/types.js';
+import { connectorTestFailure, createKtxConnectorCapabilities, type KtxConnectorTestResult, type KtxColumnSampleInput, type KtxColumnSampleResult, type KtxColumnStatsInput, type KtxColumnStatsResult, type KtxQueryResult, type KtxReadOnlyQueryInput, type KtxScanConnector, type KtxScanContext, type KtxScanInput, type KtxScanWarning, type KtxSchemaForeignKey, type KtxSchemaSnapshot, type KtxSchemaTable, type KtxTableListEntry, type KtxTableRef, type KtxTableSampleInput, type KtxTableSampleResult } from '../../context/scan/types.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
+import { tryIntrospectObject } from '../../context/scan/object-introspection.js';
 
 export interface KtxSqliteConnectionConfig {
   driver?: string;
   path?: string;
   url?: string;
+  query_timeout_ms?: number;
   [key: string]: unknown;
 }
+
+// In dist, connector.js and read-query-child.js are siblings; under vitest the
+// compiled .js is absent and Node strips types from the .ts when forking it.
+const readQueryChildUrl = existsSync(fileURLToPath(new URL('./read-query-child.js', import.meta.url)))
+  ? new URL('./read-query-child.js', import.meta.url)
+  : new URL('./read-query-child.ts', import.meta.url);
+
+/** @internal */
+export function forkReadQueryChild(): ChildProcess {
+  // Empty execArgv so the child is a clean Node process (no inherited vitest /
+  // inspector flags); advanced serialization preserves BigInt/Buffer in rows.
+  return fork(readQueryChildUrl, {
+    execArgv: [],
+    serialization: 'advanced',
+    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+}
+
+type ReadQueryChildMessage =
+  | { ok: true; headers: string[]; rows: unknown[]; totalRows: number }
+  | { ok: false; message: string };
 
 /** @internal */
 export interface SqliteDatabasePathInput {
@@ -25,6 +50,8 @@ export interface SqliteDatabasePathInput {
 
 export interface KtxSqliteScanConnectorOptions extends SqliteDatabasePathInput {
   now?: () => Date;
+  /** @internal Test seam: spawn the read-query child so tests can observe its lifecycle. */
+  spawnReadQueryChild?: () => ChildProcess;
 }
 
 export interface KtxSqliteReadOnlyQueryInput extends KtxReadOnlyQueryInput {
@@ -133,6 +160,8 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
   private readonly connectionId: string;
   private readonly dbPath: string;
   private readonly now: () => Date;
+  private readonly deadlineMs: number;
+  private readonly spawnReadQueryChild: () => ChildProcess;
   private readonly dialect = getSqlDialectForDriver('sqlite');
   private db: Database.Database | null = null;
 
@@ -140,6 +169,8 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
     this.connectionId = options.connectionId;
     this.dbPath = sqliteDatabasePathFromConfig(options);
     this.now = options.now ?? (() => new Date());
+    this.deadlineMs = resolveQueryDeadlineMs(options.connection);
+    this.spawnReadQueryChild = options.spawnReadQueryChild ?? forkReadQueryChild;
     this.id = `sqlite:${options.connectionId}`;
   }
 
@@ -158,17 +189,27 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
   async introspect(input: KtxScanInput, _ctx: KtxScanContext): Promise<KtxSchemaSnapshot> {
     this.assertConnection(input.connectionId);
     const database = this.database();
-    const scopedNames = input.tableScope ? scopedTableNames(input.tableScope, { catalog: null, db: null }) : null;
-    const scopeClause = scopedNames ? `AND name IN (${scopedNames.map(() => '?').join(', ')})` : '';
-    const rawTables =
-      scopedNames && scopedNames.length === 0
-        ? []
-        : (database
-            .prepare(
-              `SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ${scopeClause} ORDER BY name`,
-            )
-            .all(...(scopedNames ?? [])) as SqliteMasterRow[]);
-    const tables = rawTables.map((table) => this.readTable(database, table));
+    const allObjects = database
+      .prepare(
+        `SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+      )
+      .all() as SqliteMasterRow[];
+    const scopedNames = input.tableScope
+      ? new Set(scopedTableNames(input.tableScope, { catalog: null, db: null }))
+      : null;
+    const selectedObjects = scopedNames ? allObjects.filter((object) => scopedNames.has(object.name)) : allObjects;
+
+    const tables: KtxSchemaTable[] = [];
+    const warnings: KtxScanWarning[] = [];
+    for (const object of selectedObjects) {
+      const outcome = await tryIntrospectObject({ object: object.name }, () => this.readTable(database, object));
+      if (outcome.ok) {
+        tables.push(outcome.table);
+      } else {
+        warnings.push(outcome.warning);
+      }
+    }
+
     const fileStats = existsSync(this.dbPath) ? statSync(this.dbPath) : null;
     return {
       connectionId: this.connectionId,
@@ -180,8 +221,12 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
         file_size: fileStats ? fileStats.size : 0,
         table_count: tables.length,
         total_columns: tables.reduce((sum, table) => sum + table.columns.length, 0),
+        // Carries the full object inventory so a zero-match enabled_tables scope
+        // can report which objects were actually available.
+        ...(scopedNames ? { discovered_object_names: allObjects.map((object) => object.name) } : {}),
       },
       tables,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
@@ -229,10 +274,79 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
     return null;
   }
 
-  async executeReadOnly(input: KtxSqliteReadOnlyQueryInput, _ctx: KtxScanContext): Promise<KtxQueryResult> {
+  async executeReadOnly(input: KtxSqliteReadOnlyQueryInput, ctx: KtxScanContext): Promise<KtxQueryResult> {
     this.assertConnection(input.connectionId);
-    const result = this.query(limitSqlForExecution(input.sql, input.maxRows), input.params);
+    // Validate and row-limit on the main thread so invalid SQL fails instantly
+    // without spawning a process and read-only enforcement stays at the boundary.
+    const sql = limitSqlForExecution(input.sql, input.maxRows);
+    const result = await this.runReadQueryOffProcess(sql, input.params, ctx.signal);
     return { ...result, rowCount: result.rows.length };
+  }
+
+  // The LLM-SQL path runs off the event loop in a short-lived child process so a
+  // pathological scan cannot freeze the MCP server, and the deadline is enforced
+  // by SIGKILL-ing that process. A synchronous better-sqlite3 scan never yields,
+  // so a worker-thread terminate cannot interrupt it — only the OS reclaiming the
+  // whole process frees the CPU. One short-lived process per call; killed on
+  // completion, deadline, or external abort.
+  private runReadQueryOffProcess(
+    sql: string,
+    params: Record<string, unknown> | unknown[] | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<Omit<KtxQueryResult, 'rowCount'>> {
+    const deadlineMs = this.deadlineMs;
+    const dbPath = this.dbPath;
+    return new Promise((resolvePromise, rejectPromise) => {
+      const child = this.spawnReadQueryChild();
+      let settled = false;
+      const onDeadline = () => settle(() => rejectPromise(queryDeadlineExceededError(deadlineMs)));
+      const timer = setTimeout(onDeadline, deadlineMs);
+      function settle(finish: () => void): void {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onDeadline);
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
+        finish();
+      }
+      child.on('message', (message: ReadQueryChildMessage) => {
+        if (message.ok) {
+          settle(() =>
+            resolvePromise({
+              headers: message.headers,
+              rows: normalizeQueryRows(message.rows),
+              totalRows: message.totalRows,
+            }),
+          );
+        } else {
+          settle(() => rejectPromise(new Error(message.message)));
+        }
+      });
+      child.on('error', (error) => settle(() => rejectPromise(error)));
+      child.on('exit', (code, processSignal) => {
+        if (!settled) {
+          settle(() =>
+            rejectPromise(
+              new Error(`SQLite read process exited before returning a result (code ${code}, signal ${processSignal}).`),
+            ),
+          );
+        }
+      });
+      if (signal?.aborted) {
+        onDeadline();
+        return;
+      }
+      signal?.addEventListener('abort', onDeadline, { once: true });
+      try {
+        child.send({ dbPath, sql, params });
+      } catch (error) {
+        settle(() => rejectPromise(error instanceof Error ? error : new Error(String(error))));
+      }
+    });
   }
 
   async getColumnDistinctValues(
@@ -310,16 +424,7 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
     const foreignKeys = database
       .prepare(`PRAGMA foreign_key_list(${this.dialect.quoteIdentifier(table.name)})`)
       .all() as SqliteForeignKeyRow[];
-    const estimatedRows =
-      table.type === 'table'
-        ? Number(
-            (
-              database
-                .prepare(`SELECT COUNT(*) AS count FROM ${this.dialect.quoteIdentifier(table.name)}`)
-                .get() as { count: unknown }
-            ).count,
-          )
-        : null;
+    const estimatedRows = table.type === 'table' ? this.readRowCount(database, table.name) : null;
     return {
       catalog: null,
       db: null,
@@ -338,6 +443,19 @@ export class KtxSqliteScanConnector implements KtxScanConnector {
       })),
       foreignKeys: this.mapForeignKeys(foreignKeys),
     };
+  }
+
+  // A row-count read is profiling, not structure: a failure here leaves the
+  // object's structure intact rather than skipping the whole object.
+  private readRowCount(database: Database.Database, name: string): number | null {
+    try {
+      const row = database.prepare(`SELECT COUNT(*) AS count FROM ${this.dialect.quoteIdentifier(name)}`).get() as {
+        count: unknown;
+      };
+      return Number(row.count);
+    } catch {
+      return null;
+    }
   }
 
   private mapForeignKeys(rows: SqliteForeignKeyRow[]): KtxSchemaForeignKey[] {

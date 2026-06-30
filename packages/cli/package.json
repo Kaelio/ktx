@@ -1,6 +1,6 @@
 {
   "name": "@kaelio/ktx",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Standalone ktx context layer for data agents",
   "author": {
     "name": "Kaelio",
@@ -78,6 +78,8 @@
     "openai": "^6.38.0",
     "p-limit": "^7.3.0",
     "pg": "^8.21.0",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3",
     "posthog-node": "^5.34.9",
     "react": "^19.2.6",
     "semver": "^7.8.1",

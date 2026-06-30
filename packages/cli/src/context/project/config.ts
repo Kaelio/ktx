@@ -209,6 +209,11 @@ const scanRelationshipsSchema = z
       .union([z.literal('all'), z.int().nonnegative()])
       .optional()
       .describe('Cap on validation queries per scan run. Use "all" for unlimited, an integer for a hard cap, or omit for the runtime default.'),
+    detectionBudgetMs: z
+      .int()
+      .positive()
+      .default(600_000)
+      .describe('Wall-clock budget (ms) for the whole relationship-detection stage. Checked at table-profile, LLM-proposal, candidate-validation, and composite-probe boundaries; above the per-query deadline. On exhaustion the stage stops scheduling new work and returns the relationships found so far, marked partial. Raise it to trigger a fresher, fuller run.'),
   })
   .describe('Schema-scan relationship discovery and validation tunables.');
 

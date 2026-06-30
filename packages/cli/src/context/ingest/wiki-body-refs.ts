@@ -2,9 +2,9 @@ import type { SemanticLayerSource } from '../../context/sl/types.js';
 
 /** @internal */
 export type WikiBodyRef =
-  | { kind: 'sl_entity'; connectionId: string | null; sourceName: string; entityName: string }
-  | { kind: 'sl_source'; connectionId: string | null; sourceName: string }
-  | { kind: 'table'; connectionId: string | null; tableRef: string };
+  | { kind: 'sl_entity'; connectionId: string | null; sourceName: string; entityName: string; rawToken: string }
+  | { kind: 'sl_source'; connectionId: string | null; sourceName: string; rawToken: string }
+  | { kind: 'table'; connectionId: string | null; tableRef: string; rawToken: string };
 
 export interface WikiBodyRefValidationInput {
   pageKey: string;
@@ -13,6 +13,33 @@ export interface WikiBodyRefValidationInput {
   loadSources(connectionId: string): Promise<SemanticLayerSource[]>;
   tableExists(connectionId: string, tableRef: string): Promise<boolean>;
 }
+
+export type WikiBodyRefIssue =
+  | {
+      kind: 'missing_wiki_body_sl_entity';
+      pageKey: string;
+      rawToken: string;
+      connectionId?: string;
+      sourceName: string;
+      entityName: string;
+      message: string;
+    }
+  | {
+      kind: 'missing_wiki_body_sl_source';
+      pageKey: string;
+      rawToken: string;
+      connectionId?: string;
+      sourceName: string;
+      message: string;
+    }
+  | {
+      kind: 'missing_wiki_body_table';
+      pageKey: string;
+      rawToken: string;
+      connectionId?: string;
+      tableRef: string;
+      message: string;
+    };
 
 const inlineCodePattern = /`([^`\n]+)`/g;
 
@@ -56,14 +83,14 @@ export function parseWikiBodyRefs(body: string): WikiBodyRef[] {
       if (scoped.body.startsWith('source:')) {
         const sourceName = scoped.body.slice('source:'.length).trim();
         if (sourceName) {
-          refs.push({ kind: 'sl_source', connectionId: scoped.connectionId, sourceName });
+          refs.push({ kind: 'sl_source', connectionId: scoped.connectionId, sourceName, rawToken: token });
         }
         continue;
       }
       if (scoped.body.startsWith('table:')) {
         const tableRef = scoped.body.slice('table:'.length).trim();
         if (tableRef) {
-          refs.push({ kind: 'table', connectionId: scoped.connectionId, tableRef });
+          refs.push({ kind: 'table', connectionId: scoped.connectionId, tableRef, rawToken: token });
         }
         continue;
       }
@@ -74,6 +101,7 @@ export function parseWikiBodyRefs(body: string): WikiBodyRef[] {
           connectionId: scoped.connectionId,
           sourceName: parts[0],
           entityName: parts[1],
+          rawToken: token,
         });
       }
     }
@@ -89,8 +117,8 @@ function entityNames(source: SemanticLayerSource): Set<string> {
   ]);
 }
 
-export async function findInvalidWikiBodyRefs(input: WikiBodyRefValidationInput): Promise<string[]> {
-  const errors: string[] = [];
+export async function findInvalidWikiBodyRefIssues(input: WikiBodyRefValidationInput): Promise<WikiBodyRefIssue[]> {
+  const issues: WikiBodyRefIssue[] = [];
   const sourceCache = new Map<string, SemanticLayerSource[]>();
   const loadSources = async (connectionId: string): Promise<SemanticLayerSource[]> => {
     const cached = sourceCache.get(connectionId);
@@ -120,7 +148,15 @@ export async function findInvalidWikiBodyRefs(input: WikiBodyRefValidationInput)
     if (ref.kind === 'table') {
       const found = await Promise.all(connectionIds.map((connectionId) => input.tableExists(connectionId, ref.tableRef)));
       if (!found.some(Boolean)) {
-        errors.push(`${input.pageKey}: unknown raw table ${ref.connectionId ? `${ref.connectionId}/` : ''}${ref.tableRef}`);
+        const target = `${ref.connectionId ? `${ref.connectionId}/` : ''}${ref.tableRef}`;
+        issues.push({
+          kind: 'missing_wiki_body_table',
+          pageKey: input.pageKey,
+          rawToken: ref.rawToken,
+          ...(ref.connectionId ? { connectionId: ref.connectionId } : {}),
+          tableRef: ref.tableRef,
+          message: `${input.pageKey}: unknown raw table ${target}`,
+        });
       }
       continue;
     }
@@ -128,16 +164,35 @@ export async function findInvalidWikiBodyRefs(input: WikiBodyRefValidationInput)
     const found = await findSource(connectionIds, ref.sourceName);
     if (!found) {
       if (ref.kind === 'sl_source') {
-        errors.push(
-          `${input.pageKey}: unknown semantic-layer source ${ref.connectionId ? `${ref.connectionId}/` : ''}${ref.sourceName}`,
-        );
+        const target = `${ref.connectionId ? `${ref.connectionId}/` : ''}${ref.sourceName}`;
+        issues.push({
+          kind: 'missing_wiki_body_sl_source',
+          pageKey: input.pageKey,
+          rawToken: ref.rawToken,
+          ...(ref.connectionId ? { connectionId: ref.connectionId } : {}),
+          sourceName: ref.sourceName,
+          message: `${input.pageKey}: unknown semantic-layer source ${target}`,
+        });
       }
       continue;
     }
     if (ref.kind === 'sl_entity' && !entityNames(found.source).has(ref.entityName)) {
-      errors.push(`${input.pageKey}: unknown semantic-layer entity ${ref.sourceName}.${ref.entityName}`);
+      issues.push({
+        kind: 'missing_wiki_body_sl_entity',
+        pageKey: input.pageKey,
+        rawToken: ref.rawToken,
+        ...(ref.connectionId ? { connectionId: ref.connectionId } : {}),
+        sourceName: ref.sourceName,
+        entityName: ref.entityName,
+        message: `${input.pageKey}: unknown semantic-layer entity ${ref.sourceName}.${ref.entityName}`,
+      });
     }
   }
 
-  return errors;
+  return issues;
+}
+
+/** @internal */
+export async function findInvalidWikiBodyRefs(input: WikiBodyRefValidationInput): Promise<string[]> {
+  return (await findInvalidWikiBodyRefIssues(input)).map((issue) => issue.message);
 }

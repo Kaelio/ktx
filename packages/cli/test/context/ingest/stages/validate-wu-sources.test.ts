@@ -35,7 +35,7 @@ describe('validateWuTouchedSources', () => {
     ]);
 
     expect(result.validSources).toEqual(['warehouse-a:good']);
-    expect(result.invalidSources).toEqual([{ source: 'warehouse-b:bad', errors: ['invalid measure'] }]);
+    expect(result.invalidSources).toMatchObject([{ source: 'warehouse-b:bad', errors: ['invalid measure'] }]);
   });
 
   it('returns empty arrays when no sources are touched', async () => {
@@ -85,7 +85,7 @@ describe('validateWuTouchedSources', () => {
     ]);
 
     expect(result.validSources).toEqual([]);
-    expect(result.invalidSources).toEqual([
+    expect(result.invalidSources).toMatchObject([
       {
         source: 'warehouse:mart_account_segments',
         errors: ['join target "accounts" does not exist'],
@@ -108,10 +108,12 @@ describe('validateWuTouchedSources', () => {
 
     const result = await validateWuTouchedSources(deps, [{ connectionId: 'warehouse', sourceName: 'accounts' }]);
 
-    expect(result.invalidSources).toContainEqual({
-      source: 'warehouse:orders',
-      errors: ['join target "accounts" does not exist'],
-    });
+    expect(result.invalidSources).toContainEqual(
+      expect.objectContaining({
+        source: 'warehouse:orders',
+        errors: ['join target "accounts" does not exist'],
+      }),
+    );
   });
 
   it('rejects join targets that match a source name only case-insensitively', async () => {
@@ -127,7 +129,7 @@ describe('validateWuTouchedSources', () => {
 
     const result = await validateWuTouchedSources(deps, [{ connectionId: 'warehouse', sourceName: 'orders' }]);
 
-    expect(result.invalidSources).toEqual([
+    expect(result.invalidSources).toMatchObject([
       {
         source: 'warehouse:orders',
         errors: [
@@ -153,6 +155,50 @@ describe('validateWuTouchedSources', () => {
 
     expect(result.invalidSources).toEqual([]);
     expect(result.validSources).toEqual(['warehouse:touched_source']);
+  });
+
+  it('preserves structured source-validation and missing-join issues', async () => {
+    const result = await validateWuTouchedSources(
+      {
+        semanticLayerService: {
+          loadAllSources: vi.fn().mockResolvedValue({
+            sources: [
+              {
+                name: 'orders',
+                columns: [],
+                joins: [{ to: 'customers_missing', on: 'orders.customer_id = customers_missing.id' }],
+                measures: [],
+                segments: [],
+              },
+            ],
+            loadErrors: [],
+          }),
+        } as never,
+        connections: {} as never,
+        configService: {} as never,
+        gitService: {} as never,
+        slSourcesRepository: {} as never,
+        probeRowCount: 0,
+        slValidator: { validateSingleSource: vi.fn().mockResolvedValue({ errors: ['dry run failed'], warnings: [] }) },
+      },
+      [{ connectionId: 'warehouse', sourceName: 'orders' }],
+    );
+
+    expect(result.invalidSources).toEqual([
+      {
+        source: 'warehouse:orders',
+        errors: ['dry run failed', 'join target "customers_missing" does not exist'],
+        issues: [
+          { kind: 'source_validation', message: 'dry run failed' },
+          {
+            kind: 'missing_join_target',
+            targetSourceName: 'customers_missing',
+            caseMismatch: null,
+            message: 'join target "customers_missing" does not exist',
+          },
+        ],
+      },
+    ]);
   });
 });
 
