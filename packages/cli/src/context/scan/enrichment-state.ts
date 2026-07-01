@@ -1,14 +1,19 @@
-import { createHash } from 'node:crypto';
+import { stableContentHash } from '../cache/content-result-cache.js';
+import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxScanEnrichmentStage, KtxScanEnrichmentStateSummary, KtxScanMode, KtxSchemaSnapshot } from './types.js';
 
-const KTX_SCAN_ENRICHMENT_STAGES: readonly KtxScanEnrichmentStage[] = [
+/**
+ * Canonical enrichment-stage registry. The `--stages` CLI parser validates
+ * against this list, and stage selection / iteration derives its order here.
+ */
+export const KTX_SCAN_ENRICHMENT_STAGES: readonly KtxScanEnrichmentStage[] = [
   'descriptions',
   'embeddings',
   'relationships',
 ] as const;
 
 export interface KtxScanEnrichmentStageLookup {
-  runId: string;
+  connectionId: string;
   stage: KtxScanEnrichmentStage;
   inputHash: string;
 }
@@ -47,6 +52,15 @@ export interface KtxScanEnrichmentStateStore {
   findCompletedStage<TOutput = unknown>(
     input: KtxScanEnrichmentStageLookup,
   ): Promise<KtxScanEnrichmentCompletedStage<TOutput> | null>;
+  /**
+   * The most recently completed row for a (connection, stage) pair regardless of
+   * input hash. Used by the staleness check to compare a stage's stored hash
+   * against its freshly recomputed one (D4).
+   */
+  findLatestCompletedStage(input: {
+    connectionId: string;
+    stage: KtxScanEnrichmentStage;
+  }): Promise<KtxScanEnrichmentCompletedStage | null>;
   saveCompletedStage<TOutput = unknown>(
     input: Omit<KtxScanEnrichmentCompletedStage<TOutput>, 'status' | 'errorMessage'>,
   ): Promise<void>;
@@ -54,29 +68,65 @@ export interface KtxScanEnrichmentStateStore {
   listRunStages(runId: string): Promise<KtxScanEnrichmentStageRecord[]>;
 }
 
-export interface ComputeKtxScanEnrichmentInputHashInput {
+/** Description-LLM identity: the inputs that change a description's content. */
+export interface KtxScanLlmIdentity {
+  model: string | null;
+  baseUrlConfigured: boolean;
+}
+
+/** Embedding-model identity: the inputs that change an embedding vector. */
+export interface KtxScanEmbeddingIdentity {
+  model: string | null;
+  dimensions: number | null;
+  batchSize: number | null;
+}
+
+export interface KtxDescriptionsStageHashInput {
   snapshot: KtxSchemaSnapshot;
-  mode: KtxScanMode;
-  detectRelationships: boolean;
-  providerIdentity: Record<string, unknown>;
-  relationshipSettings?: unknown;
+  llmIdentity: KtxScanLlmIdentity;
 }
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(',')}]`;
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
-      left.localeCompare(right),
-    );
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
+export interface KtxEmbeddingsStageHashInput {
+  snapshot: KtxSchemaSnapshot;
+  embeddingIdentity: KtxScanEmbeddingIdentity;
+  /** Digest of the resolved description text the embeddings consume (see {@link computeKtxScanDescriptionDigest}). */
+  descriptionDigest: string;
 }
 
-export function computeKtxScanEnrichmentInputHash(input: ComputeKtxScanEnrichmentInputHashInput): string {
-  return createHash('sha256').update(stableJson(input)).digest('hex');
+export interface KtxRelationshipsStageHashInput {
+  snapshot: KtxSchemaSnapshot;
+  relationshipSettings: KtxScanRelationshipConfig;
+  llmIdentity: KtxScanLlmIdentity;
+}
+
+export function computeKtxDescriptionsStageHash(input: KtxDescriptionsStageHashInput): string {
+  return stableContentHash({ snapshot: input.snapshot, llmIdentity: input.llmIdentity });
+}
+
+export function computeKtxEmbeddingsStageHash(input: KtxEmbeddingsStageHashInput): string {
+  return stableContentHash({
+    snapshot: input.snapshot,
+    embeddingIdentity: input.embeddingIdentity,
+    descriptionDigest: input.descriptionDigest,
+  });
+}
+
+export function computeKtxRelationshipsStageHash(input: KtxRelationshipsStageHashInput): string {
+  return stableContentHash({
+    snapshot: input.snapshot,
+    relationshipSettings: input.relationshipSettings,
+    llmIdentity: input.llmIdentity,
+  });
+}
+
+/**
+ * Content digest of the resolved per-column description text the embeddings
+ * stage consumes. Folding it into the embeddings hash content-addresses
+ * embeddings on their real upstream, so re-describing busts only the embeddings
+ * that depend on the changed text (D4 self-healing).
+ */
+export function computeKtxScanDescriptionDigest(texts: readonly string[]): string {
+  return stableContentHash(texts);
 }
 
 function uniqueStages(stages: KtxScanEnrichmentStage[]): KtxScanEnrichmentStage[] {

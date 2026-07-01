@@ -122,22 +122,20 @@ describe('Stage 3 — executeWorkUnit', () => {
     expect(deps.resetHardTo).toHaveBeenCalledWith('pre');
   });
 
-  it('dangling wiki refs reset to the pre-WU SHA and mark WU failed after the agent loop', async () => {
+  it('dangling wiki refs are deferred to the final gate and preserve actions', async () => {
     const deps = makeDeps();
     deps.sessionWorktreeGit.revParseHead = vi.fn().mockResolvedValueOnce('pre').mockResolvedValueOnce('post');
     deps.agentRunner.runLoop = vi.fn().mockImplementation(() => {
       deps.sessionActions.push({ target: 'wiki', type: 'created', key: 'page-a', detail: 'Page A' });
       return Promise.resolve({ stopReason: 'natural' });
     });
-    (deps as any).validateWikiRefs = vi.fn().mockResolvedValue(['page-a -> page-b']);
 
     const outcome = await executeWorkUnit(deps, makeWu());
 
-    expect(outcome.status).toBe('failed');
-    expect(outcome.reason).toContain('wiki references target missing page(s): page-a -> page-b');
-    expect(outcome.actions).toEqual([]);
+    expect(outcome.status).toBe('success');
+    expect(outcome.actions.map((action) => action.key)).toEqual(['page-a']);
     expect(outcome.touchedSlSources).toEqual([]);
-    expect(deps.resetHardTo).toHaveBeenCalledWith('pre');
+    expect(deps.resetHardTo).not.toHaveBeenCalled();
   });
 
   it('resolved wiki refs pass post-WU validation and preserve actions', async () => {
@@ -148,7 +146,6 @@ describe('Stage 3 — executeWorkUnit', () => {
       deps.sessionActions.push({ target: 'wiki', type: 'created', key: 'page-b', detail: 'Page B' });
       return Promise.resolve({ stopReason: 'natural' });
     });
-    (deps as any).validateWikiRefs = vi.fn().mockResolvedValue([]);
 
     const outcome = await executeWorkUnit(deps, makeWu());
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { KtxQueryError } from '../../../src/errors.js';
 import { bigQueryConnectionConfigFromConfig, isKtxBigQueryConnectionConfig, type KtxBigQueryClient, KtxBigQueryScanConnector, type KtxBigQueryClientFactory, type KtxBigQueryDataset, type KtxBigQueryQueryJob, type KtxBigQueryTableRef, prepareBigQueryReadOnlyQuery } from '../../../src/connectors/bigquery/connector.js';
 import { createBigQueryLiveDatabaseIntrospection } from '../../../src/connectors/bigquery/live-database-introspection.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
@@ -114,9 +115,38 @@ describe('KtxBigQueryScanConnector', () => {
     expect(isKtxBigQueryConnectionConfig({ driver: 'mysql' })).toBe(false);
     expect(bigQueryConnectionConfigFromConfig({ connectionId: 'warehouse', connection })).toMatchObject({
       projectId: 'project-1',
-      datasetIds: ['analytics'],
+      datasetIds: [{ project: 'project-1', dataset: 'analytics' }],
       location: 'US',
     });
+  });
+
+  it('parses project.dataset entries to host-project pairs and rejects malformed entries', () => {
+    expect(
+      bigQueryConnectionConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'bigquery',
+          dataset_ids: ['bigquery-public-data.austin_311', 'analytics'],
+          credentials_json: JSON.stringify({ project_id: 'project-1' }),
+        },
+      }).datasetIds,
+    ).toEqual([
+      { project: 'bigquery-public-data', dataset: 'austin_311' },
+      { project: 'project-1', dataset: 'analytics' },
+    ]);
+
+    for (const badEntry of ['proj.ds.table', 'proj.', '.ds']) {
+      expect(() =>
+        bigQueryConnectionConfigFromConfig({
+          connectionId: 'warehouse',
+          connection: {
+            driver: 'bigquery',
+            dataset_ids: [badEntry],
+            credentials_json: JSON.stringify({ project_id: 'project-1' }),
+          },
+        }),
+      ).toThrow(/connections\.warehouse/);
+    }
   });
 
   it('introspects datasets, table metadata, primary keys, and normalized types', async () => {
@@ -181,6 +211,84 @@ describe('KtxBigQueryScanConnector', () => {
         primaryKey: false,
         comment: null,
       },
+    ]);
+  });
+
+  it('introspects a foreign-hosted dataset under its own project while billing stays local', async () => {
+    const clientFactory = fakeClientFactory();
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'bigquery',
+        dataset_ids: ['bigquery-public-data.austin_311'],
+        credentials_json: JSON.stringify({ project_id: 'project-1' }),
+        location: 'US',
+      },
+      clientFactory,
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'foreign' });
+
+    const client = vi.mocked(clientFactory.createClient).mock.results[0]?.value as KtxBigQueryClient;
+    expect(client.dataset).toHaveBeenCalledWith('austin_311', 'bigquery-public-data');
+    expect(clientFactory.createClient).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-1' }));
+    expect(snapshot.scope).toEqual({
+      catalogs: ['bigquery-public-data'],
+      datasets: ['bigquery-public-data.austin_311'],
+    });
+    expect(snapshot.metadata.project_id).toBe('project-1');
+    expect(snapshot.tables[0]).toMatchObject({
+      catalog: 'bigquery-public-data',
+      db: 'austin_311',
+      name: 'orders',
+    });
+  });
+
+  it('introspects datasets across multiple host projects, each under its own project', async () => {
+    const clientFactory = fakeClientFactory();
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'bigquery',
+        dataset_ids: ['bigquery-public-data.austin_311', 'analytics'],
+        credentials_json: JSON.stringify({ project_id: 'project-1' }),
+        location: 'US',
+      },
+      clientFactory,
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'multi' });
+
+    const client = vi.mocked(clientFactory.createClient).mock.results[0]?.value as KtxBigQueryClient;
+    expect(client.dataset).toHaveBeenCalledWith('austin_311', 'bigquery-public-data');
+    expect(client.dataset).toHaveBeenCalledWith('analytics', 'project-1');
+    expect(snapshot.scope.catalogs).toEqual(['bigquery-public-data', 'project-1']);
+    expect(snapshot.scope.datasets).toEqual(['bigquery-public-data.austin_311', 'analytics']);
+    expect(snapshot.tables.map((table) => ({ catalog: table.catalog, db: table.db, name: table.name }))).toEqual([
+      { catalog: 'bigquery-public-data', db: 'austin_311', name: 'orders' },
+      { catalog: 'project-1', db: 'analytics', name: 'orders' },
+    ]);
+  });
+
+  it('keeps same-named datasets in different projects distinct', async () => {
+    const clientFactory = fakeClientFactory();
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'bigquery',
+        dataset_ids: ['proj_a.shared', 'proj_b.shared'],
+        credentials_json: JSON.stringify({ project_id: 'project-1' }),
+      },
+      clientFactory,
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'same-name' });
+
+    expect(snapshot.scope.catalogs).toEqual(['proj_a', 'proj_b']);
+    expect(snapshot.scope.datasets).toEqual(['proj_a.shared', 'proj_b.shared']);
+    expect(snapshot.tables.map((table) => `${table.catalog}.${table.db}.${table.name}`)).toEqual([
+      'proj_a.shared.orders',
+      'proj_b.shared.orders',
     ]);
   });
 
@@ -330,6 +438,50 @@ describe('KtxBigQueryScanConnector', () => {
     expect(skippedGet).not.toHaveBeenCalled();
   });
 
+  it('skips a table that fails introspection and ingests its healthy siblings', async () => {
+    const ordersGet = vi.fn(async (): ReturnType<KtxBigQueryTableRef['get']> => [
+      { metadata: { type: 'TABLE', numRows: '5', schema: { fields: [{ name: 'id', type: 'INT64', mode: 'REQUIRED' }] } } },
+    ]);
+    const brokenGet = vi.fn(async (): ReturnType<KtxBigQueryTableRef['get']> => {
+      throw new Error('Access Denied: Table project-1:analytics.locked');
+    });
+    const clientFactory: KtxBigQueryClientFactory = {
+      createClient: vi.fn(() => ({
+        getDatasets: vi.fn(async (): ReturnType<KtxBigQueryClient['getDatasets']> => [[{ id: 'analytics' }]]),
+        dataset: vi.fn(
+          (): KtxBigQueryDataset => ({
+            get: vi.fn(async () => [{ id: 'analytics' }]),
+            getTables: vi.fn(async (): ReturnType<KtxBigQueryDataset['getTables']> => [
+              [
+                { id: 'orders', get: ordersGet },
+                { id: 'locked', get: brokenGet },
+              ],
+            ]),
+          }),
+        ),
+        createQueryJob: vi.fn(async (): ReturnType<KtxBigQueryClient['createQueryJob']> => [
+          {
+            getQueryResults: async (): ReturnType<KtxBigQueryQueryJob['getQueryResults']> => [
+              [],
+              undefined,
+              { schema: { fields: [{ name: 'table_name', type: 'STRING' }, { name: 'column_name', type: 'STRING' }] } },
+            ],
+          },
+        ]),
+      })),
+    };
+    const connector = new KtxBigQueryScanConnector({ connectionId: 'warehouse', connection, clientFactory });
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'bigquery' }, { runId: 'skip-test' });
+
+    expect(snapshot.tables.map((table) => table.name)).toEqual(['orders']);
+    expect(snapshot.warnings).toHaveLength(1);
+    expect(snapshot.warnings?.[0]).toMatchObject({
+      code: 'object_introspection_failed',
+      table: 'locked',
+      metadata: { object: 'project-1.analytics.locked' },
+    });
+  });
+
   it('constructs for discovery without dataset scope and lists tables through one region information schema query', async () => {
     const createQueryJob = vi.fn(
       async (
@@ -441,7 +593,7 @@ describe('KtxBigQueryScanConnector', () => {
     const clientFactory = fakeClientFactory();
     const connector = new KtxBigQueryScanConnector({
       connectionId: 'warehouse',
-      connection: { ...connection, max_bytes_billed: '987654321', job_timeout_ms: 30_000 },
+      connection: { ...connection, max_bytes_billed: '987654321', query_timeout_ms: 30_000 },
       clientFactory,
     });
 
@@ -490,5 +642,36 @@ describe('KtxBigQueryScanConnector', () => {
         }),
       ]),
     });
+  });
+
+  it('maps a BigQuery job timeout to KtxQueryError', async () => {
+    const timeoutError = new Error('Job execution was cancelled: Job timed out after 5000ms');
+    const clientFactory: KtxBigQueryClientFactory = {
+      createClient: vi.fn(() => ({
+        getDatasets: vi.fn(async (): ReturnType<KtxBigQueryClient['getDatasets']> => [[{ id: 'analytics' }]]),
+        dataset: vi.fn(
+          (datasetId: string): KtxBigQueryDataset => ({
+            get: vi.fn(async () => [{ id: datasetId }]),
+            getTables: vi.fn(async (): ReturnType<KtxBigQueryDataset['getTables']> => [[]]),
+          }),
+        ),
+        createQueryJob: vi.fn(async (): ReturnType<KtxBigQueryClient['createQueryJob']> => {
+          throw timeoutError;
+        }),
+      })),
+    };
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: { ...connection, query_timeout_ms: 5_000 },
+      clientFactory,
+    });
+
+    const execution = connector.executeReadOnly(
+      { connectionId: 'warehouse', sql: 'select count(*) from `project-1`.`analytics`.`orders`' },
+      { runId: 'scan-run-1' },
+    );
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('query exceeded 5s');
+    await expect(execution).rejects.toMatchObject({ cause: timeoutError });
   });
 });

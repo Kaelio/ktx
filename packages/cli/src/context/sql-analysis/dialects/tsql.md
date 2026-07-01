@@ -1,0 +1,10 @@
+**tsql** (SQL Server) SQL conventions:
+- **FQTN:** `schema.table` (e.g. `dbo.orders`), or `database.schema.table` across databases.
+- **Identifiers:** quote with square brackets (`[Order]`), or double quotes when `QUOTED_IDENTIFIER` is on; case-sensitivity is set by the database collation (commonly case-insensitive).
+- **Date/time:** `DATEPART(year, ts)`, `DATEADD(day, -7, ts)`, `DATEDIFF(day, a, b)`, `CONVERT(date, ts)`, `FORMAT(ts, 'yyyy-MM')`, `GETDATE()`.
+- **Series:** no series function — build a spine with a recursive CTE, e.g. `WITH months AS (SELECT CAST('2023-01-01' AS date) AS d UNION ALL SELECT DATEADD(month, 1, d) FROM months WHERE d < '2023-12-01')` (cap with `OPTION (MAXRECURSION 0)`), or a numbers/tally table, then `LEFT JOIN` the aggregated facts onto it so empty periods still appear.
+- **Rolling window over time:** `RANGE` supports only `UNBOUNDED`/`CURRENT ROW` (no offset frame), so build a gap-free date spine (see **Series**) and use a row frame — `AVG(amount) OVER (ORDER BY day ROWS BETWEEN 29 PRECEDING AND CURRENT ROW)` — or a date-keyed self-join on `f.day BETWEEN DATEADD(day, -29, d.day) AND d.day`; guard minimum periods with `COUNT(*) OVER (<same frame>)`.
+- **Integer division:** `/` between two `int`s truncates (`5 / 2` → `2`), so a rate or `SUM(a) / COUNT(*)` silently floors to an integer; cast one operand first — `CAST(a AS decimal(18,4)) / b` or `a * 1.0 / b` — and round only in the final projection.
+- **Safe cast:** `TRY_CAST(x AS DECIMAL(18,4))` (or `TRY_CONVERT(decimal(18,4), x)`) returns `NULL` instead of erroring on a value that does not parse, so a residual-`NULL` count among non-sentinel rows catches an encoding the sample missed.
+- **Top-N / windows:** `SELECT TOP (n) ... ORDER BY ...` for a global top-N; for per-group, rank in a CTE with `ROW_NUMBER() OVER (...)` and filter in the outer query.
+- **JSON:** `JSON_VALUE(col, '$.k')` returns a scalar, `JSON_QUERY(col, '$.k')` returns an object/array, and `OPENJSON(col)` shreds JSON into rows.

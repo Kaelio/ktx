@@ -1,6 +1,6 @@
 ---
 title: Context Sources
-description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, and Notion.
+description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, Sigma, and Google Drive.
 ---
 
 Context sources feed your existing analytics tooling into **ktx**. During ingestion, **ktx** extracts metadata from each source and uses a reconciliation agent to reconcile it with your existing semantic layer and knowledge base - preserving accepted edits rather than overwriting.
@@ -27,7 +27,7 @@ LookML uses top-level `repoUrl`, and MetricFlow uses nested
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, or `notion` |
+| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, `sigma`, or `gdrive` |
 | `source_dir` | For local file sources | Absolute or project-relative source directory |
 | `repo_url` | For Git-hosted dbt sources | Git repository URL |
 | `repoUrl` | For Git-hosted LookML sources | Git repository URL |
@@ -375,6 +375,167 @@ Create an integration at [notion.so/my-integrations](https://www.notion.so/my-in
 - Rate limits apply; large workspaces may require multiple ingestion runs
 - Incremental sync cursors are stored in `.ktx/db.sqlite`; don't add
   `last_successful_cursor` to `ktx.yaml`
+
+---
+
+## Sigma
+
+Ingests data model definitions and workbook metadata from a Sigma workspace as semantic context. Uses the Sigma REST API to fetch data model specs and workbook summaries.
+
+### What it provides
+
+- Data model names, folder paths, and ownership metadata
+- Page and element definitions within each data model
+- Column identifiers and data types where available
+- Workbook names, paths, descriptions, and version metadata
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    api_url: https://api.sigmacomputing.com   # Omit for GCP US (default)
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+```
+
+For the AWS US region, override `api_url`:
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    api_url: https://aws-api.sigmacomputing.com
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+```
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| OAuth client credentials | `client_id` + `client_secret_ref: env:SIGMA_CLIENT_SECRET` |
+
+Generate a client in Sigma: **Administration → Developer Access → Add New Client**.
+
+### What gets ingested
+
+- Active data model specs, organized by folder into work units
+- Workbook metadata (name, path, description, version) — archived and exploration workbooks excluded by default
+- Models backed by CSV uploads or unsupported connector subtypes are listed in the manifest but skipped during spec fetch (a Sigma API limitation)
+
+### Warehouse connection mapping
+
+`connectionMappings` is optional. Without it, **ktx** produces wiki knowledge only — no semantic-layer sources are written and warehouse validation is skipped. To get semantic-layer output and enable `sl_validate`, map each Sigma internal connection UUID to a **ktx** warehouse connection ID:
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+    connectionMappings:
+      "<sigma-internal-uuid>": snowflake-prod   # data models using this connection get SL sources
+```
+
+Find the Sigma connection UUID in **Administration → Connections** or from the `source.connectionId` field in a fetched data model spec. Data model elements whose `connectionId` has no mapping are ingested as wiki-only.
+
+### Workbook filter
+
+At large scale, you can limit which workbooks are fetched during ingest using `workbookFilter`:
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+    workbookFilter:
+      includeArchived: false       # default
+      includeExplorations: false   # default
+      updatedSince: "2026-01-01T00:00:00Z"   # only recently updated workbooks
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `includeArchived` | `false` | Include archived workbooks |
+| `includeExplorations` | `false` | Include exploration workbooks |
+| `updatedSince` | — | ISO 8601 date; only workbooks updated on or after this date are fetched |
+
+### Notes
+
+- `connectionMappings` is optional for wiki-only ingest; it is required to generate semantic-layer sources and run warehouse validation
+- Context ingest (`ktx ingest sigma-main`) fetches from the Sigma API directly
+- Ingest is incremental: items whose `updatedAt` timestamp is unchanged since the last run are skipped
+- Models backed by CSV uploads or unsupported connector subtypes cannot have their spec exported; these are skipped with a warning (a Sigma API limitation)
+- Joins are not projected from Sigma data models in this release; `joins: []` is always written by the projection step. Lookup relationships visible in data model specs are captured as wiki knowledge instead.
+
+---
+
+## Google Drive
+
+Ingests Google Docs from a shared Google Drive folder as wiki-ready knowledge content. This v1 implementation is knowledge-only and ingests Google Docs MIME types only.
+
+### What it provides
+
+- Wiki pages synthesized from Google Docs content
+- Folder-scoped knowledge ingestion from a specific Drive folder
+- Markdown normalization for headings, lists, paragraphs, links, common inline formatting, and Google Docs tables
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  company-docs:
+    driver: gdrive
+    service_account_key_ref: file:/absolute/path/to/google-service-account.json
+    folder_id: your-google-drive-folder-id
+    recursive: false
+```
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| Service account JSON key file | `service_account_key_ref: file:/absolute/path/to/key.json` |
+
+### Google Cloud setup
+
+1. Create a Google Cloud project.
+2. Enable the Google Drive API.
+3. Enable the Google Docs API.
+4. Create a service account.
+5. Download the service account JSON key.
+6. Share the target Drive folder with the service account email.
+7. Reference the key in `ktx.yaml` with `service_account_key_ref`.
+
+### Required scopes
+
+- `https://www.googleapis.com/auth/drive.readonly`
+- `https://www.googleapis.com/auth/documents.readonly`
+
+### Configuration options
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `service_account_key_ref` | File reference to the service account JSON key | - |
+| `folder_id` | Google Drive folder ID to ingest | - |
+| `recursive` | Traverse subfolders under `folder_id` | `false` |
+
+### What gets ingested
+
+- Google Docs documents only
+- Wiki-oriented knowledge content
+- One work unit per staged Google Doc
+
+### Notes
+
+- `gdrive` is knowledge-only in v1; it does not produce semantic layer sources
+- `ktx setup` supports Google Drive configuration, including the service-account key ref, folder id, and recursive crawl flag
+- `ktx connection test <connectionId>` supports `gdrive`: it verifies that `folder_id` resolves to a folder the service account can read, then reports the number of Google Docs visible in it. A wrong or unshared `folder_id` fails the test instead of reporting zero docs
+- Only Google Docs are ingested in v1; other file types (Sheets, Slides, PDFs) in the folder are skipped and recorded in the staged manifest
+- The service account must be granted access to the target folder explicitly
 
 ## Common errors
 

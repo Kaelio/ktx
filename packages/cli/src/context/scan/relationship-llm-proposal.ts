@@ -96,6 +96,10 @@ function rowCountForTable(profile: KtxRelationshipProfileArtifact, table: KtxEnr
   return profile.tables.find((item) => item.table.name.toLowerCase() === table.ref.name.toLowerCase())?.rowCount ?? null;
 }
 
+function resolvedDescription(descriptions: Partial<Record<string, string>>): string | null {
+  return descriptions.ai ?? descriptions.db ?? null;
+}
+
 function buildEvidencePacket(
   schema: KtxEnrichedSchema,
   profile: KtxRelationshipProfileArtifact,
@@ -107,13 +111,17 @@ function buildEvidencePacket(
     tables: schema.tables
       .filter((table) => table.enabled)
       .slice(0, settings.maxTablesPerBatch)
-      .map((table) => ({
+      .map((table) => {
+        const tableDescription = resolvedDescription(table.descriptions);
+        return {
         name: table.ref.name,
         catalog: table.ref.catalog,
         db: table.ref.db,
         rowCount: rowCountForTable(profile, table),
+        ...(tableDescription ? { description: tableDescription } : {}),
         columns: table.columns.slice(0, settings.maxColumnsPerTable).map((column) => {
           const columnProfile = profileForColumn(profile, table, column);
+          const columnDescription = resolvedDescription(column.descriptions);
           return {
             name: column.name,
             nativeType: column.nativeType,
@@ -121,6 +129,7 @@ function buildEvidencePacket(
             dimensionType: column.dimensionType,
             nullable: column.nullable,
             declaredPrimaryKey: column.primaryKey,
+            ...(columnDescription ? { description: columnDescription } : {}),
             profile: columnProfile
               ? {
                   rowCount: columnProfile.rowCount,
@@ -133,7 +142,8 @@ function buildEvidencePacket(
               : null,
           };
         }),
-      })),
+        };
+      }),
   };
 }
 

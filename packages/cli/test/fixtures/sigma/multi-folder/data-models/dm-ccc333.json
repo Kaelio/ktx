@@ -1,0 +1,9 @@
+{
+  "sigmaId": "dm-ccc333",
+  "name": "Usage Model",
+  "path": "Product/Usage Model",
+  "latestVersion": 2,
+  "updatedAt": "2026-01-12T09:00:00Z",
+  "isArchived": false,
+  "spec": { "schemaVersion": 1, "pages": [] }
+}

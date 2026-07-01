@@ -218,11 +218,20 @@ const makeDeps = () => {
   const configService = {
     enqueueCommitMessageJobForExternalCommit: vi.fn().mockResolvedValue(undefined),
   };
+  const contentCache = {
+    findCompletedResult: vi.fn().mockResolvedValue(null),
+    findLatestCompletedResult: vi.fn().mockResolvedValue(null),
+    saveCompletedResult: vi.fn().mockResolvedValue(undefined),
+    saveFailedResult: vi.fn().mockResolvedValue(undefined),
+    deleteResult: vi.fn().mockResolvedValue(undefined),
+    listRunResults: vi.fn().mockResolvedValue([]),
+  };
   return {
     runsRepo,
     provenanceRepo,
     reportsRepo,
     canonicalPins,
+    contentCache,
     adapter,
     registry,
     diffSetService,
@@ -270,6 +279,7 @@ const buildRunner = (deps: ReturnType<typeof makeDeps> = makeDeps(), overrides: 
     settings: {
       probeRowCount: 1,
       memoryIngestionModel: 'test-model',
+      cliVersion: '0.0.0-test',
     },
     skillsRegistry: deps.skillsRegistry as any,
     promptService: deps.promptService as any,
@@ -286,6 +296,7 @@ const buildRunner = (deps: ReturnType<typeof makeDeps> = makeDeps(), overrides: 
     },
     reports: deps.reportsRepo as any,
     canonicalPins: deps.canonicalPins,
+    contentCache: deps.contentCache,
     slValidator: deps.slValidator as any,
     toolsetFactory: deps.toolsetFactory as any,
     commitMessages: {
@@ -433,6 +444,7 @@ describe('IngestBundleRunner — Stages 1 → 7', () => {
       settings: {
         probeRowCount: 1,
         memoryIngestionModel: 'test-model',
+        cliVersion: '0.0.0-test',
         workUnitMaxConcurrency: 2,
         rateLimitGovernor: { acquireWorkSlot, subscribe: vi.fn(() => vi.fn()) } as never,
       },
@@ -471,6 +483,7 @@ describe('IngestBundleRunner — Stages 1 → 7', () => {
       settings: {
         probeRowCount: 1,
         memoryIngestionModel: 'test-model',
+        cliVersion: '0.0.0-test',
         workUnitMaxConcurrency: 1,
         rateLimitGovernor: { acquireWorkSlot, subscribe: vi.fn(() => vi.fn()) } as never,
       },
@@ -506,6 +519,7 @@ describe('IngestBundleRunner — Stages 1 → 7', () => {
       settings: {
         probeRowCount: 1,
         memoryIngestionModel: 'test-model',
+        cliVersion: '0.0.0-test',
         workUnitMaxConcurrency: 1,
       },
     });
@@ -546,6 +560,7 @@ describe('IngestBundleRunner — Stages 1 → 7', () => {
       settings: {
         probeRowCount: 1,
         memoryIngestionModel: 'test-model',
+        cliVersion: '0.0.0-test',
         rateLimitGovernor: {
           acquireWorkSlot: vi.fn(async () => vi.fn()),
           subscribe: vi.fn((cb: (state: any) => void) => {

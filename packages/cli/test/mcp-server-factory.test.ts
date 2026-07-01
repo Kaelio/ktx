@@ -147,14 +147,21 @@ describe('createKtxMcpServerFactory', () => {
     );
 
     expect(factory()).toEqual({ kind: 'mcp-server' });
-    expect(createDefaultKtxMcpServer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextTools: expect.objectContaining({
-          context_tool: { name: 'context_tool' },
-          memoryIngest: mocks.memoryIngest,
-        }),
-      }),
-    );
+    // memoryIngest is wrapped to validate an explicit connectionId before delegating,
+    // so it is no longer the raw service object — assert it delegates instead.
+    const contextTools = (vi.mocked(createDefaultKtxMcpServer).mock.calls[0]![0].contextTools ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(contextTools.context_tool).toEqual({ name: 'context_tool' });
+    const memoryIngestPort = contextTools.memoryIngest as
+      | { ingest: (input: unknown) => unknown; status: (runId: string) => unknown }
+      | undefined;
+    expect(memoryIngestPort).toBeDefined();
+    await memoryIngestPort?.ingest({ userId: 'local', chatId: 'c', userMessage: 'm', assistantMessage: 'a' });
+    expect(mocks.memoryIngest.ingest).toHaveBeenCalled();
+    await memoryIngestPort?.status('run-1');
+    expect(mocks.memoryIngest.status).toHaveBeenCalledWith('run-1');
   });
 
   it('uses null embedding ports when no configured provider is available', async () => {

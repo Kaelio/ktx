@@ -178,6 +178,7 @@ describe('createLocalProjectMcpContextPorts', () => {
 
     expect(Object.keys(ports).sort()).toEqual([
       'connections',
+      'dialectNotes',
       'dictionarySearch',
       'discover',
       'entityDetails',
@@ -187,6 +188,7 @@ describe('createLocalProjectMcpContextPorts', () => {
     expect(Object.keys(ports.connections ?? {}).sort()).toEqual(['list']);
     expect(Object.keys(ports.knowledge ?? {}).sort()).toEqual(['read', 'search']);
     expect(Object.keys(ports.semanticLayer ?? {}).sort()).toEqual(['query', 'readSource']);
+    expect(Object.keys(ports.dialectNotes ?? {}).sort()).toEqual(['read']);
     await expect(ports.connections?.list()).resolves.toEqual([
       { id: 'warehouse', name: 'warehouse', connectionType: 'POSTGRESQL' },
     ]);
@@ -279,6 +281,33 @@ describe('createLocalProjectMcpContextPorts', () => {
     await expect(execution).rejects.toThrow(
       'Connection "DIG_SMART_REP" is not configured in ktx.yaml. Configured connections: warehouse.',
     );
+    expect(createConnector).not.toHaveBeenCalled();
+  });
+
+  it('refuses sql_execution against a non-SQL (MongoDB) connection before SQL analysis', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.mongo = { driver: 'mongodb', url: 'mongodb://localhost:27017/app' };
+    const createConnector = vi.fn(async () => testConnector());
+    const sqlAnalysis = {
+      analyzeForFingerprint: vi.fn(),
+      analyzeBatch: vi.fn(),
+      validateReadOnly: vi.fn(async () => ({ ok: true, error: null })),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis,
+      localScan: { createConnector },
+      embeddingService: null,
+    });
+
+    const execution = ports.sqlExecution?.execute({
+      connectionId: 'mongo',
+      sql: 'select 1',
+      maxRows: 5,
+    });
+    await expect(execution).rejects.toBeInstanceOf(KtxExpectedError);
+    await expect(execution).rejects.toThrow("non-SQL driver 'mongodb'");
+    // Refused before the parser dialect is chosen and before any connector is built.
+    expect(sqlAnalysis.validateReadOnly).not.toHaveBeenCalled();
     expect(createConnector).not.toHaveBeenCalled();
   });
 
@@ -774,6 +803,47 @@ describe('createLocalProjectMcpContextPorts', () => {
       totalFound: 1,
     });
     expect(search?.results[0]?.score).toBeGreaterThan(0);
+  });
+
+  it('scopes wiki_search to a connection and validates the connection id', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.sales_db = { driver: 'sqlite', url: 'file:sales.db' };
+    project.config.connections.events_db = { driver: 'sqlite', url: 'file:events.db' };
+    const seed = async (key: string, connections: string[]) => {
+      await project.fileStore.writeFile(
+        `wiki/global/${key}.md`,
+        [
+          '---',
+          `summary: Orders for ${key}`,
+          'usage_mode: auto',
+          ...(connections.length > 0 ? ['connections:', ...connections.map((id) => `  - ${id}`)] : []),
+          '---',
+          '',
+          'Orders are recognized when paid.',
+          '',
+        ].join('\n'),
+        'ktx',
+        'ktx@example.com',
+        `seed ${key}`,
+      );
+    };
+    await seed('orders-sales', ['sales_db']);
+    await seed('orders-events', ['events_db']);
+    await seed('orders-global', []);
+
+    const ports = createLocalProjectMcpContextPorts(project, { embeddingService: null });
+
+    const scoped = await ports.knowledge?.search({
+      userId: 'local-user',
+      query: 'orders paid',
+      limit: 10,
+      connectionId: 'sales_db',
+    });
+    expect(scoped?.results.map((result) => result.key).sort()).toEqual(['orders-global', 'orders-sales']);
+
+    await expect(
+      ports.knowledge?.search({ userId: 'local-user', query: 'orders', limit: 10, connectionId: 'warehouse' }),
+    ).rejects.toThrow('Unknown connection "warehouse". Configured connections: events_db, sales_db.');
   });
 
   it('reads seeded semantic-layer sources', async () => {

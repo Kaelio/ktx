@@ -1,5 +1,6 @@
-import { assertReadOnlySql, stripTrailingSqlNoise } from '../../context/connections/read-only-sql.js';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { assertReadOnlySql, hoistLeadingCte, stripTrailingSqlNoise } from '../../context/connections/read-only-sql.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
+import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
 import {
@@ -50,6 +51,8 @@ export interface KtxSqlServerPoolConfig {
   database: string;
   user: string;
   password?: string;
+  // ms; on expiry mssql sends a TDS attention that cancels the query server-side.
+  requestTimeout: number;
   options: { encrypt: true; trustServerCertificate: boolean };
   pool: { max: number; min: number; idleTimeoutMillis: number };
 }
@@ -269,6 +272,11 @@ function isDeniedError(error: unknown): boolean {
   return number === 229 || number === 230 || number === 297;
 }
 
+// mssql raises a RequestError with code 'ETIMEOUT' once requestTimeout elapses.
+function isSqlServerTimeoutError(error: unknown): boolean {
+  return Boolean(error) && typeof error === 'object' && (error as { code?: unknown }).code === 'ETIMEOUT';
+}
+
 function limitSqlForSqlServerExecution(sqlText: string, maxRows: number | undefined): string {
   const trimmed = stripTrailingSqlNoise(assertReadOnlySql(sqlText));
   if (!maxRows) {
@@ -277,7 +285,8 @@ function limitSqlForSqlServerExecution(sqlText: string, maxRows: number | undefi
   if (!Number.isInteger(maxRows) || maxRows <= 0) {
     throw new Error('maxRows must be a positive integer.');
   }
-  return `SELECT TOP ${maxRows} * FROM (${trimmed}) AS ktx_query_result`;
+  const { withPrefix, body } = hoistLeadingCte(trimmed);
+  return `${withPrefix}SELECT TOP ${maxRows} * FROM (${body}) AS ktx_query_result`;
 }
 
 export function isKtxSqlServerConnectionConfig(
@@ -327,6 +336,7 @@ export function sqlServerConnectionPoolConfigFromConfig(input: {
     database,
     user,
     password: stringConfigValue(merged, 'password', env),
+    requestTimeout: resolveQueryDeadlineMs(merged),
     options: { encrypt: true, trustServerCertificate: merged.trustServerCertificate ?? true },
     pool: { max: maxConnections, min: 0, idleTimeoutMillis: 30000 },
   };
@@ -352,7 +362,8 @@ export class KtxSqlServerScanConnector implements KtxScanConnector {
   private readonly poolFactory: KtxSqlServerPoolFactory;
   private readonly endpointResolver?: KtxSqlServerEndpointResolver;
   private readonly now: () => Date;
-  private readonly dialect = getDialectForDriver('sqlserver');
+  private readonly deadlineMs: number;
+  private readonly dialect = getSqlDialectForDriver('sqlserver');
   private pool: KtxSqlServerPool | null = null;
   private resolvedEndpoint: KtxSqlServerResolvedEndpoint | null = null;
 
@@ -369,6 +380,7 @@ export class KtxSqlServerScanConnector implements KtxScanConnector {
     this.poolFactory = options.poolFactory ?? new DefaultSqlServerPoolFactory();
     this.endpointResolver = options.endpointResolver;
     this.now = options.now ?? (() => new Date());
+    this.deadlineMs = resolveQueryDeadlineMs(this.connection);
     this.id = `sqlserver:${options.connectionId}`;
   }
 
@@ -803,7 +815,15 @@ export class KtxSqlServerScanConnector implements KtxScanConnector {
         request.input(key, value);
       }
     }
-    const result = await request.query(assertReadOnlySql(query));
+    let result: KtxSqlServerQueryResult;
+    try {
+      result = await request.query(assertReadOnlySql(query));
+    } catch (error) {
+      if (isSqlServerTimeoutError(error)) {
+        throw queryDeadlineExceededError(this.deadlineMs, { cause: error });
+      }
+      throw error;
+    }
     const recordset = result.recordset ?? [];
     const columnMetadata = recordset.columns ?? {};
     const metadataHeaders = Object.keys(columnMetadata);

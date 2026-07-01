@@ -82,6 +82,7 @@ export async function repairWikiSlRefs(input: {
   semanticLayerService: SemanticLayerService;
   configService: KtxFileStorePort;
   connectionIds: string[];
+  deferGlobalPageKeys?: string[];
 }): Promise<WikiSlRefRepairResult> {
   const { refs: validRefs, warnings } = await loadVisibleSlRefs(input.semanticLayerService, input.connectionIds);
   const listFiles =
@@ -96,10 +97,14 @@ export async function repairWikiSlRefs(input: {
   }
   const listed = await listFiles('wiki', true);
   const repairs: WikiSlRefRepair[] = [];
+  const deferredGlobalPageKeys = new Set(input.deferGlobalPageKeys ?? []);
 
   for (const file of listed.files.sort()) {
     const parsedPath = parseKnowledgeFilePath(file);
     if (!parsedPath) {
+      continue;
+    }
+    if (parsedPath.scope === 'GLOBAL' && deferredGlobalPageKeys.has(parsedPath.pageKey)) {
       continue;
     }
     const page = await input.wikiService.readPage(parsedPath.scope, parsedPath.scopeId, parsedPath.pageKey);

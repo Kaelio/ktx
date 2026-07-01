@@ -1,10 +1,13 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
 import { GitService } from '../../../src/context/core/git.service.js';
 import { SessionWorktreeService } from '../../../src/context/core/session-worktree.service.js';
 import { LocalGitFileStore } from '../../../src/context/project/local-git-file-store.js';
+import { SqliteContentResultCache } from '../../../src/context/cache/sqlite-content-result-cache.js';
+import { slSourceFilePath } from '../../../src/context/sl/source-files.js';
 import { addTouchedSlSource } from '../../../src/context/tools/touched-sl-sources.js';
 import { IngestBundleRunner } from '../../../src/context/ingest/ingest-bundle.runner.js';
 import type { IngestBundleRunnerDeps } from '../../../src/context/ingest/ports.js';
@@ -46,26 +49,30 @@ function rootOfConfig(configService: unknown, fallback: string): string {
   return typeof rootDir === 'string' ? rootDir : fallback;
 }
 
-async function loadSourcesFromRoot(root: string) {
-  const raw = await readFile(join(root, 'semantic-layer/warehouse/mart_account_segments.yaml'), 'utf-8').catch(
-    () => '',
+async function loadSourcesFromRoot(root: string, connectionId = 'warehouse') {
+  const dir = join(root, 'semantic-layer', connectionId);
+  const entries = await readdir(dir).catch(() => []);
+  const sources = await Promise.all(
+    entries
+      .filter((entry) => entry.endsWith('.yaml') || entry.endsWith('.yml'))
+      .sort()
+      .map(async (entry) => {
+        const parsed = YAML.parse(await readFile(join(dir, entry), 'utf-8')) as Record<string, unknown> | null;
+        return parsed && typeof parsed.name === 'string'
+          ? {
+              name: parsed.name,
+              grain: Array.isArray(parsed.grain) ? parsed.grain : [],
+              columns: Array.isArray(parsed.columns) ? parsed.columns : [],
+              joins: Array.isArray(parsed.joins) ? parsed.joins : [],
+              measures: Array.isArray(parsed.measures) ? parsed.measures : [],
+              segments: Array.isArray(parsed.segments) ? parsed.segments : [],
+              table: parsed.table,
+            }
+          : null;
+      }),
   );
-  const hasCents = raw.includes('total_contract_arr_cents');
-  const hasDollars = raw.includes('total_contract_arr');
   return {
-    sources:
-      hasCents || hasDollars
-        ? [
-            {
-              name: 'mart_account_segments',
-              grain: ['account_id'],
-              columns: [{ name: 'account_id', type: 'string' }],
-              joins: [],
-              measures: [{ name: hasCents ? 'total_contract_arr_cents' : 'total_contract_arr', expr: 'sum(contract_arr)' }],
-              table: 'analytics.mart_account_segments',
-            },
-          ]
-        : [],
+    sources: sources.filter((source): source is NonNullable<typeof source> => source !== null),
     loadErrors: [],
   };
 }
@@ -105,6 +112,12 @@ function legacyFallbackSettingKey(): string {
 
 function legacySharedTraceEvent(): string {
   return ['shared', 'worktree', 'path', 'enabled'].join('_');
+}
+
+function workUnitRunLoopCalls(deps: IngestBundleRunnerDeps) {
+  return vi
+    .mocked(deps.agentRunner.runLoop)
+    .mock.calls.filter(([params]: any[]) => params.telemetryTags?.operationName === 'ingest-bundle-wu');
 }
 
 function makeWikiService(root: string) {
@@ -179,7 +192,7 @@ function makeDeps(
   };
   const wikiService = makeWikiService(runtime.configDir);
   const semanticLayerService: any = {
-    loadAllSources: vi.fn(async () => loadSourcesFromRoot(runtime.configDir)),
+    loadAllSources: vi.fn(async (connectionId: string) => loadSourcesFromRoot(runtime.configDir, connectionId)),
     listFilesForConnection: vi.fn().mockResolvedValue(['mart_account_segments.yaml']),
     readSourceFile: vi.fn((connectionId: string, sourceName: string) =>
       readSourceFileFromRoot(runtime.configDir, connectionId, sourceName),
@@ -187,7 +200,7 @@ function makeDeps(
   };
   semanticLayerService.forWorktree = vi.fn((workdir: string) => ({
     ...semanticLayerService,
-    loadAllSources: vi.fn(async () => loadSourcesFromRoot(workdir)),
+    loadAllSources: vi.fn(async (connectionId: string) => loadSourcesFromRoot(workdir, connectionId)),
     listFilesForConnection: vi.fn().mockResolvedValue(['mart_account_segments.yaml']),
     readSourceFile: vi.fn((connectionId: string, sourceName: string) =>
       readSourceFileFromRoot(workdir, connectionId, sourceName),
@@ -203,6 +216,7 @@ function makeDeps(
     },
     reports: { create: vi.fn().mockResolvedValue({ id: 'report-1' }), findByJobId: vi.fn().mockResolvedValue(null), markSuperseded: vi.fn() },
     canonicalPins: { listPins: vi.fn().mockResolvedValue([]) },
+    contentCache: new SqliteContentResultCache({ dbPath: join(runtime.homeDir, 'cache.sqlite') }),
     registry: { get: vi.fn().mockReturnValue(adapter), register: vi.fn(), has: vi.fn(), list: vi.fn() },
     diffSetService: {
       compute: vi.fn().mockResolvedValue({ added: ['cards/wiki.json', 'cards/source.json'], modified: [], deleted: [], unchanged: [] }),
@@ -221,6 +235,7 @@ function makeDeps(
     },
     settings: {
       memoryIngestionModel: 'test',
+      cliVersion: '0.0.0-test',
       probeRowCount: 1,
       ingestTraceLevel: 'trace',
       ...settings,
@@ -256,10 +271,14 @@ async function mockStageRawFiles(
   (runner as any).resolveStagedDir = vi.fn().mockResolvedValue(join(runtime.homeDir, 'stage'));
   (runner as any).stageRawFilesStage1 = vi.fn(async ({ worktreeRoot }: any) => {
     const rawDir = join(worktreeRoot, 'raw-sources/warehouse', sourceKey, 's');
+    const stagedDir = join(runtime.homeDir, 'stage');
     await mkdir(rawDir, { recursive: true });
-    for (const [rawPath] of hashes) {
+    for (const [rawPath, rawHash] of hashes) {
+      await mkdir(join(stagedDir, rawPath.split('/').slice(0, -1).join('/')), { recursive: true });
       await mkdir(join(rawDir, rawPath.split('/').slice(0, -1).join('/')), { recursive: true });
-      await writeFile(join(rawDir, rawPath), '{}');
+      const content = JSON.stringify({ rawHash });
+      await writeFile(join(stagedDir, rawPath), content);
+      await writeFile(join(rawDir, rawPath), content);
     }
     return { currentHashes: new Map(hashes), rawDirInWorktree: `raw-sources/warehouse/${sourceKey}/s` };
   });
@@ -556,6 +575,600 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
+  it('replays completed work units on a second identical run without an agent loop', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        await writeFile(
+          join(root, `wiki/global/${unitKey}.md`),
+          `---\nsummary: ${unitKey}\nusage_mode: auto\n---\n\n${unitKey}\n`,
+          'utf-8',
+        );
+        currentSession.actions.push({ target: 'wiki', type: 'created', key: unitKey, detail: unitKey });
+        await currentSession.gitService.commitFiles([`wiki/global/${unitKey}.md`], `wu ${unitKey}`, 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [
+        ['models/orders.sql', 'orders-hash'],
+        ['models/customers.sql', 'customers-hash'],
+      ], 'dbt');
+
+      await expect(
+        runner.run({ jobId: 'job-resume-1', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
+
+      await expect(
+        runner.run({ jobId: 'job-resume-2', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
+
+      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-resume-2/trace.jsonl'), 'utf-8');
+      expect(trace).toContain('work_unit_cache_hit');
+      expect(trace.match(/work_unit_cache_replayed/g)).toHaveLength(2);
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('recomputes only the changed work unit after an input byte changes', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        await writeFile(
+          join(root, `wiki/global/${unitKey}.md`),
+          `---\nsummary: ${unitKey}\nusage_mode: auto\n---\n\n${unitKey}\n`,
+          'utf-8',
+        );
+        currentSession.actions.push({ target: 'wiki', type: 'updated', key: unitKey, detail: unitKey });
+        await currentSession.gitService.commitFiles([`wiki/global/${unitKey}.md`], `wu ${unitKey}`, 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [
+        ['models/orders.sql', 'orders-hash'],
+        ['models/customers.sql', 'customers-hash'],
+      ], 'dbt');
+      await runner.run({ jobId: 'job-input-1', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } });
+
+      await mockStageRawFiles(runner, runtime, [
+        ['models/orders.sql', 'orders-hash-changed'],
+        ['models/customers.sql', 'customers-hash'],
+      ], 'dbt');
+      await runner.run({ jobId: 'job-input-2', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } });
+
+      const wuCalls = workUnitRunLoopCalls(deps);
+      expect(wuCalls).toHaveLength(3);
+      const secondRunUnitKeys = wuCalls.slice(2).map(([params]: any[]) => params.telemetryTags.unitKey);
+      expect(secondRunUnitKeys).toEqual(['orders']);
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not cache failed work units and retries them on the next run', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [{ unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] }],
+      });
+      let currentSession: any = null;
+      let attempt = 0;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return { stopReason: 'error', error: new Error('provider disconnected') };
+        }
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        await writeFile(join(root, 'wiki/global/orders.md'), '---\nsummary: orders\nusage_mode: auto\n---\n\norders\n', 'utf-8');
+        currentSession.actions.push({ target: 'wiki', type: 'created', key: 'orders', detail: 'orders' });
+        await currentSession.gitService.commitFiles(['wiki/global/orders.md'], 'wu orders', 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [['models/orders.sql', 'orders-hash']], 'dbt');
+
+      await expect(
+        runner.run({ jobId: 'job-failed-cache-1', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: ['orders'] });
+      await expect(
+        runner.run({ jobId: 'job-failed-cache-2', connectionId: 'warehouse', sourceKey: 'dbt', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes a missing sibling join, then self-heals from the cached owner patch without rerunning it', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+
+      let currentSession: any = null;
+      let customersAttempt = 0;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'semantic-layer/warehouse'), { recursive: true });
+        if (unitKey === 'orders') {
+          await writeFile(
+            join(root, 'semantic-layer/warehouse/orders.yaml'),
+            [
+              'name: orders',
+              'grain: [order_id]',
+              'columns: [{name: order_id, type: string}, {name: customer_id, type: string}]',
+              'joins:',
+              '  - to: customers',
+              '    on: orders.customer_id = customers.customer_id',
+              'measures: []',
+              '',
+            ].join('\n'),
+            'utf-8',
+          );
+          addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'orders');
+          currentSession.actions.push({
+            target: 'sl',
+            type: 'created',
+            key: 'orders',
+            detail: 'orders with customer join',
+            targetConnectionId: 'warehouse',
+            rawPaths: ['models/orders.sql'],
+          });
+          await currentSession.gitService.commitFiles(
+            ['semantic-layer/warehouse/orders.yaml'],
+            'wu orders',
+            'ktx Test',
+            'system@ktx.local',
+          );
+          return { stopReason: 'natural' };
+        }
+
+        customersAttempt += 1;
+        if (customersAttempt === 1) {
+          return { stopReason: 'error', error: new Error('provider disconnected') };
+        }
+        await writeFile(
+          join(root, 'semantic-layer/warehouse/customers.yaml'),
+          'name: customers\ngrain: [customer_id]\ncolumns: [{name: customer_id, type: string}]\njoins: []\nmeasures: []\n',
+          'utf-8',
+        );
+        addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'customers');
+        currentSession.actions.push({
+          target: 'sl',
+          type: 'created',
+          key: 'customers',
+          detail: 'customers source',
+          targetConnectionId: 'warehouse',
+          rawPaths: ['models/customers.sql'],
+        });
+        await currentSession.gitService.commitFiles(
+          ['semantic-layer/warehouse/customers.yaml'],
+          'wu customers',
+          'ktx Test',
+          'system@ktx.local',
+        );
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(
+        runner,
+        runtime,
+        [
+          ['models/orders.sql', 'orders-hash'],
+          ['models/customers.sql', 'customers-hash'],
+        ],
+        'dbt',
+      );
+
+      const first = await runner.run({
+        jobId: 'job-join-prune-1',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+      expect(first.commitSha).toBeTruthy();
+      expect(first.failedWorkUnits).toEqual(['customers']);
+      expect(first.finalGatePrunedReferences).toContainEqual({
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'customers',
+        absentTarget: 'customers',
+      });
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/orders.yaml'), 'utf-8')).resolves.not.toContain(
+        'to: customers',
+      );
+
+      const second = await runner.run({
+        jobId: 'job-join-prune-2',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+      expect(second.failedWorkUnits).toEqual([]);
+      expect(second.finalGatePrunedReferences ?? []).toEqual([]);
+      expect(workUnitRunLoopCalls(deps).map(([params]: any[]) => params.telemetryTags.unitKey)).toEqual([
+        'orders',
+        'customers',
+        'customers',
+      ]);
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/orders.yaml'), 'utf-8')).resolves.toContain(
+        'to: customers',
+      );
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/customers.yaml'), 'utf-8')).resolves.toContain(
+        'name: customers',
+      );
+      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-join-prune-2/trace.jsonl'), 'utf-8');
+      expect(trace).toContain('work_unit_cache_hit');
+      expect(trace).toContain('work_unit_cache_replayed');
+      expect(trace).not.toContain('work_unit_cache_stale_recompute');
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes a failed sibling join without pruning a valid surviving join', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [
+          { unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'customers', rawFiles: ['models/customers.sql'], peerFileIndex: [], dependencyPaths: [] },
+          { unitKey: 'products', rawFiles: ['models/products.sql'], peerFileIndex: [], dependencyPaths: [] },
+        ],
+      });
+
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        const unitKey = params.telemetryTags.unitKey;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'semantic-layer/warehouse'), { recursive: true });
+
+        if (unitKey === 'orders') {
+          await writeFile(
+            join(root, 'semantic-layer/warehouse/orders.yaml'),
+            [
+              'name: orders',
+              'grain: [order_id]',
+              'columns: [{name: order_id, type: string}, {name: customer_id, type: string}, {name: product_id, type: string}]',
+              'joins:',
+              '  - to: customers',
+              '    on: orders.customer_id = customers.customer_id',
+              '  - to: products',
+              '    on: orders.product_id = products.product_id',
+              'measures: []',
+              '',
+            ].join('\n'),
+            'utf-8',
+          );
+          addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'orders');
+          currentSession.actions.push({
+            target: 'sl',
+            type: 'created',
+            key: 'orders',
+            detail: 'orders with customer and product joins',
+            targetConnectionId: 'warehouse',
+            rawPaths: ['models/orders.sql'],
+          });
+          await currentSession.gitService.commitFiles(
+            ['semantic-layer/warehouse/orders.yaml'],
+            'wu orders',
+            'ktx Test',
+            'system@ktx.local',
+          );
+          return { stopReason: 'natural' };
+        }
+
+        if (unitKey === 'customers') {
+          return { stopReason: 'error', error: new Error('provider disconnected') };
+        }
+
+        await writeFile(
+          join(root, 'semantic-layer/warehouse/products.yaml'),
+          'name: products\ngrain: [product_id]\ncolumns: [{name: product_id, type: string}]\njoins: []\nmeasures: []\n',
+          'utf-8',
+        );
+        addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'products');
+        currentSession.actions.push({
+          target: 'sl',
+          type: 'created',
+          key: 'products',
+          detail: 'products source',
+          targetConnectionId: 'warehouse',
+          rawPaths: ['models/products.sql'],
+        });
+        await currentSession.gitService.commitFiles(
+          ['semantic-layer/warehouse/products.yaml'],
+          'wu products',
+          'ktx Test',
+          'system@ktx.local',
+        );
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(
+        runner,
+        runtime,
+        [
+          ['models/orders.sql', 'orders-hash'],
+          ['models/customers.sql', 'customers-hash'],
+          ['models/products.sql', 'products-hash'],
+        ],
+        'dbt',
+      );
+
+      const result = await runner.run({
+        jobId: 'job-join-prune-no-cascade',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+
+      expect(result.commitSha).toBeTruthy();
+      expect(result.failedWorkUnits).toEqual(['customers']);
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'customers',
+        absentTarget: 'customers',
+      });
+      expect(result.finalGatePrunedReferences).not.toContainEqual({
+        kind: 'join',
+        artifact: 'semantic-layer/warehouse/orders',
+        removedRef: 'products',
+        absentTarget: 'products',
+      });
+      const ordersYaml = await readFile(join(runtime.configDir, 'semantic-layer/warehouse/orders.yaml'), 'utf-8');
+      expect(ordersYaml).not.toContain('to: customers');
+      expect(ordersYaml).toContain('to: products');
+      await expect(readFile(join(runtime.configDir, 'semantic-layer/warehouse/products.yaml'), 'utf-8')).resolves.toContain(
+        'name: products',
+      );
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('drops an intrinsically invalid uppercase source at the final gate and reports the producing work unit', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [{ unitKey: 'signed-up', rawFiles: ['models/signed_up.sql'], peerFileIndex: [], dependencyPaths: [] }],
+      });
+
+      const sourceName = 'SIGNED_UP';
+      const sourcePath = slSourceFilePath('warehouse', sourceName);
+      let currentSession: any = null;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        currentSession = toolSession;
+        return { toRuntimeTools: vi.fn(() => ({})) };
+      });
+      let signedUpValidationCount = 0;
+      deps.slValidator.validateSingleSource = vi.fn(
+        async (_validationDeps: any, _connectionId: string, validatedSourceName: string) => {
+          if (validatedSourceName === sourceName) {
+            signedUpValidationCount += 1;
+            if (signedUpValidationCount > 1) {
+              return { errors: ['intrinsic final validation failed'], warnings: [] };
+            }
+          }
+          return { errors: [], warnings: [] };
+        },
+      ) as never;
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'semantic-layer/warehouse'), { recursive: true });
+        await writeFile(
+          join(root, sourcePath),
+          'name: SIGNED_UP\ngrain: [USER_ID]\ncolumns: [{name: USER_ID, type: string}]\njoins: []\nmeasures: []\n',
+          'utf-8',
+        );
+        addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', sourceName);
+        currentSession.actions.push({
+          target: 'sl',
+          type: 'created',
+          key: sourceName,
+          detail: 'uppercase signed up source',
+          targetConnectionId: 'warehouse',
+          rawPaths: ['models/signed_up.sql'],
+        });
+        await currentSession.gitService.commitFiles([sourcePath], 'wu signed up', 'ktx Test', 'system@ktx.local');
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [['models/signed_up.sql', 'signed-up-hash']], 'dbt');
+
+      const result = await runner.run({
+        jobId: 'job-final-gate-intrinsic-drop',
+        connectionId: 'warehouse',
+        sourceKey: 'dbt',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+
+      expect(result.commitSha).toBeTruthy();
+      expect(result.failedWorkUnits).toEqual(['signed-up']);
+      expect(result.finalGateDroppedSources).toContainEqual({
+        connectionId: 'warehouse',
+        sourceName,
+        reason: 'intrinsic final validation failed',
+      });
+      await expect(readFile(join(runtime.configDir, sourcePath), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('recomputes a stale cached patch and reports recomputed metadata', async () => {
+    const runtime = await makeRealGitRuntime();
+    try {
+      const { deps, adapter } = makeDeps(runtime, 'dbt');
+      adapter.chunk.mockResolvedValue({
+        workUnits: [{ unitKey: 'orders', rawFiles: ['models/orders.sql'], peerFileIndex: [], dependencyPaths: [] }],
+      });
+      let currentSession: any = null;
+      let agentAttempt = 0;
+      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
+        return {
+          toRuntimeTools: vi.fn(() => {
+            currentSession = toolSession;
+            return {};
+          }),
+        };
+      });
+      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
+        }
+        agentAttempt += 1;
+        const root = rootOfConfig(currentSession.configService, runtime.configDir);
+        await mkdir(join(root, 'wiki/global'), { recursive: true });
+        const detail = agentAttempt === 1 ? 'cached first output' : 'fresh recompute output';
+        const body = agentAttempt === 1 ? 'orders cached' : 'orders recomputed';
+        await writeFile(
+          join(root, 'wiki/global/orders.md'),
+          `---\nsummary: orders\nusage_mode: auto\n---\n\n${body}\n`,
+          'utf-8',
+        );
+        currentSession.actions.push({
+          target: 'wiki',
+          type: agentAttempt === 1 ? 'created' : 'updated',
+          key: 'orders',
+          detail,
+        });
+        await currentSession.gitService.commitFiles(
+          ['wiki/global/orders.md'],
+          `wu orders ${agentAttempt}`,
+          'ktx Test',
+          'system@ktx.local',
+        );
+        return { stopReason: 'natural' };
+      }) as never;
+
+      const runner = new IngestBundleRunner(deps);
+      await mockStageRawFiles(runner, runtime, [['models/orders.sql', 'orders-hash']], 'dbt');
+
+      await expect(
+        runner.run({
+          jobId: 'job-stale-cache-1',
+          connectionId: 'warehouse',
+          sourceKey: 'dbt',
+          trigger: 'upload',
+          bundleRef: { kind: 'upload', uploadId: 'upload' },
+        }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(1);
+
+      await writeFile(
+        join(runtime.configDir, 'wiki/global/orders.md'),
+        '---\nsummary: orders\nusage_mode: auto\n---\n\noperator drift\n',
+        'utf-8',
+      );
+      await runtime.git.commitFiles(['wiki/global/orders.md'], 'manual drift', 'ktx Test', 'system@ktx.local');
+
+      await expect(
+        runner.run({
+          jobId: 'job-stale-cache-2',
+          connectionId: 'warehouse',
+          sourceKey: 'dbt',
+          trigger: 'upload',
+          bundleRef: { kind: 'upload', uploadId: 'upload' },
+        }),
+      ).resolves.toMatchObject({ failedWorkUnits: [] });
+
+      expect(workUnitRunLoopCalls(deps)).toHaveLength(2);
+      await expect(readFile(join(runtime.configDir, 'wiki/global/orders.md'), 'utf-8')).resolves.toContain(
+        'orders recomputed',
+      );
+
+      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-stale-cache-2/trace.jsonl'), 'utf-8');
+      expect(trace).toContain('work_unit_cache_unsafe_drift');
+      expect(trace).not.toContain('work_unit_cache_hit');
+      expect(trace).not.toContain('work_unit_cache_stale_recompute');
+
+      const reportCreate = vi.mocked(deps.reports.create).mock.calls.at(-1)?.[0] as any;
+      expect(reportCreate.body.workUnits).toContainEqual(
+        expect.objectContaining({
+          unitKey: 'orders',
+          actions: [expect.objectContaining({ type: 'updated', detail: 'fresh recompute output' })],
+        }),
+      );
+    } finally {
+      await rm(runtime.homeDir, { recursive: true, force: true });
+    }
+  });
+
   it.each(['notion', 'lookml', 'looker', 'dbt', 'metricflow'] as const)(
     'routes %s direct writes through isolated child worktrees',
     async (sourceKey) => {
@@ -651,7 +1264,7 @@ describe('IngestBundleRunner isolated diff path', () => {
     },
   );
 
-  it('rejects the Metabase stale-measure wiki body regression before squash', async () => {
+  it('prunes the Metabase stale-measure wiki body regression before squash', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       const { deps, adapter } = makeDeps(runtime);
@@ -708,23 +1321,35 @@ describe('IngestBundleRunner isolated diff path', () => {
         ['cards/source.json', 'h2'],
       ]);
 
-      await expect(
-        runner.run({ jobId: 'job-1', connectionId: 'warehouse', sourceKey: 'metabase', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
-      ).rejects.toThrow(/total_contract_arr_cents/);
+      const result = await runner.run({
+        jobId: 'job-1',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_body_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'mart_account_segments.total_contract_arr_cents',
+        absentTarget: 'mart_account_segments.total_contract_arr_cents',
+      });
       const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-1/trace.jsonl'), 'utf-8');
       expect(trace).toContain('input_snapshot');
       expect(trace).toContain('isolated_diff_enabled');
       expect(trace).toContain('work_unit_child_created');
       expect(trace).toContain('work_unit_patch_collected');
       expect(trace).toContain('patch_apply_started');
-      expect(trace).toContain('final_artifact_gates_failed');
-      expect(trace).toContain('ingest_failed');
+      expect(trace).toContain('final_artifact_gates_finished');
+      expect(trace).toContain('final_gate_prune_finished');
+      expect(trace).toContain('squash_finished');
+      expect(trace).not.toContain('ingest_failed');
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
   });
 
-  it('rejects unchanged wiki body refs made stale by isolated semantic-layer changes', async () => {
+  it('prunes unchanged wiki body refs made stale by isolated semantic-layer changes', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       await mkdir(join(runtime.configDir, 'semantic-layer/warehouse'), { recursive: true });
@@ -782,17 +1407,24 @@ describe('IngestBundleRunner isolated diff path', () => {
       const runner = new IngestBundleRunner(deps);
       await mockStageRawFiles(runner, runtime, [['cards/source.json', 'h1']]);
 
-      await expect(
-        runner.run({
-          jobId: 'job-existing-body-stale',
-          connectionId: 'warehouse',
-          sourceKey: 'metabase',
-          trigger: 'upload',
-          bundleRef: { kind: 'upload', uploadId: 'upload' },
-        }),
-      ).rejects.toThrow(/total_contract_arr_cents/);
+      const result = await runner.run({
+        jobId: 'job-existing-body-stale',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
 
-      expect(await runtime.git.revParseHead()).toBe(preRunHead);
+      expect(await runtime.git.revParseHead()).not.toBe(preRunHead);
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_body_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'mart_account_segments.total_contract_arr_cents',
+        absentTarget: 'mart_account_segments.total_contract_arr_cents',
+      });
+      await expect(readFile(join(runtime.configDir, 'wiki/global/account-segments.md'), 'utf-8')).resolves.not.toContain(
+        'total_contract_arr_cents',
+      );
       const events = (await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-existing-body-stale/trace.jsonl'), 'utf-8'))
         .trim()
         .split('\n')
@@ -800,83 +1432,14 @@ describe('IngestBundleRunner isolated diff path', () => {
       expect(events.map((event) => event.event)).toEqual(
         expect.arrayContaining([
           'final_artifact_gates_started',
-          'final_artifact_gates_failed',
-          'ingest_failed',
-          'failure_report_created',
+          'final_artifact_gates_finished',
+          'final_gate_reference_pruned',
+          'final_gate_prune_committed',
+          'final_gate_prune_finished',
+          'squash_finished',
         ]),
       );
-      expect(events.map((event) => event.event)).not.toContain('squash_finished');
-      const gateFailure = events.find((event) => event.event === 'final_artifact_gates_failed');
-      expect(gateFailure).toMatchObject({
-        data: {
-          wikiReferenceGateScope: {
-            global: true,
-            reasons: expect.arrayContaining(['semantic_layer_changed']),
-            pageKeysValidated: expect.arrayContaining(['account-segments']),
-          },
-          actionOrigins: expect.arrayContaining([
-            expect.objectContaining({
-              source: 'work_unit_action',
-              unitKey: 'source-only',
-              unitRawFiles: ['cards/source.json'],
-              action: expect.objectContaining({
-                target: 'sl',
-                type: 'updated',
-                key: 'mart_account_segments',
-                rawPaths: ['cards/source.json'],
-                targetConnectionId: 'warehouse',
-              }),
-            }),
-          ]),
-        },
-        error: { message: expect.stringContaining('total_contract_arr_cents') },
-      });
-
-      const failureReport = (deps.reports.create as any).mock.calls
-        .map((call: any[]) => call[0])
-        .find((report: any) => report.body.status === 'failed');
-      expect(failureReport.body.failure).toMatchObject({
-        phase: 'final_gates',
-        message: expect.stringContaining('total_contract_arr_cents'),
-        details: expect.objectContaining({
-          wikiReferenceGateScope: expect.objectContaining({
-            global: true,
-            reasons: expect.arrayContaining(['semantic_layer_changed']),
-            pageKeysValidated: expect.arrayContaining(['account-segments']),
-          }),
-          touchedSlSources: expect.arrayContaining([
-            expect.objectContaining({ connectionId: 'warehouse', sourceName: 'mart_account_segments' }),
-          ]),
-          actionOrigins: expect.arrayContaining([
-            expect.objectContaining({
-              source: 'work_unit_action',
-              unitKey: 'source-only',
-              action: expect.objectContaining({
-                target: 'sl',
-                type: 'updated',
-                key: 'mart_account_segments',
-                rawPaths: ['cards/source.json'],
-                targetConnectionId: 'warehouse',
-              }),
-            }),
-          ]),
-        }),
-      });
-      expect(failureReport.body.workUnits).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            unitKey: 'source-only',
-            actions: expect.arrayContaining([
-              expect.objectContaining({
-                target: 'sl',
-                type: 'updated',
-                key: 'mart_account_segments',
-                rawPaths: ['cards/source.json'],
-              }),
-            ]),
-          }),
-        ]),
-      );
+      expect(events.map((event) => event.event)).not.toContain('ingest_failed');
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
@@ -1022,7 +1585,7 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
-  it('rejects Notion-style changed wiki pages with invalid sl_refs', async () => {
+  it('prunes direct missing wiki sl_refs instead of rejecting the work unit', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       const { deps, adapter } = makeDeps(runtime);
@@ -1035,12 +1598,16 @@ describe('IngestBundleRunner isolated diff path', () => {
         return { toRuntimeTools: vi.fn(() => ({})) };
       });
       deps.agentRunner.runLoop = vi.fn(async (params: any) => {
-        if (params.telemetryTags.operationName === 'ingest-isolated-diff-gate-repair') {
-          return { stopReason: 'natural' as const };
+        if (params.telemetryTags?.operationName !== 'ingest-bundle-wu') {
+          return { stopReason: 'natural' };
         }
         const root = rootOfConfig(currentSession.configService, runtime.configDir);
         await mkdir(join(root, 'wiki/global'), { recursive: true });
-        await writeFile(join(root, 'wiki/global/notion-page.md'), '---\nsummary: Notion page\nusage_mode: auto\nsl_refs:\n  - missing_source\n---\n\nBody\n');
+        await writeFile(
+          join(root, 'wiki/global/notion-page.md'),
+          '---\nsummary: Notion page\nusage_mode: auto\nsl_refs:\n  - missing_source\n---\n\nBody\n',
+          'utf-8',
+        );
         currentSession.actions.push({ target: 'wiki', type: 'created', key: 'notion-page', detail: 'Notion page' });
         await currentSession.gitService.commitFiles(['wiki/global/notion-page.md'], 'wu notion', 'ktx Test', 'system@ktx.local');
         return { stopReason: 'natural' };
@@ -1048,9 +1615,24 @@ describe('IngestBundleRunner isolated diff path', () => {
       const runner = new IngestBundleRunner(deps);
       await mockStageRawFiles(runner, runtime, [['pages/notion.json', 'h1']]);
 
-      await expect(
-        runner.run({ jobId: 'job-invalid-slrefs', connectionId: 'warehouse', sourceKey: 'metabase', trigger: 'upload', bundleRef: { kind: 'upload', uploadId: 'upload' } }),
-      ).rejects.toThrow(/gate repair completed without editing an allowed path/);
+      const result = await runner.run({
+        jobId: 'job-invalid-slrefs',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
+
+      expect(result.commitSha).toBeTruthy();
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_sl_ref',
+        artifact: 'wiki/global/notion-page',
+        removedRef: 'missing_source',
+        absentTarget: 'missing_source',
+      });
+      await expect(readFile(join(runtime.configDir, 'wiki/global/notion-page.md'), 'utf-8')).resolves.not.toContain(
+        'missing_source',
+      );
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
@@ -1112,27 +1694,35 @@ describe('IngestBundleRunner isolated diff path', () => {
       const runner = new IngestBundleRunner(deps);
       await mockStageRawFiles(runner, runtime, [['cards/source.json', 'h1']]);
 
-      await expect(
-        runner.run({
-          jobId: 'job-reconcile-stale',
-          connectionId: 'warehouse',
-          sourceKey: 'metabase',
-          trigger: 'upload',
-          bundleRef: { kind: 'upload', uploadId: 'upload' },
-        }),
-      ).rejects.toThrow(/total_contract_arr_cents/);
+      const result = await runner.run({
+        jobId: 'job-reconcile-stale',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
 
       const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-reconcile-stale/trace.jsonl'), 'utf-8');
       expect(trace).toContain('reconciliation_finished');
-      expect(trace).toContain('final_artifact_gates_failed');
-      expect(trace).toContain('ingest_failed');
-      expect(await runtime.git.revParseHead()).not.toContain('reconcile wiki');
+      expect(trace).toContain('final_artifact_gates_finished');
+      expect(trace).toContain('final_gate_prune_finished');
+      expect(trace).toContain('squash_finished');
+      expect(trace).not.toContain('ingest_failed');
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_body_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'mart_account_segments.total_contract_arr_cents',
+        absentTarget: 'mart_account_segments.total_contract_arr_cents',
+      });
+      await expect(readFile(join(runtime.configDir, 'wiki/global/account-segments.md'), 'utf-8')).resolves.not.toContain(
+        'total_contract_arr_cents',
+      );
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
   });
 
-  it('stores a failure report and postmortem trace for final gate failures', async () => {
+  it('stores final gate prune details in the success report and trace', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       const { deps, adapter } = makeDeps(runtime);
@@ -1200,19 +1790,28 @@ describe('IngestBundleRunner isolated diff path', () => {
         ['cards/source.json', 'h2'],
       ]);
 
-      await expect(
-        runner.run({
-          jobId: 'job-trace-failure',
-          connectionId: 'warehouse',
-          sourceKey: 'metabase',
-          trigger: 'upload',
-          bundleRef: { kind: 'upload', uploadId: 'upload' },
-        }),
-      ).rejects.toThrow(/total_contract_arr_cents/);
+      const result = await runner.run({
+        jobId: 'job-trace-failure',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
 
-      const failureReport = createdReports.find((report) => report.body.status === 'failed');
-      expect(failureReport.body.tracePath).toContain('job-trace-failure/trace.jsonl');
-      expect(failureReport.body.failure).toMatchObject({ phase: 'final_gates' });
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_body_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'mart_account_segments.total_contract_arr_cents',
+        absentTarget: 'mart_account_segments.total_contract_arr_cents',
+      });
+      const successReport = createdReports.find((report) => report.body.status === 'completed');
+      expect(successReport.body.tracePath).toContain('job-trace-failure/trace.jsonl');
+      expect(successReport.body.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_body_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'mart_account_segments.total_contract_arr_cents',
+        absentTarget: 'mart_account_segments.total_contract_arr_cents',
+      });
 
       const events = (await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-trace-failure/trace.jsonl'), 'utf-8'))
         .trim()
@@ -1229,18 +1828,14 @@ describe('IngestBundleRunner isolated diff path', () => {
           'patch_apply_started',
           'patch_accepted',
           'reconciliation_finished',
-          'final_artifact_gates_failed',
-          'ingest_failed',
-          'failure_report_created',
+          'final_artifact_gates_finished',
+          'final_gate_reference_pruned',
+          'final_gate_prune_committed',
+          'final_gate_prune_finished',
+          'squash_finished',
         ]),
       );
-      const failed = events.find((event) => event.event === 'ingest_failed');
-      expect(failed).toMatchObject({
-        runId: 'run-1',
-        syncId: expect.any(String),
-        data: { phase: 'final_gates', tracePath: expect.stringContaining('trace.jsonl') },
-        error: { message: expect.stringContaining('total_contract_arr_cents') },
-      });
+      expect(events.map((event) => event.event)).not.toContain('ingest_failed');
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
@@ -1461,7 +2056,7 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
-  it('rejects final wiki refs broken by another accepted WorkUnit before squash', async () => {
+  it('prunes final wiki refs broken by another accepted WorkUnit before squash', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       await mkdir(join(runtime.configDir, 'wiki/global'), { recursive: true });
@@ -1530,44 +2125,35 @@ describe('IngestBundleRunner isolated diff path', () => {
         ['pages/delete.json', 'h2'],
       ]);
 
-      await expect(
-        runner.run({
-          jobId: 'job-wiki-ref-conflict',
-          connectionId: 'warehouse',
-          sourceKey: 'metabase',
-          trigger: 'upload',
-          bundleRef: { kind: 'upload', uploadId: 'upload' },
-        }),
-      ).rejects.toThrow(/wiki references target missing page\(s\): account-segments -> source-page/);
-
-      expect(await runtime.git.revParseHead()).toBe(preRunHead);
-      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-wiki-ref-conflict/trace.jsonl'), 'utf-8');
-      expect(trace).toContain('final_artifact_gates_failed');
-      expect(trace).toContain('account-segments -> source-page');
-      expect(trace).toContain('ingest_failed');
-      expect(trace).toContain('failure_report_created');
-      expect(trace).not.toContain('squash_finished');
-
-      const failureReport = (deps.reports.create as any).mock.calls
-        .map((call: any[]) => call[0])
-        .find((report: any) => report.body.status === 'failed');
-      expect(failureReport.body.failure).toMatchObject({
-        phase: 'final_gates',
-        message: expect.stringContaining('account-segments -> source-page'),
-        details: expect.objectContaining({
-          changedWikiPageKeys: expect.arrayContaining(['account-segments']),
-          workUnitPatchTouchedPaths: expect.arrayContaining([
-            'wiki/global/account-segments.md',
-            'wiki/global/source-page.md',
-          ]),
-        }),
+      const result = await runner.run({
+        jobId: 'job-wiki-ref-conflict',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
       });
+
+      expect(await runtime.git.revParseHead()).not.toBe(preRunHead);
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'source-page',
+        absentTarget: 'source-page',
+      });
+      await expect(readFile(join(runtime.configDir, 'wiki/global/account-segments.md'), 'utf-8')).resolves.not.toContain(
+        'source-page',
+      );
+      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-wiki-ref-conflict/trace.jsonl'), 'utf-8');
+      expect(trace).toContain('final_artifact_gates_finished');
+      expect(trace).toContain('final_gate_reference_pruned');
+      expect(trace).toContain('squash_finished');
+      expect(trace).not.toContain('ingest_failed');
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
   });
 
-  it('rejects unchanged inbound wiki refs broken by an isolated wiki deletion', async () => {
+  it('prunes unchanged inbound wiki refs broken by an isolated wiki deletion', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       await mkdir(join(runtime.configDir, 'wiki/global'), { recursive: true });
@@ -1622,17 +2208,24 @@ describe('IngestBundleRunner isolated diff path', () => {
       const runner = new IngestBundleRunner(deps);
       await mockStageRawFiles(runner, runtime, [['pages/delete.json', 'h1']]);
 
-      await expect(
-        runner.run({
-          jobId: 'job-existing-wiki-ref-stale',
-          connectionId: 'warehouse',
-          sourceKey: 'metabase',
-          trigger: 'upload',
-          bundleRef: { kind: 'upload', uploadId: 'upload' },
-        }),
-      ).rejects.toThrow(/wiki references target missing page\(s\): account-segments -> source-page/);
+      const result = await runner.run({
+        jobId: 'job-existing-wiki-ref-stale',
+        connectionId: 'warehouse',
+        sourceKey: 'metabase',
+        trigger: 'upload',
+        bundleRef: { kind: 'upload', uploadId: 'upload' },
+      });
 
-      expect(await runtime.git.revParseHead()).toBe(preRunHead);
+      expect(await runtime.git.revParseHead()).not.toBe(preRunHead);
+      expect(result.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'source-page',
+        absentTarget: 'source-page',
+      });
+      await expect(readFile(join(runtime.configDir, 'wiki/global/account-segments.md'), 'utf-8')).resolves.not.toContain(
+        'source-page',
+      );
       const events = (await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-existing-wiki-ref-stale/trace.jsonl'), 'utf-8'))
         .trim()
         .split('\n')
@@ -1640,81 +2233,14 @@ describe('IngestBundleRunner isolated diff path', () => {
       expect(events.map((event) => event.event)).toEqual(
         expect.arrayContaining([
           'final_artifact_gates_started',
-          'final_artifact_gates_failed',
-          'ingest_failed',
-          'failure_report_created',
+          'final_artifact_gates_finished',
+          'final_gate_reference_pruned',
+          'final_gate_prune_committed',
+          'final_gate_prune_finished',
+          'squash_finished',
         ]),
       );
-      expect(events.map((event) => event.event)).not.toContain('squash_finished');
-      const gateFailure = events.find((event) => event.event === 'final_artifact_gates_failed');
-      expect(gateFailure).toMatchObject({
-        data: {
-          wikiReferenceGateScope: {
-            global: true,
-            reasons: expect.arrayContaining(['wiki_page_removed']),
-            removedWikiPageKeys: expect.arrayContaining(['source-page']),
-            pageKeysValidated: expect.arrayContaining(['account-segments']),
-          },
-          actionOrigins: expect.arrayContaining([
-            expect.objectContaining({
-              source: 'work_unit_action',
-              unitKey: 'delete-target-page',
-              unitRawFiles: ['pages/delete.json'],
-              action: expect.objectContaining({
-                target: 'wiki',
-                type: 'removed',
-                key: 'source-page',
-                rawPaths: ['pages/delete.json'],
-              }),
-            }),
-          ]),
-        },
-        error: { message: expect.stringContaining('account-segments -> source-page') },
-      });
-
-      const failureReport = (deps.reports.create as any).mock.calls
-        .map((call: any[]) => call[0])
-        .find((report: any) => report.body.status === 'failed');
-      expect(failureReport.body.failure).toMatchObject({
-        phase: 'final_gates',
-        message: expect.stringContaining('account-segments -> source-page'),
-        details: expect.objectContaining({
-          wikiReferenceGateScope: expect.objectContaining({
-            global: true,
-            reasons: expect.arrayContaining(['wiki_page_removed']),
-            removedWikiPageKeys: expect.arrayContaining(['source-page']),
-            pageKeysValidated: expect.arrayContaining(['account-segments']),
-          }),
-          changedWikiPageKeys: expect.arrayContaining(['source-page']),
-          actionOrigins: expect.arrayContaining([
-            expect.objectContaining({
-              source: 'work_unit_action',
-              unitKey: 'delete-target-page',
-              action: expect.objectContaining({
-                target: 'wiki',
-                type: 'removed',
-                key: 'source-page',
-                rawPaths: ['pages/delete.json'],
-              }),
-            }),
-          ]),
-        }),
-      });
-      expect(failureReport.body.workUnits).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            unitKey: 'delete-target-page',
-            actions: expect.arrayContaining([
-              expect.objectContaining({
-                target: 'wiki',
-                type: 'removed',
-                key: 'source-page',
-                rawPaths: ['pages/delete.json'],
-              }),
-            ]),
-          }),
-        ]),
-      );
+      expect(events.map((event) => event.event)).not.toContain('ingest_failed');
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }
@@ -2009,7 +2535,7 @@ describe('IngestBundleRunner isolated diff path', () => {
     }
   });
 
-  it('repairs final wiki body refs before squash when the repair agent edits the scoped page', async () => {
+  it('prunes final wiki body refs before squash', async () => {
     const runtime = await makeRealGitRuntime();
     try {
       await mkdir(join(runtime.configDir, 'semantic-layer/warehouse'), { recursive: true });
@@ -2040,18 +2566,6 @@ describe('IngestBundleRunner isolated diff path', () => {
         return { toRuntimeTools: vi.fn(() => ({})) };
       });
       deps.agentRunner.runLoop = vi.fn(async (params: any) => {
-        if (params.telemetryTags.operationName === 'ingest-isolated-diff-gate-repair') {
-          const gateError = await params.toolSet.read_gate_error.execute({});
-          expect(gateError.markdown).toContain('total_contract_arr_cents');
-          const page = await params.toolSet.read_repair_file.execute({
-            path: 'wiki/global/account-segments.md',
-          });
-          await params.toolSet.write_repair_file.execute({
-            path: 'wiki/global/account-segments.md',
-            content: page.markdown.replace('total_contract_arr_cents', 'total_contract_arr'),
-          });
-          return { stopReason: 'natural' as const };
-        }
         if (params.modelRole === 'reconcile') {
           return { stopReason: 'natural' as const };
         }
@@ -2083,7 +2597,7 @@ describe('IngestBundleRunner isolated diff path', () => {
       await mockStageRawFiles(runner, runtime, [['cards/source.json', 'h1']]);
 
       const result = await runner.run({
-        jobId: 'job-final-gate-repair',
+        jobId: 'job-final-gate-prune',
         connectionId: 'warehouse',
         sourceKey: 'metabase',
         trigger: 'upload',
@@ -2091,116 +2605,22 @@ describe('IngestBundleRunner isolated diff path', () => {
       });
 
       expect(result.commitSha).toBeTruthy();
-      await expect(readFile(join(runtime.configDir, 'wiki/global/account-segments.md'), 'utf-8')).resolves.toContain(
-        'mart_account_segments.total_contract_arr',
-      );
       await expect(readFile(join(runtime.configDir, 'wiki/global/account-segments.md'), 'utf-8')).resolves.not.toContain(
         'total_contract_arr_cents',
       );
       const reportCreate = vi.mocked(deps.reports.create).mock.calls.at(-1)?.[0] as any;
-      expect(reportCreate.body.isolatedDiff).toMatchObject({
-        gateRepairAttempts: 1,
-        gateRepairs: 1,
-        gateRepairFailures: 0,
-      });
-      const trace = await readFile(join(runtime.configDir, '.ktx/ingest-traces/job-final-gate-repair/trace.jsonl'), 'utf-8');
-      expect(trace).toContain('gate_repair_repaired');
-      expect(trace).toContain('final_gate_repair_committed');
-    } finally {
-      await rm(runtime.homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it('fails before squash when final gate repair makes no edit', async () => {
-    const runtime = await makeRealGitRuntime();
-    try {
-      await mkdir(join(runtime.configDir, 'semantic-layer/warehouse'), { recursive: true });
-      await mkdir(join(runtime.configDir, 'wiki/global'), { recursive: true });
-      await writeFile(
-        join(runtime.configDir, 'semantic-layer/warehouse/mart_account_segments.yaml'),
-        'name: mart_account_segments\ngrain: [account_id]\ncolumns: [{name: account_id, type: string}]\njoins: []\nmeasures:\n  - name: total_contract_arr_cents\n    expr: sum(contract_arr)\n',
-      );
-      await writeFile(
-        join(runtime.configDir, 'wiki/global/account-segments.md'),
-        '---\nsummary: Account segments\nusage_mode: auto\n---\n\nExisting ARR uses `mart_account_segments.total_contract_arr_cents`.\n',
-      );
-      await runtime.git.commitFiles(
-        ['semantic-layer/warehouse/mart_account_segments.yaml', 'wiki/global/account-segments.md'],
-        'seed stale wiki body ref',
-        'ktx Test',
-        'system@ktx.local',
-      );
-      const preRunHead = await runtime.git.revParseHead();
-
-      const { deps, adapter } = makeDeps(runtime);
-      adapter.chunk.mockResolvedValue({
-        workUnits: [{ unitKey: 'source-only', rawFiles: ['cards/source.json'], peerFileIndex: [], dependencyPaths: [] }],
-      });
-
-      let currentSession: any = null;
-      deps.toolsetFactory.createIngestWuToolset = vi.fn((toolSession: any) => {
-        currentSession = toolSession;
-        return { toRuntimeTools: vi.fn(() => ({})) };
-      });
-      deps.agentRunner.runLoop = vi.fn(async (params: any) => {
-        if (params.telemetryTags.operationName === 'ingest-isolated-diff-gate-repair') {
-          return { stopReason: 'natural' as const };
-        }
-        if (params.modelRole === 'reconcile') {
-          return { stopReason: 'natural' as const };
-        }
-
-        const root = rootOfConfig(currentSession.configService, runtime.configDir);
-        await writeFile(
-          join(root, 'semantic-layer/warehouse/mart_account_segments.yaml'),
-          'name: mart_account_segments\ngrain: [account_id]\ncolumns: [{name: account_id, type: string}]\njoins: []\nmeasures:\n  - name: total_contract_arr\n    expr: sum(contract_arr)\n',
-        );
-        addTouchedSlSource(currentSession.touchedSlSources, 'warehouse', 'mart_account_segments');
-        currentSession.actions.push({
-          target: 'sl',
-          type: 'updated',
-          key: 'mart_account_segments',
-          detail: 'Rename ARR measure',
-          targetConnectionId: 'warehouse',
-          rawPaths: ['cards/source.json'],
-        });
-        await currentSession.gitService.commitFiles(
-          ['semantic-layer/warehouse/mart_account_segments.yaml'],
-          'wu source rename',
-          'ktx Test',
-          'system@ktx.local',
-        );
-        return { stopReason: 'natural' as const };
-      }) as never;
-
-      const runner = new IngestBundleRunner(deps);
-      await mockStageRawFiles(runner, runtime, [['cards/source.json', 'h1']]);
-
-      await expect(
-        runner.run({
-          jobId: 'job-final-gate-repair-fails',
-          connectionId: 'warehouse',
-          sourceKey: 'metabase',
-          trigger: 'upload',
-          bundleRef: { kind: 'upload', uploadId: 'upload' },
-        }),
-      ).rejects.toThrow(/gate repair completed without editing an allowed path/);
-
-      expect(await runtime.git.revParseHead()).toBe(preRunHead);
-      const reportCreate = vi.mocked(deps.reports.create).mock.calls.at(-1)?.[0] as any;
-      expect(reportCreate.body.status).toBe('failed');
-      expect(reportCreate.body.isolatedDiff).toMatchObject({
-        // Both attempts of the verify-based repair loop ran without an edit.
-        gateRepairAttempts: 2,
-        gateRepairs: 0,
-        gateRepairFailures: 1,
+      expect(reportCreate.body.finalGatePrunedReferences).toContainEqual({
+        kind: 'wiki_body_ref',
+        artifact: 'wiki/global/account-segments',
+        removedRef: 'mart_account_segments.total_contract_arr_cents',
+        absentTarget: 'mart_account_segments.total_contract_arr_cents',
       });
       const trace = await readFile(
-        join(runtime.configDir, '.ktx/ingest-traces/job-final-gate-repair-fails/trace.jsonl'),
+        join(runtime.configDir, '.ktx/ingest-traces/job-final-gate-prune/trace.jsonl'),
         'utf-8',
       );
-      expect(trace).toContain('gate_repair_failed');
-      expect(trace).not.toContain('squash_finished');
+      expect(trace).toContain('final_gate_reference_pruned');
+      expect(trace).toContain('final_gate_prune_finished');
     } finally {
       await rm(runtime.homeDir, { recursive: true, force: true });
     }

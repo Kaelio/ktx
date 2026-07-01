@@ -23,6 +23,11 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
   }),
   sqlite: () => ({ driver: 'sqlite', path: 'warehouse.db' }),
   duckdb: (projectDir) => ({ driver: 'duckdb', path: join(projectDir, 'warehouse.duckdb') }),
+  mongodb: () => ({
+    driver: 'mongodb',
+    url: 'mongodb://localhost:27017/app',
+    databases: ['app'],
+  }),
   mysql: () => ({
     driver: 'mysql',
     host: 'localhost',
@@ -98,6 +103,7 @@ describe('driverRegistrations', () => {
       'bigquery',
       'clickhouse',
       'duckdb',
+      'mongodb',
       'mysql',
       'postgres',
       'snowflake',

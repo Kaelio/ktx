@@ -72,12 +72,38 @@ export interface KtxGenerateObjectInput<TOutput, TSchema extends z.ZodType<TOutp
   abortSignal?: AbortSignal;
 }
 
+/** Structured generation keyed by a raw JSON Schema instead of a Zod schema, so
+ *  the request can cross a process boundary; the caller validates the returned
+ *  value against the real Zod schema. */
+export interface KtxGenerateStructuredJsonInput {
+  role: KtxModelRole;
+  prompt: string;
+  system?: string;
+  jsonSchema: Record<string, unknown>;
+  abortSignal?: AbortSignal;
+}
+
+/** Serializable recipe to rebuild a subprocess-backed runtime inside a ktx-owned
+ *  child the parent can tree-kill. Returned by {@link KtxLlmRuntimePort.subprocessForkSpec}. */
+export interface SubprocessRuntimeForkSpec {
+  backend: 'codex' | 'claude-code';
+  projectDir: string;
+  modelSlots: { default: string } & Partial<Record<string, string>>;
+}
+
 export interface KtxLlmRuntimePort {
   generateText(input: KtxGenerateTextInput): Promise<string>;
   generateObject<TOutput, TSchema extends z.ZodType<TOutput>>(
     input: KtxGenerateObjectInput<TOutput, TSchema>,
   ): Promise<TOutput>;
   runAgentLoop(params: RunLoopParams): Promise<RunLoopResult>;
+  /**
+   * Non-null when this runtime drives an SDK-owned child process that ktx cannot
+   * cancel by abort alone (codex/claude-code spawn a binary the SDK owns and only
+   * SIGTERM on abort). ktx routes such calls through a tree-killable boundary.
+   * Null for HTTP backends, whose native fetch abort already settles promptly.
+   */
+  subprocessForkSpec(): SubprocessRuntimeForkSpec | null;
 }
 
 export interface AgentRunnerPort {

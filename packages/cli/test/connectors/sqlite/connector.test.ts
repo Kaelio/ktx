@@ -1,12 +1,19 @@
 import Database from 'better-sqlite3';
+import type { ChildProcess } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSqliteLiveDatabaseIntrospection } from '../../../src/connectors/sqlite/live-database-introspection.js';
-import { isKtxSqliteConnectionConfig, KtxSqliteScanConnector, sqliteDatabasePathFromConfig } from '../../../src/connectors/sqlite/connector.js';
+import {
+  forkReadQueryChild,
+  isKtxSqliteConnectionConfig,
+  KtxSqliteScanConnector,
+  sqliteDatabasePathFromConfig,
+} from '../../../src/connectors/sqlite/connector.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
+import { resolveEnabledTables } from '../../../src/context/scan/enabled-tables.js';
 
 describe('KtxSqliteScanConnector', () => {
   let tempDir: string;
@@ -150,6 +157,74 @@ describe('KtxSqliteScanConnector', () => {
     ]);
   });
 
+  it('skips an object that fails introspection and ingests the rest with one recoverable warning', async () => {
+    const brokenDbPath = join(tempDir, 'broken.db');
+    const brokenDb = new Database(brokenDbPath);
+    brokenDb.exec(`
+      CREATE TABLE base (id INTEGER PRIMARY KEY, start_date TEXT);
+      CREATE VIEW emp_hire_periods_with_name AS SELECT id, start_date FROM base;
+      CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+      INSERT INTO customers (id, name) VALUES (1, 'Ada');
+      DROP TABLE base;
+    `);
+    brokenDb.close();
+
+    const connector = new KtxSqliteScanConnector({
+      connectionId: 'warehouse',
+      connection: { driver: 'sqlite', path: brokenDbPath },
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'sqlite' }, { runId: 'scan-run-broken' });
+
+    expect(snapshot.tables.map((table) => table.name)).toEqual(['customers']);
+    expect(snapshot.warnings).toHaveLength(1);
+    expect(snapshot.warnings?.[0]).toMatchObject({
+      code: 'object_introspection_failed',
+      table: 'emp_hire_periods_with_name',
+      recoverable: true,
+    });
+    expect(snapshot.warnings?.[0]?.message).toContain('no such table');
+  });
+
+  it('returns no tables and only warnings when every object fails introspection', async () => {
+    const brokenDbPath = join(tempDir, 'all-broken.db');
+    const brokenDb = new Database(brokenDbPath);
+    brokenDb.exec(`
+      CREATE TABLE base (id INTEGER PRIMARY KEY, value TEXT);
+      CREATE VIEW only_view AS SELECT id, value FROM base;
+      DROP TABLE base;
+    `);
+    brokenDb.close();
+
+    const connector = new KtxSqliteScanConnector({
+      connectionId: 'warehouse',
+      connection: { driver: 'sqlite', path: brokenDbPath },
+    });
+
+    const snapshot = await connector.introspect({ connectionId: 'warehouse', driver: 'sqlite' }, { runId: 'scan-run-all-broken' });
+
+    expect(snapshot.tables).toEqual([]);
+    expect(snapshot.warnings).toHaveLength(1);
+    expect(snapshot.warnings?.[0]?.code).toBe('object_introspection_failed');
+  });
+
+  it('restricts introspection to enabled_tables, accepting both "main.<name>" and bare "<name>"', async () => {
+    const connector = new KtxSqliteScanConnector({
+      connectionId: 'warehouse',
+      connection: { driver: 'sqlite', path: dbPath },
+    });
+
+    for (const entry of ['main.customers', 'customers']) {
+      const tableScope = resolveEnabledTables({ driver: 'sqlite', enabled_tables: [entry] }) ?? undefined;
+      const snapshot = await connector.introspect(
+        { connectionId: 'warehouse', driver: 'sqlite', ...(tableScope ? { tableScope } : {}) },
+        { runId: `scan-run-scope-${entry}` },
+      );
+      expect(snapshot.tables.map((table) => table.name)).toEqual(['customers']);
+      expect(snapshot.metadata.discovered_object_names).toEqual(['customers', 'orders', 'recent_orders']);
+    }
+  });
+
   it('lists schemaless tables and views for setup discovery', async () => {
     const connector = new KtxSqliteScanConnector({
       connectionId: 'warehouse',
@@ -222,6 +297,101 @@ describe('KtxSqliteScanConnector', () => {
       { runId: 'scope-test' },
     );
     expect(snapshot.tables.map((table) => table.name)).toEqual(['orders']);
+  });
+
+  describe('bounded read-query execution', () => {
+    // A recursive CTE that spins ~1e9 iterations in SQLite's VM with no yield
+    // point — the single-aggregate-row shape that maxRows cannot bound. Natural
+    // completion is far beyond the test window, so a fast finish proves the
+    // child was killed, not that the query completed.
+    const pathologicalSql =
+      'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 1000000000) SELECT COUNT(*) AS n FROM c';
+
+    let children: ChildProcess[];
+    const trackingSpawn = () => {
+      const child = forkReadQueryChild();
+      children.push(child);
+      return child;
+    };
+
+    beforeEach(() => {
+      children = [];
+    });
+
+    afterEach(() => {
+      for (const child of children) {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
+      }
+    });
+
+    it('terminates a pathological query at the deadline, keeps the event loop free, and reaps the child', async () => {
+      const connector = new KtxSqliteScanConnector({
+        connectionId: 'warehouse',
+        connection: { driver: 'sqlite', path: dbPath, query_timeout_ms: 250 },
+        spawnReadQueryChild: trackingSpawn,
+      });
+
+      const pending = connector.executeReadOnly(
+        { connectionId: 'warehouse', sql: pathologicalSql },
+        { runId: 'deadline-test' },
+      );
+
+      // The event loop stays free while the query runs off-process, so this
+      // concurrent timer fires before the deadline rejects the query.
+      let concurrentFiredWhilePending = false;
+      void pending.catch(() => {});
+      await new Promise((resolveTimer) => setTimeout(resolveTimer, 80));
+      concurrentFiredWhilePending = true;
+
+      await expect(pending).rejects.toThrow(/^query exceeded \d+s$/);
+      expect(concurrentFiredWhilePending).toBe(true);
+
+      // The off-process executor was actually killed (SIGKILL), not left spinning.
+      expect(children).toHaveLength(1);
+      const child = children[0]!;
+      await vi.waitFor(() => expect(child.exitCode !== null || child.signalCode !== null).toBe(true), {
+        timeout: 5_000,
+      });
+      expect(child.signalCode).toBe('SIGKILL');
+    });
+
+    it('returns identical results to the in-process path for a normal query', async () => {
+      const connector = new KtxSqliteScanConnector({
+        connectionId: 'warehouse',
+        connection: { driver: 'sqlite', path: dbPath },
+        spawnReadQueryChild: trackingSpawn,
+      });
+
+      await expect(
+        connector.executeReadOnly(
+          { connectionId: 'warehouse', sql: 'select id, status from orders order by id' },
+          { runId: 'normal' },
+        ),
+      ).resolves.toEqual({
+        headers: ['id', 'status'],
+        rows: [
+          [10, 'paid'],
+          [11, 'open'],
+        ],
+        totalRows: 2,
+        rowCount: 2,
+      });
+    });
+
+    it('rejects invalid SQL on the main thread without spawning a child', async () => {
+      const connector = new KtxSqliteScanConnector({
+        connectionId: 'warehouse',
+        connection: { driver: 'sqlite', path: dbPath },
+        spawnReadQueryChild: trackingSpawn,
+      });
+
+      await expect(
+        connector.executeReadOnly({ connectionId: 'warehouse', sql: 'delete from orders' }, { runId: 'invalid' }),
+      ).rejects.toThrow('Only read-only SELECT/WITH queries can be executed locally');
+      expect(children).toHaveLength(0);
+    });
   });
 
   it('adapts native SQLite snapshots to live-database introspection for local ingest', async () => {

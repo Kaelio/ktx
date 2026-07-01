@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveStringReference } from '../shared/string-reference.js';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { normalizeQueryRows } from '../../context/connections/query-executor.js';
 import { toJsonSafeRows } from '../shared/duckdb-json-safe.js';
@@ -136,7 +136,7 @@ export class KtxDuckDbScanConnector implements KtxScanConnector {
   private readonly connectionId: string;
   private readonly dbPath: string;
   private readonly now: () => Date;
-  private readonly dialect = getDialectForDriver('duckdb');
+  private readonly dialect = getSqlDialectForDriver('duckdb');
   private instance: DuckDBInstance | null = null;
   private connection: DuckDBConnection | null = null;
 

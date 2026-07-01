@@ -172,6 +172,12 @@ export class AiSdkKtxLlmRuntime implements KtxLlmRuntimePort {
     this.logger = deps.logger ?? noopLogger;
   }
 
+  // HTTP backend: abortSignal cancels the underlying fetch natively, so there is
+  // no SDK-owned child to tree-kill.
+  subprocessForkSpec(): null {
+    return null;
+  }
+
   private async generateTextWithRateLimitRetry<T>(
     provider: RateLimitProvider,
     abortSignal: AbortSignal | undefined,

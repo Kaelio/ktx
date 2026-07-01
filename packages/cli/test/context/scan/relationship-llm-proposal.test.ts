@@ -9,6 +9,7 @@ function llmRuntime(output?: unknown): KtxLlmRuntimePort {
     generateText: vi.fn(),
     generateObject: vi.fn(async () => output) as KtxLlmRuntimePort['generateObject'],
     runAgentLoop: vi.fn(),
+    subprocessForkSpec: () => null,
   };
 }
 
@@ -202,6 +203,7 @@ describe('relationship LLM proposals', () => {
           throw new Error('model unavailable');
         }),
         runAgentLoop: vi.fn(),
+        subprocessForkSpec: () => null,
       },
     });
     expect(failed).toMatchObject({ candidates: [], llmCalls: 1, summary: 'failed' });

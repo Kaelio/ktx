@@ -1,0 +1,10 @@
+**duckdb** SQL conventions:
+- **FQTN:** `schema.table` within one database (e.g. `main.orders`); a bare `table` resolves against `main`. A second, attached database is `db.schema.table` (e.g. `sales.main.orders`).
+- **Identifiers:** case-insensitive; double-quote (`"Name"`) to keep a name with spaces or a reserved word.
+- **Date/time:** native `DATE`/`TIMESTAMP`. Bucket with `date_trunc('month', ts)`, pull parts with `EXTRACT(YEAR FROM ts)`, format with `strftime(ts, '%Y-%m')`, and use `CURRENT_DATE`; cast text with `col::DATE` (or `TRY_CAST(col AS DATE)` to null bad values).
+- **Series:** `FROM generate_series(DATE '2023-01-01', DATE '2023-12-01', INTERVAL 1 MONTH) AS s(d)` builds a date spine (use `range(...)` for integers), then `LEFT JOIN` the aggregated facts onto it so empty periods still appear.
+- **Rolling window over time:** a native calendar-range frame spans real dates and tolerates gaps — `AVG(amount) OVER (ORDER BY day RANGE BETWEEN INTERVAL 29 DAYS PRECEDING AND CURRENT ROW)` is a trailing 30-day average without a spine; guard minimum periods with `COUNT(*) OVER (<same frame>)`.
+- **Integer division:** unlike postgres, `/` is true division (`5 / 2` → `2.5`), so a ratio keeps its fraction; use `//` for floor division (`5 // 2` → `2`) when you want the integer quotient, and round only in the final projection.
+- **Safe cast:** duckdb has `TRY_CAST` — `TRY_CAST(x AS DOUBLE)` yields `NULL` for a value that does not parse instead of raising, so counting residual `NULL`s among non-sentinel rows catches an encoding the sample missed without a regex guard.
+- **Top-N / windows:** filter a window inline with `QUALIFY` — `SELECT ... QUALIFY ROW_NUMBER() OVER (PARTITION BY key ORDER BY x DESC) = 1` returns one row per key without a wrapping CTE; use `ORDER BY ... LIMIT n` for a global top-N.
+- **JSON / semi-structured:** `col->'k'` returns JSON, `col->>'k'` returns text, deep path `json_extract(col, '$.a.b')`; duckdb also has native `STRUCT`, `LIST`, and `MAP` — read a struct field with `col.field` and a list element with `col[1]` (1-indexed).
