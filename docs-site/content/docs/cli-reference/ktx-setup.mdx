@@ -112,9 +112,9 @@ runtime features are missing.
 
 | Flag | Description |
 |------|-------------|
-| `--database <driver>` | Database driver to configure; repeatable. Choices: `sqlite`, `postgres`, `mysql`, `clickhouse`, `sqlserver`, `bigquery`, `snowflake` |
+| `--database <driver>` | Database driver to configure; repeatable. Choices: `sqlite`, `duckdb`, `postgres`, `mysql`, `clickhouse`, `sqlserver`, `bigquery`, `snowflake` |
 | `--database-connection-id <id>` | Existing selected connection id; repeatable. With `--database` or `--database-url`, connection id for the new connection. |
-| `--database-url <url>` | URL, `env:NAME`, or `file:/path` for one new URL-style database connection; also used as the SQLite path |
+| `--database-url <url>` | URL, `env:NAME`, or `file:/path` for one new URL-style database connection; also used as the SQLite or DuckDB path |
 | `--database-schema <schema>` | Database schema or dataset to include; repeatable |
 | `--skip-databases` | Leave database setup incomplete |
 
