@@ -29,6 +29,7 @@ const DRIVER_TO_CONNECTION_TYPE: Record<string, ConnectionType> = {
   clickhouse: 'CLICKHOUSE',
   snowflake: 'SNOWFLAKE',
   bigquery: 'BIGQUERY',
+  athena: 'ATHENA',
 };
 
 export function localConnectionToWarehouseDescriptor(
