@@ -25,21 +25,22 @@ describe('chunkConfluenceStagedDir — first run', () => {
     expect(result.workUnits[0]!.displayLabel).toMatch(/Confluence/);
   });
 
-  it('single-space WU rawFiles contains all page files and the manifest', async () => {
+  it('single-space WU rawFiles contains all page files but not the manifest', async () => {
     const result = await chunkConfluenceStagedDir(SINGLE);
     const wu = result.workUnits[0]!;
     expect(wu.rawFiles).toContain('pages/page-aaa111.json');
     expect(wu.rawFiles).toContain('pages/page-bbb222.json');
-    expect(wu.rawFiles).toContain('confluence-manifest.json');
+    expect(wu.rawFiles).not.toContain('confluence-manifest.json');
   });
 
-  it('single-space WU peerFileIndex excludes rawFiles', async () => {
+  it('single-space WU peerFileIndex excludes rawFiles but includes the manifest', async () => {
     const result = await chunkConfluenceStagedDir(SINGLE);
     const wu = result.workUnits[0]!;
     const rawSet = new Set(wu.rawFiles);
     for (const peer of wu.peerFileIndex) {
       expect(rawSet.has(peer)).toBe(false);
     }
+    expect(wu.peerFileIndex).toContain('confluence-manifest.json');
   });
 
   it('multi-space fixture emits one WU with pages from both spaces', async () => {
@@ -131,10 +132,11 @@ describe('chunkConfluenceStagedDir — page batching', () => {
     expect(keys).toEqual(['confluence-pages-0', 'confluence-pages-1']);
   });
 
-  it('first batch has exactly PAGES_PER_UNIT files plus manifest', async () => {
+  it('first batch has exactly PAGES_PER_UNIT files and does not include the manifest', async () => {
     const result = await chunkConfluenceStagedDir(stagedDir);
     const wu = result.workUnits.find((w) => w.unitKey === 'confluence-pages-0')!;
-    expect(wu.rawFiles).toHaveLength(PAGES_PER_UNIT + 1);
+    expect(wu.rawFiles).toHaveLength(PAGES_PER_UNIT);
+    expect(wu.rawFiles).not.toContain('confluence-manifest.json');
   });
 
   it('displayLabel includes batch position when split', async () => {

@@ -140,4 +140,3 @@ export class DefaultConfluenceClient implements ConfluenceRuntimeClient {
     // No persistent connections to close.
   }
 }
-

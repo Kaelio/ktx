@@ -15,7 +15,7 @@ Confluence produces one or more work units per ingest run:
 - `confluence-pages` — all staged pages when ≤ 30 pages total.
 - `confluence-pages-N` — batched when more than 30 pages are staged, e.g. `confluence-pages-0`, `confluence-pages-1`. The `displayLabel` includes `(N/total)`.
 
-Each work unit includes `confluence-manifest.json` and a subset of `pages/{pageId}.json` files.
+Each work unit's `rawFiles` is a subset of `pages/{pageId}.json` files. `confluence-manifest.json` is never in `rawFiles`; it always appears in `peerFileIndex` for context.
 
 ## Staged file shapes
 
@@ -56,12 +56,9 @@ Extract the plain text and structure from these tags to understand page content.
   "fetchedAt": "2026-06-27T10:00:00.000Z",
   "spaceCount": 8,
   "pageCount": 450,
-  "capped": false,
   "spaceKeys": ["ENG", "SEC"]
 }
 ```
-
-`capped: true` means the run hit `maxPagesPerRun` — the staged set is a partial snapshot.
 
 ## Required workflow
 

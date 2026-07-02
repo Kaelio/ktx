@@ -76,7 +76,7 @@ function emitBatches(
       ...new Set(batch.map((p) => pages.get(p)?.spaceKey).filter((k): k is string => Boolean(k))),
     ].sort();
     const spaceLabel = spaceKeys.length > 0 ? spaceKeys.join(', ') : 'pages';
-    const rawFiles = [...batch, STAGED_FILES.manifest].sort();
+    const rawFiles = [...batch].sort();
     const rawFilesSet = new Set(rawFiles);
     const suffix = batches > 1 ? `-${i}` : '';
     const labelBase =

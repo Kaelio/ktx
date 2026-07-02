@@ -146,7 +146,7 @@ export async function fetchConfluenceBundle({
       baseUrl: client.baseUrl,
       fetchedAt: new Date().toISOString(),
       spaceCount: spaces.length,
-      pageCount: totalFetched + existingByPageId.size,
+      pageCount: totalFetched + totalSkipped,
       ...(config.spaceKeys?.length ? { spaceKeys: config.spaceKeys } : {}),
     };
     await writeFile(join(stagedDir, STAGED_FILES.manifest), JSON.stringify(manifest, null, 2), 'utf-8');
