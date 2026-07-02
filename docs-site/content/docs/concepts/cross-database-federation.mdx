@@ -1,6 +1,6 @@
 ---
 title: Cross-database federation
-description: How ktx federates postgres, mysql, and sqlite connections so a single read-only SQL query can join across them without copying data.
+description: How ktx federates postgres, mysql, sqlite, and duckdb connections so a single read-only SQL query can join across them without copying data.
 ---
 
 Cross-database federation lets a single read-only SQL query join tables that
@@ -20,13 +20,14 @@ block to add. With zero or one compatible connection the behavior is unchanged.
 
 ## Which connections participate
 
-The v1 federation engine supports three drivers:
+The v1 federation engine supports four drivers:
 
 | Driver | Participates in federation |
 |--------|---------------------------|
 | `postgres` | Yes |
 | `mysql` | Yes |
 | `sqlite` | Yes |
+| `duckdb` | Yes |
 | `snowflake` | No — standalone connection |
 | `bigquery` | No — standalone connection |
 | `clickhouse` | No — standalone connection |
@@ -38,7 +39,7 @@ queried independently; they do not appear as federation members.
 ## How it activates
 
 **ktx** inspects the connections in `ktx.yaml` at startup. When it finds two or
-more connections whose driver is `postgres`, `mysql`, or `sqlite`, it
+more connections whose driver is `postgres`, `mysql`, `sqlite`, or `duckdb`, it
 instantiates the DuckDB federation engine and attaches each one read-only.
 There is no `federation:` key, no opt-in flag, and no connection-level setting
 to enable. The engine is derived entirely from what is already declared.
@@ -60,9 +61,10 @@ Two attach-compatible connections are present, so federation is active.
 ## Table naming in federated queries
 
 Inside a federated query, postgres and mysql tables use a three-part name:
-`connectionId.schema.table`. SQLite tables, which have no schema layer in
-DuckDB, use the two-part form `connectionId.table`. In both cases the
-connection's `id` field in `ktx.yaml` becomes the catalog name inside DuckDB.
+`connectionId.schema.table`. SQLite and DuckDB tables use the two-part form
+`connectionId.table`, since ktx addresses both as single-namespace members. In
+both cases the connection's `id` field in `ktx.yaml` becomes the catalog name
+inside DuckDB.
 
 If a connection `id` is not a bare SQL identifier — for example it contains a
 hyphen, like `books-db` — double-quote it in the query the same way DuckDB
@@ -131,8 +133,8 @@ ktx sql -c _ktx_federated \
 Table names follow the rules from
 [Table naming in federated queries](#table-naming-in-federated-queries):
 three-part `connectionId.schema.table` for postgres and mysql, two-part
-`connectionId.table` for sqlite. The `_ktx_federated` id is virtual — it is
-never written to `ktx.yaml` and only exists when two or more attach-compatible
+`connectionId.table` for sqlite and duckdb. The `_ktx_federated` id is virtual —
+it is never written to `ktx.yaml` and only exists when two or more attach-compatible
 connections are declared. It surfaces in `ktx connection` and in the agent's
 connection list so the id is discoverable. Querying a single member database
 directly with its own connection id (`ktx sql -c pg_books ...`) is unchanged.
@@ -149,6 +151,6 @@ database through the federation engine.
   them in a source's `joins:` block and automatic discovery of cross-database
   relationships are not available yet. Intra-database relationship discovery for
   each member connection is unchanged.
-- **postgres, mysql, and sqlite only.** Other drivers (snowflake, bigquery,
-  clickhouse, sqlserver) do not participate in federation in this version. They
-  remain usable as standalone connections.
+- **postgres, mysql, sqlite, and duckdb only.** Other drivers (snowflake,
+  bigquery, clickhouse, sqlserver) do not participate in federation in this
+  version. They remain usable as standalone connections.

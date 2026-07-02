@@ -40,6 +40,8 @@ import { pullConfigFromIntegrationConfig } from './adapters/lookml/pull-config.j
 import { createLocalMetabaseSourceAdapter } from './adapters/metabase/local-metabase.adapter.js';
 import type { MetabaseClientLogger } from './adapters/metabase/client.js';
 import type { MetabaseFetchLogger } from './adapters/metabase/fetch.js';
+import { createLocalSigmaSourceAdapter } from './adapters/sigma/local-sigma.adapter.js';
+import type { SigmaFetchLogger } from './adapters/sigma/fetch.js';
 import { MetricflowSourceAdapter } from './adapters/metricflow/metricflow.adapter.js';
 import { pullConfigFromMetricflowIntegration } from './adapters/metricflow/pull-config.js';
 import { LocalNotionRuntimeStore } from './adapters/notion/local-state-store.js';
@@ -72,7 +74,8 @@ export interface DefaultLocalIngestAdaptersOptions {
 type LocalIngestOperationalLogger = MetabaseClientLogger &
   MetabaseFetchLogger &
   LookerClientLogger &
-  NotionFetchLogger;
+  NotionFetchLogger &
+  SigmaFetchLogger;
 
 export function createDefaultLocalIngestAdapters(
   project: KtxLocalProject,
@@ -103,6 +106,9 @@ export function createDefaultLocalIngestAdapters(
       targetConnectionIds: primaryWarehouseConnectionIds(project),
     }),
     createLocalMetabaseSourceAdapter(project, {
+      ...(options.logger ? { logger: options.logger } : {}),
+    }),
+    createLocalSigmaSourceAdapter(project, {
       ...(options.logger ? { logger: options.logger } : {}),
     }),
     new GdriveSourceAdapter(),
@@ -270,6 +276,27 @@ export async function localPullConfigForAdapter(
     throw new Error(
       'Metabase scheduled pulls fan out by mapping. Call runLocalMetabaseIngest() or use `ktx ingest <metabase-source-id>` from the CLI.',
     );
+  }
+  if (adapter.source === 'sigma') {
+    const sigmaConn = project.config.connections[connectionId];
+    const connectionMappings =
+      sigmaConn && 'connectionMappings' in sigmaConn && sigmaConn.connectionMappings != null
+        ? (sigmaConn.connectionMappings as Record<string, string>)
+        : undefined;
+    const workbookFilter =
+      sigmaConn && 'workbookFilter' in sigmaConn && sigmaConn.workbookFilter != null
+        ? (sigmaConn.workbookFilter as { includeArchived?: boolean; includeExplorations?: boolean; updatedSince?: string })
+        : undefined;
+    const dataModelFilter =
+      sigmaConn && 'dataModelFilter' in sigmaConn && sigmaConn.dataModelFilter != null
+        ? (sigmaConn.dataModelFilter as { updatedSince?: string })
+        : undefined;
+    return {
+      sigmaConnectionId: connectionId,
+      ...(connectionMappings ? { connectionMappings } : {}),
+      ...(workbookFilter ? { workbookFilter } : {}),
+      ...(dataModelFilter ? { dataModelFilter } : {}),
+    };
   }
   const connection = project.config.connections[connectionId];
   if (adapter.source === HISTORIC_SQL_SOURCE_KEY) {

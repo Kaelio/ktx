@@ -16,6 +16,7 @@ const SQLGLOT_DIALECTS: Record<string, SqlAnalysisDialect> = {
   duckdb: 'duckdb',
   clickhouse: 'clickhouse',
   databricks: 'databricks',
+  athena: 'athena',
 };
 
 export function sqlAnalysisDialectForDriver(driver: string | undefined): SqlAnalysisDialect {

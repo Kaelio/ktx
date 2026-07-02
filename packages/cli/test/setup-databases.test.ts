@@ -243,8 +243,10 @@ describe('setup databases step', () => {
         { value: 'mysql', label: 'MySQL' },
         { value: 'clickhouse', label: 'ClickHouse' },
         { value: 'sqlserver', label: 'SQL Server' },
+        { value: 'athena', label: 'Amazon Athena' },
         { value: 'mongodb', label: 'MongoDB' },
         { value: 'sqlite', label: 'SQLite' },
+        { value: 'duckdb', label: 'DuckDB' },
       ],
       required: true,
     });
@@ -614,6 +616,29 @@ describe('setup databases step', () => {
         expectedPasswordPrompts: [
           {
             message: 'Snowflake password',
+          },
+        ],
+      },
+      {
+        driver: 'athena',
+        textValues: ['', 'us-east-1', 's3://my-bucket/athena-results/', '', ''],
+        expectedTextPrompts: [
+          {
+            message: connectionNamePrompt('Amazon Athena'),
+            placeholder: 'athena-warehouse',
+            initialValue: 'athena-warehouse',
+          },
+          {
+            message: 'AWS region\nFor example us-east-1.',
+          },
+          {
+            message: 'S3 staging directory\nAthena writes query results here. For example s3://my-bucket/athena-results/.',
+          },
+          {
+            message: 'Athena workgroup (optional)\nPress Enter to use the default workgroup "primary".',
+          },
+          {
+            message: 'Glue Data Catalog name (optional)\nPress Enter to use the default "AwsDataCatalog".',
           },
         ],
       },
@@ -1964,6 +1989,40 @@ describe('setup databases step', () => {
       databases: ['analytics', 'mart'],
     });
     expect(project.config.connections['clickhouse-warehouse']).not.toHaveProperty('schemas');
+  });
+
+  it('maps Athena scripted database schema input to databases field', async () => {
+    await writeFile(
+      join(tempDir, 'ktx.yaml'),
+      [
+        'connections:',
+        '  athena-warehouse:',
+        '    driver: athena',
+        '    region: us-east-1',
+        '    s3_staging_dir: s3://my-bucket/athena-results/',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        skipDatabases: false,
+        databaseConnectionIds: ['athena-warehouse'],
+        databaseSchemas: ['analytics', 'raw'],
+      },
+      makeIo().io,
+      { testConnection: vi.fn(async () => 0), scanConnection: vi.fn(async () => 0) },
+    );
+
+    const project = await loadKtxProject({ projectDir: tempDir });
+    expect(project.config.connections['athena-warehouse']).toMatchObject({
+      driver: 'athena',
+      databases: ['analytics', 'raw'],
+    });
+    expect(project.config.connections['athena-warehouse']).not.toHaveProperty('schemas');
   });
 
   it('does not prompt for a bootstrap BigQuery dataset before scope discovery', async () => {
@@ -3514,5 +3573,73 @@ describe('setup databases step', () => {
     expect(result.status).toBe('skipped');
     expect(io.stdout()).toContain('ktx cannot work until you add a database.');
     expect(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8')).not.toContain('completed_steps:');
+  });
+
+  it('adds one non-interactive DuckDB connection from --database-url without prompting', async () => {
+    const io = makeIo();
+    const prompts = makePromptAdapter({});
+    const testConnection = vi.fn(async () => 0);
+    const scanConnection = vi.fn(async () => 0);
+
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        databaseDrivers: ['duckdb'],
+        databaseConnectionId: 'duckdb-local',
+        databaseUrl: './warehouse.duckdb',
+        databaseSchemas: [],
+        skipDatabases: false,
+      },
+      io.io,
+      { prompts, testConnection, scanConnection },
+    );
+
+    expect(result.status).toBe('ready');
+    expect(prompts.text).not.toHaveBeenCalled();
+    expect(testConnection).toHaveBeenCalledWith(tempDir, 'duckdb-local', expect.anything());
+    expect(scanConnection).toHaveBeenCalledWith(tempDir, 'duckdb-local', expect.anything());
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections['duckdb-local']).toEqual({
+      driver: 'duckdb',
+      path: './warehouse.duckdb',
+    });
+    expect(config.setup).toEqual({
+      database_connection_ids: ['duckdb-local'],
+    });
+    expect((await readKtxSetupState(tempDir)).completed_steps).toContain('databases');
+  });
+
+  it('adds an interactive DuckDB connection without prompting for a schema', async () => {
+    const prompts = makePromptAdapter({
+      selectValues: ['no'],
+      textValues: ['', './warehouse.duckdb'],
+    });
+    const pickers = makePickerStubs();
+
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'auto',
+        databaseDrivers: ['duckdb'],
+        databaseSchemas: [],
+        skipDatabases: false,
+      },
+      makeIo().io,
+      {
+        prompts,
+        testConnection: vi.fn(async () => 0),
+        scanConnection: vi.fn(async () => 0),
+        pickDatabaseScope: pickers.pickDatabaseScope,
+      },
+    );
+
+    expect(result.status).toBe('ready');
+    expect(pickers.scopeCalls).toHaveLength(0);
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections['duckdb-local']).toEqual({
+      driver: 'duckdb',
+      path: './warehouse.duckdb',
+    });
   });
 });

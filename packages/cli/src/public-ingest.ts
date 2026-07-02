@@ -139,6 +139,7 @@ const sourceAdapterByDriver = new Map<string, string>([
   ['metricflow', 'metricflow'],
   ['dbt', 'dbt'],
   ['lookml', 'lookml'],
+  ['sigma', 'sigma'],
 ]);
 
 export function publicProgressMessage(message: string, target: KtxPublicIngestPlanTarget): string {

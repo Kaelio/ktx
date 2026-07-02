@@ -121,6 +121,15 @@ describe('validateMappingPhysicalMatch', () => {
     expect(reason).toContain('engine');
   });
 
+  it('accepts Athena mappings when the target connection type is ATHENA', () => {
+    expect(
+      validateMappingPhysicalMatch(
+        { metabaseEngine: 'athena', metabaseDbName: 'analytics', metabaseHost: null },
+        { connection_type: 'ATHENA', database: 'analytics' },
+      ),
+    ).toBeNull();
+  });
+
   it('returns null when Postgres host and database both match after normalization', () => {
     expect(
       validateMappingPhysicalMatch(
@@ -156,6 +165,18 @@ describe('validateMappingPhysicalMatch', () => {
         { connection_type: 'OTHER' },
       ),
     ).toBeNull();
+  });
+});
+
+describe('METABASE_ENGINE_TO_CONNECTION_TYPE', () => {
+  it('maps Metabase Athena databases to AWS Athena warehouse connections', () => {
+    expect(METABASE_ENGINE_TO_CONNECTION_TYPE.athena).toBe('ATHENA');
+    expect(
+      validateMappingPhysicalMatch(
+        { metabaseEngine: 'athena', metabaseDbName: 'analytics', metabaseHost: null },
+        { connection_type: 'POSTGRESQL', database: 'analytics' },
+      ),
+    ).toBe("Metabase database engine 'athena' does not match ktx connection type 'POSTGRESQL'");
   });
 });
 

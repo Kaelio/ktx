@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { stableContentHash } from '../cache/content-result-cache.js';
 import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxScanEnrichmentStage, KtxScanEnrichmentStateSummary, KtxScanMode, KtxSchemaSnapshot } from './types.js';
 
@@ -99,29 +99,12 @@ export interface KtxRelationshipsStageHashInput {
   llmIdentity: KtxScanLlmIdentity;
 }
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(',')}]`;
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
-      left.localeCompare(right),
-    );
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function sha256(value: unknown): string {
-  return createHash('sha256').update(stableJson(value)).digest('hex');
-}
-
 export function computeKtxDescriptionsStageHash(input: KtxDescriptionsStageHashInput): string {
-  return sha256({ snapshot: input.snapshot, llmIdentity: input.llmIdentity });
+  return stableContentHash({ snapshot: input.snapshot, llmIdentity: input.llmIdentity });
 }
 
 export function computeKtxEmbeddingsStageHash(input: KtxEmbeddingsStageHashInput): string {
-  return sha256({
+  return stableContentHash({
     snapshot: input.snapshot,
     embeddingIdentity: input.embeddingIdentity,
     descriptionDigest: input.descriptionDigest,
@@ -129,7 +112,7 @@ export function computeKtxEmbeddingsStageHash(input: KtxEmbeddingsStageHashInput
 }
 
 export function computeKtxRelationshipsStageHash(input: KtxRelationshipsStageHashInput): string {
-  return sha256({
+  return stableContentHash({
     snapshot: input.snapshot,
     relationshipSettings: input.relationshipSettings,
     llmIdentity: input.llmIdentity,
@@ -143,7 +126,7 @@ export function computeKtxRelationshipsStageHash(input: KtxRelationshipsStageHas
  * that depend on the changed text (D4 self-healing).
  */
 export function computeKtxScanDescriptionDigest(texts: readonly string[]): string {
-  return sha256(texts);
+  return stableContentHash(texts);
 }
 
 function uniqueStages(stages: KtxScanEnrichmentStage[]): KtxScanEnrichmentStage[] {

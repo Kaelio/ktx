@@ -7,6 +7,7 @@ export interface InvalidWuSource {
   /** `${connectionId}:${sourceName}` */
   source: string;
   errors: string[];
+  issues?: WuValidationIssue[];
 }
 
 export interface WuValidationResult {
@@ -14,8 +15,22 @@ export interface WuValidationResult {
   invalidSources: InvalidWuSource[];
 }
 
+type WuValidationIssue =
+  | { kind: 'source_validation'; message: string }
+  | { kind: 'missing_join_target'; targetSourceName: string; caseMismatch: string | null; message: string };
+
 export function formatInvalidWuSources(invalid: InvalidWuSource[]): string {
   return invalid.map((entry) => `${entry.source} (${entry.errors.join('; ')})`).join(', ');
+}
+
+export function hasBlockingWuSourceIssue(source: InvalidWuSource): boolean {
+  const issues =
+    source.issues ??
+    source.errors.map((message) => ({
+      kind: 'source_validation' as const,
+      message,
+    }));
+  return issues.some((issue) => issue.kind === 'source_validation');
 }
 
 type LoadedSource = Awaited<ReturnType<SlValidationDeps['semanticLayerService']['loadAllSources']>>['sources'][number];
@@ -86,11 +101,11 @@ function expandWithExistingJoinNeighbors(
  * are out of scope — they must not block unrelated work. Resolution is the
  * Python engine's: exact source-name match within the connection.
  */
-function findJoinTargetErrors(
+function findJoinTargetIssues(
   touched: TouchedSlSource[],
   sourcesByConnection: Map<string, LoadedSource[]>,
-): Map<string, string[]> {
-  const errorsBySource = new Map<string, string[]>();
+): Map<string, WuValidationIssue[]> {
+  const issuesBySource = new Map<string, WuValidationIssue[]>();
   const touchedByConnection = new Map<string, Set<string>>();
   for (const source of touched) {
     const bucket = touchedByConnection.get(source.connectionId) ?? new Set<string>();
@@ -114,11 +129,16 @@ function findJoinTargetErrors(
         continue;
       }
       const key = `${connectionId}:${source.name}`;
-      const messages = missing.map(formatMissingJoinTarget);
-      errorsBySource.set(key, [...(errorsBySource.get(key) ?? []), ...messages]);
+      const issues = missing.map((entry) => ({
+        kind: 'missing_join_target' as const,
+        targetSourceName: entry.to,
+        caseMismatch: entry.caseMismatch,
+        message: formatMissingJoinTarget(entry),
+      }));
+      issuesBySource.set(key, [...(issuesBySource.get(key) ?? []), ...issues]);
     }
   }
-  return errorsBySource;
+  return issuesBySource;
 }
 
 export async function validateWuTouchedSources(
@@ -136,18 +156,20 @@ export async function validateWuTouchedSources(
   }
 
   const expanded = expandWithExistingJoinNeighbors(touched, sourcesByConnection);
-  const joinTargetErrors = findJoinTargetErrors(touched, sourcesByConnection);
+  const joinTargetIssues = findJoinTargetIssues(touched, sourcesByConnection);
 
   const valid: string[] = [];
   const invalid: InvalidWuSource[] = [];
   for (const source of expanded) {
     const key = `${source.connectionId}:${source.sourceName}`;
     const result = await deps.slValidator.validateSingleSource(deps, source.connectionId, source.sourceName);
-    const errors = [...result.errors, ...(joinTargetErrors.get(key) ?? [])];
+    const sourceIssues: WuValidationIssue[] = result.errors.map((message) => ({ kind: 'source_validation', message }));
+    const issues = [...sourceIssues, ...(joinTargetIssues.get(key) ?? [])];
+    const errors = issues.map((issue) => issue.message);
     if (errors.length === 0) {
       valid.push(key);
     } else {
-      invalid.push({ source: key, errors });
+      invalid.push({ source: key, errors, issues });
     }
   }
   return { validSources: valid, invalidSources: invalid };

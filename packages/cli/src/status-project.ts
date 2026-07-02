@@ -412,6 +412,7 @@ function buildConnectionStatus(
       const hint = envHint((conn as Record<string, unknown>).credentials_json);
       return warn(hint ? `credentials missing (env: ${hint})` : 'credentials not set', hint ? `Set ${hint}` : 'Rerun `ktx setup`');
     }
+    case 'duckdb':
     case 'sqlite': {
       const path = (conn as Record<string, unknown>).path;
       if (typeof path === 'string' && path.length > 0) return ok(`path: ${path}`);
@@ -553,7 +554,7 @@ async function buildQueryHistoryStatus(
 }
 
 const ADAPTER_DRIVER_REQUIREMENT: Record<string, string[]> = {
-  'live-database': ['postgres', 'mysql', 'snowflake', 'bigquery', 'clickhouse', 'sqlite', 'sqlserver'],
+  'live-database': ['postgres', 'mysql', 'snowflake', 'bigquery', 'clickhouse', 'sqlite', 'duckdb', 'sqlserver'],
   dbt: ['dbt', 'dbt-core', 'dbt-cloud'],
   notion: ['notion'],
   metabase: ['metabase'],

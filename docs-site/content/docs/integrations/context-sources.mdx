@@ -1,6 +1,6 @@
 ---
 title: Context Sources
-description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, and Google Drive.
+description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, Sigma, and Google Drive.
 ---
 
 Context sources feed your existing analytics tooling into **ktx**. During ingestion, **ktx** extracts metadata from each source and uses a reconciliation agent to reconcile it with your existing semantic layer and knowledge base - preserving accepted edits rather than overwriting.
@@ -27,7 +27,7 @@ LookML uses top-level `repoUrl`, and MetricFlow uses nested
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, or `gdrive` |
+| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, `sigma`, or `gdrive` |
 | `source_dir` | For local file sources | Absolute or project-relative source directory |
 | `repo_url` | For Git-hosted dbt sources | Git repository URL |
 | `repoUrl` | For Git-hosted LookML sources | Git repository URL |
@@ -375,6 +375,101 @@ Create an integration at [notion.so/my-integrations](https://www.notion.so/my-in
 - Rate limits apply; large workspaces may require multiple ingestion runs
 - Incremental sync cursors are stored in `.ktx/db.sqlite`; don't add
   `last_successful_cursor` to `ktx.yaml`
+
+---
+
+## Sigma
+
+Ingests data model definitions and workbook metadata from a Sigma workspace as semantic context. Uses the Sigma REST API to fetch data model specs and workbook summaries.
+
+### What it provides
+
+- Data model names, folder paths, and ownership metadata
+- Page and element definitions within each data model
+- Column identifiers and data types where available
+- Workbook names, paths, descriptions, and version metadata
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    api_url: https://api.sigmacomputing.com   # Omit for GCP US (default)
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+```
+
+For the AWS US region, override `api_url`:
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    api_url: https://aws-api.sigmacomputing.com
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+```
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| OAuth client credentials | `client_id` + `client_secret_ref: env:SIGMA_CLIENT_SECRET` |
+
+Generate a client in Sigma: **Administration → Developer Access → Add New Client**.
+
+### What gets ingested
+
+- Active data model specs, organized by folder into work units
+- Workbook metadata (name, path, description, version) — archived and exploration workbooks excluded by default
+- Models backed by CSV uploads or unsupported connector subtypes are listed in the manifest but skipped during spec fetch (a Sigma API limitation)
+
+### Warehouse connection mapping
+
+`connectionMappings` is optional. Without it, **ktx** produces wiki knowledge only — no semantic-layer sources are written and warehouse validation is skipped. To get semantic-layer output and enable `sl_validate`, map each Sigma internal connection UUID to a **ktx** warehouse connection ID:
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+    connectionMappings:
+      "<sigma-internal-uuid>": snowflake-prod   # data models using this connection get SL sources
+```
+
+Find the Sigma connection UUID in **Administration → Connections** or from the `source.connectionId` field in a fetched data model spec. Data model elements whose `connectionId` has no mapping are ingested as wiki-only.
+
+### Workbook filter
+
+At large scale, you can limit which workbooks are fetched during ingest using `workbookFilter`:
+
+```yaml title="ktx.yaml"
+connections:
+  sigma-main:
+    driver: sigma
+    client_id: "<your-client-id>"
+    client_secret_ref: env:SIGMA_CLIENT_SECRET
+    workbookFilter:
+      includeArchived: false       # default
+      includeExplorations: false   # default
+      updatedSince: "2026-01-01T00:00:00Z"   # only recently updated workbooks
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `includeArchived` | `false` | Include archived workbooks |
+| `includeExplorations` | `false` | Include exploration workbooks |
+| `updatedSince` | — | ISO 8601 date; only workbooks updated on or after this date are fetched |
+
+### Notes
+
+- `connectionMappings` is optional for wiki-only ingest; it is required to generate semantic-layer sources and run warehouse validation
+- Context ingest (`ktx ingest sigma-main`) fetches from the Sigma API directly
+- Ingest is incremental: items whose `updatedAt` timestamp is unchanged since the last run are skipped
+- Models backed by CSV uploads or unsupported connector subtypes cannot have their spec exported; these are skipped with a warning (a Sigma API limitation)
+- Joins are not projected from Sigma data models in this release; `joins: []` is always written by the projection step. Lookup relationships visible in data model specs are captured as wiki knowledge instead.
 
 ---
 

@@ -1,4 +1,5 @@
 import type { ParsedTargetTable } from '../../parsed-target-table.js';
+import { warehouseTargetDialect } from '../../../connections/connection-type-dialect.js';
 import type { LookerWarehouseConnectionInfo } from './client.js';
 import type { LookerPullConfig, LookerRuntimeCursors, StagedExploreFile, StagedLookmlModelsFile } from './types.js';
 
@@ -11,6 +12,7 @@ const LOOKER_DIALECT_TO_CONNECTION_TYPE = {
   sqlite: 'SQLITE',
   sqlserver: 'SQLSERVER',
   clickhouse: 'CLICKHOUSE',
+  awsathena: 'ATHENA',
 } as const;
 
 /** @internal */
@@ -72,16 +74,6 @@ export interface LookerMappingClient {
   getExplore(modelName: string, exploreName: string): Promise<StagedExploreFile>;
 }
 
-const SQLGLOT_DIALECT_BY_CONNECTION_TYPE: Partial<Record<LookerWarehouseTargetConnectionType, string>> = {
-  BIGQUERY: 'bigquery',
-  SNOWFLAKE: 'snowflake',
-  POSTGRESQL: 'postgres',
-  MYSQL: 'mysql',
-  SQLITE: 'sqlite',
-  SQLSERVER: 'tsql',
-  CLICKHOUSE: 'clickhouse',
-};
-
 export async function discoverLookerConnections(
   client: Pick<LookerMappingClient, 'listLookerConnections'>,
 ): Promise<LookerWarehouseConnectionInfo[]> {
@@ -100,7 +92,7 @@ export function lookerDialectToConnectionType(dialect: string | null): LookerWar
 
 /** @internal */
 export function sqlglotDialectForConnectionType(connectionType: string): string | null {
-  return SQLGLOT_DIALECT_BY_CONNECTION_TYPE[connectionType as LookerWarehouseTargetConnectionType] ?? null;
+  return warehouseTargetDialect(connectionType);
 }
 
 /** @internal */
