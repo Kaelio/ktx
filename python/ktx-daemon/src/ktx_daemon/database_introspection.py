@@ -162,11 +162,26 @@ class DatabaseIntrospectionRequest(BaseModel):
         return value
 
 
+# Mirrors the Node KtxScanWarning shape so the daemon cannot emit a code the
+# Node adapter (mapDaemonSnapshot) cannot render.
+OBJECT_INTROSPECTION_FAILED_CODE = "object_introspection_failed"
+
+
+class DatabaseIntrospectionWarning(BaseModel):
+    code: str
+    message: str
+    table: str | None = None
+    column: str | None = None
+    recoverable: bool = True
+    metadata: dict[str, Any] | None = None
+
+
 class DatabaseIntrospectionResponse(BaseModel):
     connection_id: str
     extracted_at: str
     metadata: dict[str, Any]
     tables: list[LiveDatabaseTable]
+    warnings: list[DatabaseIntrospectionWarning] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -264,13 +279,48 @@ def _load_postgres_rows(
     )
 
 
-def _map_rows_to_tables(rows: DatabaseIntrospectionRows) -> list[LiveDatabaseTable]:
+def _object_introspection_warning(
+    row: Mapping[str, Any], error: ValueError
+) -> DatabaseIntrospectionWarning:
+    name = _optional_string(row, "table_name")
+    label = ".".join(
+        part
+        for part in (
+            _optional_string(row, "table_catalog"),
+            _optional_string(row, "table_schema"),
+            name,
+        )
+        if part
+    )
+    column = _optional_string(row, "column_name") or _optional_string(
+        row, "from_column"
+    )
+    return DatabaseIntrospectionWarning(
+        code=OBJECT_INTROSPECTION_FAILED_CODE,
+        message=str(error),
+        table=name,
+        column=column,
+        recoverable=True,
+        metadata={"object": label or "object"},
+    )
+
+
+def _map_rows_to_tables(
+    rows: DatabaseIntrospectionRows,
+) -> tuple[list[LiveDatabaseTable], list[DatabaseIntrospectionWarning]]:
     tables: dict[str, LiveDatabaseTable] = {}
+    warnings: list[DatabaseIntrospectionWarning] = []
 
     for row in rows.table_rows:
-        catalog = _optional_string(row, "table_catalog")
-        db = _required_string(row, "table_schema")
-        name = _required_string(row, "table_name")
+        # One malformed/inaccessible object is skipped with a warning rather than
+        # aborting introspection of every healthy object.
+        try:
+            catalog = _optional_string(row, "table_catalog")
+            db = _required_string(row, "table_schema")
+            name = _required_string(row, "table_name")
+        except ValueError as error:
+            warnings.append(_object_introspection_warning(row, error))
+            continue
         key = _table_key(catalog, db, name)
         tables[key] = LiveDatabaseTable(
             catalog=catalog,
@@ -280,44 +330,51 @@ def _map_rows_to_tables(rows: DatabaseIntrospectionRows) -> list[LiveDatabaseTab
         )
 
     for row in rows.column_rows:
-        catalog = _optional_string(row, "table_catalog")
-        db = _required_string(row, "table_schema")
-        table_name = _required_string(row, "table_name")
-        table = tables.get(_table_key(catalog, db, table_name))
-        if table is None:
-            continue
-
-        table.columns.append(
-            LiveDatabaseColumn(
-                name=_required_string(row, "column_name"),
-                type=_required_string(row, "formatted_type"),
-                nullable=bool(row.get("is_nullable")),
-                primary_key=bool(row.get("is_primary_key")),
-                comment=_optional_string(row, "column_comment"),
+        try:
+            catalog = _optional_string(row, "table_catalog")
+            db = _required_string(row, "table_schema")
+            table_name = _required_string(row, "table_name")
+            table = tables.get(_table_key(catalog, db, table_name))
+            if table is None:
+                continue
+            table.columns.append(
+                LiveDatabaseColumn(
+                    name=_required_string(row, "column_name"),
+                    type=_required_string(row, "formatted_type"),
+                    nullable=bool(row.get("is_nullable")),
+                    primary_key=bool(row.get("is_primary_key")),
+                    comment=_optional_string(row, "column_comment"),
+                )
             )
-        )
+        except ValueError as error:
+            warnings.append(_object_introspection_warning(row, error))
+            continue
 
     for row in rows.foreign_key_rows:
-        catalog = _optional_string(row, "table_catalog")
-        db = _required_string(row, "table_schema")
-        table_name = _required_string(row, "table_name")
-        table = tables.get(_table_key(catalog, db, table_name))
-        if table is None:
+        try:
+            catalog = _optional_string(row, "table_catalog")
+            db = _required_string(row, "table_schema")
+            table_name = _required_string(row, "table_name")
+            table = tables.get(_table_key(catalog, db, table_name))
+            if table is None:
+                continue
+            table.foreign_keys.append(
+                LiveDatabaseForeignKey(
+                    from_column=_required_string(row, "from_column"),
+                    to_table=_required_string(row, "to_table"),
+                    to_column=_required_string(row, "to_column"),
+                    constraint_name=_optional_string(row, "constraint_name"),
+                )
+            )
+        except ValueError as error:
+            warnings.append(_object_introspection_warning(row, error))
             continue
 
-        table.foreign_keys.append(
-            LiveDatabaseForeignKey(
-                from_column=_required_string(row, "from_column"),
-                to_table=_required_string(row, "to_table"),
-                to_column=_required_string(row, "to_column"),
-                constraint_name=_optional_string(row, "constraint_name"),
-            )
-        )
-
-    return sorted(
+    sorted_tables = sorted(
         tables.values(),
         key=lambda table: _table_key(table.catalog, table.db, table.name),
     )
+    return sorted_tables, warnings
 
 
 def introspect_database_response(
@@ -332,9 +389,11 @@ def introspect_database_response(
 
     rows = (load_rows or _load_postgres_rows)(request)
     timestamp = now() if now else datetime.now(timezone.utc).isoformat()
+    tables, warnings = _map_rows_to_tables(rows)
     return DatabaseIntrospectionResponse(
         connection_id=request.connection_id,
         extracted_at=timestamp,
         metadata={"driver": driver, "schemas": list(request.schemas)},
-        tables=_map_rows_to_tables(rows),
+        tables=tables,
+        warnings=warnings,
     )

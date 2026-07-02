@@ -1,6 +1,7 @@
 import { KtxIngestEmbeddingPortAdapter } from './context/llm/embedding-port.js';
 import type { KtxEmbeddingPort } from './context/core/embedding.js';
 import { loadKtxProject } from './context/project/project.js';
+import { assertConfiguredConnectionId } from './context/connections/configured-connections.js';
 import {
   type LocalKnowledgeSearchResult,
   type LocalKnowledgeSummary,
@@ -17,12 +18,21 @@ import { createRankBadgeFormatter, printList, type PrintListColumn } from './io/
 import { emitTelemetryEvent } from './telemetry/index.js';
 
 export type KtxKnowledgeArgs =
-  | { command: 'list'; projectDir: string; userId: string; output?: string; json?: boolean; cliVersion: string }
+  | {
+      command: 'list';
+      projectDir: string;
+      userId: string;
+      connectionId?: string;
+      output?: string;
+      json?: boolean;
+      cliVersion: string;
+    }
   | {
       command: 'search';
       projectDir: string;
       query: string;
       userId: string;
+      connectionId?: string;
       output?: string;
       json?: boolean;
       limit?: number;
@@ -120,7 +130,14 @@ export async function runKtxKnowledge(
   try {
     const project = await loadKtxProject({ projectDir: args.projectDir });
     if (args.command === 'list') {
-      const pages = await listLocalKnowledgePages(project, { userId: args.userId });
+      const connectionId =
+        args.connectionId === undefined
+          ? undefined
+          : assertConfiguredConnectionId(project.config.connections, args.connectionId);
+      const pages = await listLocalKnowledgePages(project, {
+        userId: args.userId,
+        ...(connectionId !== undefined ? { connectionId } : {}),
+      });
       const mode = resolveOutputMode({ explicit: args.output, json: args.json, io });
       printList<LocalKnowledgeSummary>({
         rows: pages,
@@ -145,6 +162,10 @@ export async function runKtxKnowledge(
       return 0;
     }
     if (args.command === 'search') {
+      const connectionId =
+        args.connectionId === undefined
+          ? undefined
+          : assertConfiguredConnectionId(project.config.connections, args.connectionId);
       const embeddingService = await wikiSearchEmbeddingService(project, deps, { cliVersion: args.cliVersion }, io);
       const search = deps.searchLocalKnowledgePages ?? defaultSearchLocalKnowledgePages;
       const results = await search(project, {
@@ -152,6 +173,7 @@ export async function runKtxKnowledge(
         userId: args.userId,
         embeddingService,
         limit: args.limit,
+        ...(connectionId !== undefined ? { connectionId } : {}),
       });
       await emitTelemetryEvent({
         name: 'wiki_query_completed',

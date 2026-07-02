@@ -11,6 +11,7 @@ import {
 } from '../../telemetry/index.js';
 import { collectTelemetryRedactionSecrets } from '../../telemetry/redaction-secrets.js';
 import { formatErrorDetail, scrubErrorClass } from '../../telemetry/scrubber.js';
+import { mcpSlowToolMs, serializeMcpError, type KtxMcpLogger } from './logger.js';
 import type {
   KtxMcpClientInfo,
   KtxMcpContextPorts,
@@ -29,6 +30,7 @@ export interface RegisterKtxContextToolsDeps {
   userContext: KtxMcpUserContext;
   projectDir?: string;
   io?: KtxCliIo;
+  logger?: KtxMcpLogger;
   getClientInfo?: () => KtxMcpClientInfo | undefined;
 }
 
@@ -50,6 +52,7 @@ const toolAnnotations = {
   sl_read_source: { title: 'Semantic Layer Read Source', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   sl_query: { title: 'Semantic Layer Query', readOnlyHint: true, openWorldHint: false },
   sql_execution: { title: 'SQL Execution', readOnlyHint: true, openWorldHint: false },
+  sql_dialect_notes: { title: 'SQL Dialect Notes', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   memory_ingest: { title: 'Memory Ingest', destructiveHint: true, openWorldHint: false },
   memory_ingest_status: { title: 'Memory Ingest Status', readOnlyHint: true, openWorldHint: false },
 } satisfies Record<string, ToolAnnotations>;
@@ -60,7 +63,7 @@ const toolDescriptions = {
   discover_data:
     'Search across ktx wiki pages, semantic-layer sources, measures, dimensions, raw tables, and columns. Example: discover_data({ query: "monthly orders by customer", connectionId: "warehouse", kinds: ["sl_source", "table"] }).',
   wiki_search:
-    'Search ktx wiki pages for reusable business context. Example: wiki_search({ query: "revenue recognition", limit: 5 }).',
+    'Search ktx wiki pages for reusable business context. Pass connectionId to scope results to one warehouse (unscoped pages plus pages tagged with that connection) when a concept name collides across databases. Example: wiki_search({ query: "revenue recognition", connectionId: "warehouse", limit: 5 }).',
   wiki_read: 'Read a ktx wiki page by key returned from wiki_search. Example: wiki_read({ key: "global/revenue" }).',
   entity_details:
     'Read table and column metadata from the latest live-database scan snapshot. Example: entity_details({ connectionId: "warehouse", entities: [{ table: { catalog: null, db: "public", name: "orders" }, columns: ["id"] }] }).',
@@ -72,6 +75,8 @@ const toolDescriptions = {
     'Execute a semantic-layer query and return headers, rows, and total row count, plus correctness notes (e.g. compile-only or fan-out) when relevant. The generated SQL and full query plan are omitted by default; request them with include: ["sql"] and/or include: ["plan"]. Example: sl_query({ connectionId: "warehouse", measures: ["orders.order_count"], dimensions: [{ field: "orders.created_at", granularity: "month" }], include: ["sql"] }).',
   sql_execution:
     'Execute one parser-validated read-only SQL query against a configured ktx connection. Example: sql_execution({ connectionId: "warehouse", sql: "select count(*) from public.orders", maxRows: 100 }).',
+  sql_dialect_notes:
+    'Return the SQL syntax conventions for the dialect of a ktx connection: fully-qualified table-name form, identifier quoting and case-folding, date/time functions, top-N / window-filtering idiom, and JSON access. Call this before writing raw sql_execution SQL against a connection so the SQL matches that engine. Example: sql_dialect_notes({ connectionId: "warehouse" }).',
   memory_ingest:
     'Ingest free-form markdown knowledge into durable ktx memory. Use this for business rules, metric definitions, schema gotchas, recurring findings, or explicit user requests to remember something. Example: memory_ingest({ connectionId: "warehouse", content: "ARR is reported in cents in this warehouse." }).',
   memory_ingest_status:
@@ -83,6 +88,11 @@ const connectionListSchema = z.object({});
 const knowledgeSearchSchema = z.object({
   query: z.string().min(1).describe('Natural-language wiki search query, e.g. "revenue recognition policy".'),
   limit: z.number().int().min(1).max(50).default(10).describe('Maximum wiki pages to return.'),
+  connectionId: connectionIdSchema
+    .optional()
+    .describe(
+      'Scope results to one connection: returns unscoped pages plus pages tagged with this connection. Omit to search all pages.',
+    ),
 });
 
 const knowledgeReadSchema = z.object({
@@ -201,6 +211,10 @@ const sqlExecutionSchema = z.object({
   connectionId: connectionIdSchema.describe('Connection id to execute against. Required for raw SQL.'),
   sql: z.string().min(1).describe('Parser-validated read-only SQL, e.g. "select count(*) from public.orders".'),
   maxRows: z.number().int().min(1).max(10_000).default(1000).optional().describe('Maximum rows to return.'),
+});
+
+const sqlDialectNotesSchema = z.object({
+  connectionId: connectionIdSchema.describe('Connection id whose engine dialect conventions to return.'),
 });
 
 const memoryIngestSchema = z.object({
@@ -405,6 +419,12 @@ const sqlExecutionOutputSchema = z.object({
   rowCount: z.number(),
 });
 
+const sqlDialectNotesOutputSchema = z.object({
+  connectionId: z.string(),
+  dialect: z.string(),
+  notes: z.string(),
+});
+
 const memoryIngestOutputSchema = z.object({
   runId: z.string(),
 });
@@ -566,6 +586,63 @@ function clientTelemetryFields(
   };
 }
 
+function toolResultIsError(result: unknown): boolean {
+  return (
+    typeof result === 'object' && result !== null && 'isError' in result && (result as { isError?: unknown }).isError === true
+  );
+}
+
+/** Tool-agnostic size: byte length of the serialized text content the client reads. */
+function toolResultSize(result: unknown): number {
+  if (typeof result !== 'object' || result === null || !('content' in result)) {
+    return 0;
+  }
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let size = 0;
+  for (const item of content) {
+    if (item && typeof item === 'object' && (item as { type?: unknown }).type === 'text') {
+      const text = (item as { text?: unknown }).text;
+      if (typeof text === 'string') {
+        size += Buffer.byteLength(text, 'utf8');
+      }
+    }
+  }
+  return size;
+}
+
+function toolResultErrorText(result: unknown): string {
+  if (typeof result === 'object' && result !== null && 'content' in result) {
+    const content = (result as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      const text = content
+        .filter(
+          (item): item is { type: 'text'; text: string } =>
+            !!item &&
+            typeof item === 'object' &&
+            (item as { type?: unknown }).type === 'text' &&
+            typeof (item as { text?: unknown }).text === 'string',
+        )
+        .map((item) => item.text)
+        .join('\n');
+      if (text.length > 0) {
+        return text;
+      }
+    }
+  }
+  return 'Tool returned an error result.';
+}
+
+interface InstrumentMcpServerDeps {
+  projectDir?: string;
+  io?: KtxCliIo;
+  logger?: KtxMcpLogger;
+  slowToolMs: number;
+  getClientInfo?: () => KtxMcpClientInfo | undefined;
+}
+
 // Tools registered via registerParsedTool catch their own errors and return an
 // isError result, so the telemetry layer never sees the thrown Error. Recover
 // the failure message from the result's text content (the same string the agent
@@ -588,68 +665,91 @@ function mcpErrorResultDetail(result: unknown): string | undefined {
   return formatErrorDetail(text);
 }
 
-function instrumentMcpServer(
-  server: KtxMcpServerLike,
-  telemetry: { projectDir?: string; io?: KtxCliIo; getClientInfo?: () => KtxMcpClientInfo | undefined },
-): KtxMcpServerLike {
+function instrumentMcpServer(server: KtxMcpServerLike, deps: InstrumentMcpServerDeps): KtxMcpServerLike {
   return {
     registerTool(name, config, handler) {
       server.registerTool(name, config, async (input, context) => {
+        const callId = randomUUID();
+        const callLogger = deps.logger?.child({
+          tool: name,
+          callId,
+          ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
+        });
         const startedAt = performance.now();
+        // Synchronous, before the (possibly blocking) handler: a runaway query that never
+        // returns still leaves this start line — with its exact params — on disk.
+        callLogger?.info({ params: input }, 'tool.start');
         try {
           const result = await handler(input, context);
-          if (telemetry.io && telemetry.projectDir && shouldEmitMcpTelemetry()) {
-            const isError =
-              typeof result === 'object' && result !== null && 'isError' in result && result.isError === true;
+          const durationMs = Math.max(0, performance.now() - startedAt);
+          const isError = toolResultIsError(result);
+          if (deps.io && deps.projectDir && shouldEmitMcpTelemetry()) {
             const errorDetail = isError ? mcpErrorResultDetail(result) : undefined;
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
-              projectDir: telemetry.projectDir,
-              io: telemetry.io,
+              projectDir: deps.projectDir,
+              io: deps.io,
               fields: {
                 toolName: name,
                 outcome: isError ? 'error' : 'ok',
-                durationMs: Math.max(0, performance.now() - startedAt),
+                durationMs,
                 sampleRate: mcpTelemetrySampleRate(),
                 ...(errorDetail ? { errorDetail } : {}),
-                ...clientTelemetryFields(telemetry.getClientInfo),
+                ...clientTelemetryFields(deps.getClientInfo),
               },
             });
           }
+          if (callLogger) {
+            if (isError) {
+              callLogger.error(
+                { durationMs, outcome: 'error', err: serializeMcpError(toolResultErrorText(result)) },
+                'tool.end',
+              );
+            } else {
+              const fields = { durationMs, outcome: 'ok' as const, resultSize: toolResultSize(result) };
+              if (durationMs > deps.slowToolMs) {
+                callLogger.warn(fields, 'tool.end');
+              } else {
+                callLogger.info(fields, 'tool.end');
+              }
+            }
+          }
           return result;
         } catch (error) {
-          if (telemetry.io) {
+          const durationMs = Math.max(0, performance.now() - startedAt);
+          if (deps.io) {
             await reportException({
               error,
               context: { source: `mcp:${name}`, handled: true, fatal: false },
-              projectDir: telemetry.projectDir,
-              io: telemetry.io,
+              projectDir: deps.projectDir,
+              io: deps.io,
               redactionSecrets: await collectTelemetryRedactionSecrets({
-                projectDir: telemetry.projectDir,
+                projectDir: deps.projectDir,
                 includeLlm: true,
                 includeEmbeddings: true,
                 env: process.env,
               }),
             });
           }
-          if (telemetry.io && telemetry.projectDir && shouldEmitMcpTelemetry()) {
+          if (deps.io && deps.projectDir && shouldEmitMcpTelemetry()) {
             const errorClass = scrubErrorClass(error);
             const errorDetail = formatErrorDetail(error);
             await emitTelemetryEvent({
               name: 'mcp_request_completed',
-              projectDir: telemetry.projectDir,
-              io: telemetry.io,
+              projectDir: deps.projectDir,
+              io: deps.io,
               fields: {
                 toolName: name,
                 outcome: 'error',
                 ...(errorClass ? { errorClass } : {}),
                 ...(errorDetail ? { errorDetail } : {}),
-                durationMs: Math.max(0, performance.now() - startedAt),
+                durationMs,
                 sampleRate: mcpTelemetrySampleRate(),
-                ...clientTelemetryFields(telemetry.getClientInfo),
+                ...clientTelemetryFields(deps.getClientInfo),
               },
             });
           }
+          callLogger?.error({ durationMs, outcome: 'error', err: serializeMcpError(error) }, 'tool.end');
           throw error;
         }
       });
@@ -663,6 +763,8 @@ export function registerKtxContextTools(deps: RegisterKtxContextToolsDeps): void
   const server = instrumentMcpServer(deps.server, {
     projectDir: deps.projectDir,
     io: deps.io,
+    logger: deps.logger,
+    slowToolMs: mcpSlowToolMs(),
     getClientInfo: deps.getClientInfo,
   });
 
@@ -703,6 +805,7 @@ export function registerKtxContextTools(deps: RegisterKtxContextToolsDeps): void
             userId: userContext.userId,
             query: input.query,
             limit: input.limit,
+            ...(input.connectionId !== undefined ? { connectionId: input.connectionId } : {}),
           }),
         ),
       toolTelemetry,
@@ -863,6 +966,24 @@ export function registerKtxContextTools(deps: RegisterKtxContextToolsDeps): void
           ),
         );
       },
+      toolTelemetry,
+    );
+  }
+
+  if (ports.dialectNotes) {
+    const dialectNotes = ports.dialectNotes;
+    registerParsedTool(
+      server,
+      'sql_dialect_notes',
+      {
+        title: toolAnnotations.sql_dialect_notes.title!,
+        description: toolDescriptions.sql_dialect_notes,
+        inputSchema: sqlDialectNotesSchema.shape,
+        outputSchema: sqlDialectNotesOutputSchema,
+        annotations: toolAnnotations.sql_dialect_notes,
+      },
+      sqlDialectNotesSchema,
+      async (input) => jsonToolResult(await dialectNotes.read(input)),
       toolTelemetry,
     );
   }

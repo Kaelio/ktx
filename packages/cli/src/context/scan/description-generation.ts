@@ -1,5 +1,10 @@
-import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
+import type { ChildProcess } from 'node:child_process';
 import { z } from 'zod';
+import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
+import {
+  KtxSubprocessDeadlineError,
+  runGenerateObjectInSubprocess,
+} from '../../context/llm/subprocess-generate-object.js';
 import type {
   KtxColumnSampleInput,
   KtxColumnSampleResult,
@@ -145,6 +150,8 @@ export interface KtxDescriptionGeneratorOptions {
   logger?: KtxScanLoggerPort;
   onWarning?: (warning: KtxScanWarning) => void;
   settings: KtxDescriptionGenerationSettings;
+  /** @internal Test seam: spawn the kill-boundary child for subprocess backends. */
+  spawnSubprocessGenerateChild?: () => ChildProcess;
 }
 
 interface ColumnTaskResult {
@@ -510,12 +517,14 @@ export class KtxDescriptionGenerator {
   private readonly logger?: KtxScanLoggerPort;
   private readonly onWarning?: (warning: KtxScanWarning) => void;
   private readonly settings: ResolvedKtxDescriptionGenerationSettings;
+  private readonly spawnSubprocessGenerateChild?: () => ChildProcess;
 
   constructor(options: KtxDescriptionGeneratorOptions) {
     this.llmRuntime = options.llmRuntime;
     this.cache = options.cache;
     this.logger = options.logger;
     this.onWarning = options.onWarning;
+    this.spawnSubprocessGenerateChild = options.spawnSubprocessGenerateChild;
     this.settings = {
       columnMaxWords: options.settings.columnMaxWords,
       tableMaxWords: options.settings.tableMaxWords,
@@ -757,6 +766,21 @@ export class KtxDescriptionGenerator {
     let tableDescription: string | null = null;
     let structuredGenerationSucceeded = false;
 
+    // Bound + retry the per-table enrichment LLM call. A transient backend error
+    // (e.g. an "overloaded"/burst rejection when many tables enrich concurrently)
+    // otherwise nulls a whole table's descriptions on the FIRST failure — sampleTable
+    // already retries, this call did not, so transient errors silently dropped most
+    // tables of a db. retryAsync gives it the same 3-attempt backoff. A FRESH timeout
+    // per attempt still bounds a wedged wide table (it never returns a result message);
+    // a timeout is surfaced as KtxAbortedError so retryAsync does NOT retry it (one
+    // wedge stays one timeout, not 3×). Tune via KTX_ENRICH_LLM_TIMEOUT_MS (default
+    // 120s) and KTX_ENRICH_LLM_ATTEMPTS (default 3).
+    const rawEnrichTimeoutMs = Number(process.env.KTX_ENRICH_LLM_TIMEOUT_MS);
+    const enrichTimeoutMs = Number.isFinite(rawEnrichTimeoutMs) && rawEnrichTimeoutMs > 0 ? rawEnrichTimeoutMs : 120_000;
+    const enrichAttempts = Math.max(1, Number(process.env.KTX_ENRICH_LLM_ATTEMPTS ?? 3) || 3);
+    let llmStartedAt = 0;
+    let lastTimedOut = false;
+
     try {
       const prompt = batchedPrompt({
         table: input.table,
@@ -765,15 +789,91 @@ export class KtxDescriptionGenerator {
         tableMaxWords: this.settings.tableMaxWords,
         columnMaxWords: this.settings.columnMaxWords,
       });
-      const generated = await this.llmRuntime.generateObject<
-        BatchedTableDescriptionOutput,
-        typeof batchedTableDescriptionSchema
-      >({
-        role: 'candidateExtraction',
-        system: prompt.system,
-        prompt: prompt.user,
-        schema: batchedTableDescriptionSchema,
-        temperature: this.settings.temperature,
+      llmStartedAt = Date.now();
+      this.logger?.info(
+        `[enrich] llm:start table=${input.table.name} cols=${input.table.columns.length} promptChars=${prompt.user.length} timeoutMs=${enrichTimeoutMs} attempts=${enrichAttempts}`,
+        { connectorId: input.connector.id, table: input.table.name, columns: input.table.columns.length },
+      );
+      // Subprocess backends (codex/claude-code) own an SDK child that ignores the
+      // in-process abort, so each attempt runs behind a tree-killable boundary;
+      // HTTP backends keep the native abortSignal -> fetch cancellation.
+      const enrichForkSpec = this.llmRuntime.subprocessForkSpec();
+      const enrichJsonSchema = enrichForkSpec
+        ? (z.toJSONSchema(batchedTableDescriptionSchema, { target: 'draft-7' }) as Record<string, unknown>)
+        : null;
+      const generated = await retryAsync(
+        async () => {
+          if (enrichForkSpec && enrichJsonSchema) {
+            try {
+              return await runGenerateObjectInSubprocess<
+                BatchedTableDescriptionOutput,
+                typeof batchedTableDescriptionSchema
+              >({
+                forkSpec: enrichForkSpec,
+                role: 'candidateExtraction',
+                system: prompt.system,
+                prompt: prompt.user,
+                schema: batchedTableDescriptionSchema,
+                jsonSchema: enrichJsonSchema,
+                deadlineMs: enrichTimeoutMs,
+                ...(input.context.signal ? { signal: input.context.signal } : {}),
+                ...(this.spawnSubprocessGenerateChild
+                  ? { spawnChild: this.spawnSubprocessGenerateChild }
+                  : {}),
+              });
+            } catch (error) {
+              // The boundary tree-kills the wedged child on deadline; a per-table
+              // timeout is not worth retrying (it would just time out again), so
+              // surface it as KtxAbortedError so retryAsync stops immediately.
+              if (error instanceof KtxSubprocessDeadlineError && !input.context.signal?.aborted) {
+                lastTimedOut = true;
+                throw new KtxAbortedError();
+              }
+              throw error;
+            }
+          }
+          const enrichTimeout = AbortSignal.timeout(enrichTimeoutMs);
+          const abortSignal = input.context.signal
+            ? AbortSignal.any([enrichTimeout, input.context.signal])
+            : enrichTimeout;
+          try {
+            return await this.llmRuntime.generateObject<
+              BatchedTableDescriptionOutput,
+              typeof batchedTableDescriptionSchema
+            >({
+              role: 'candidateExtraction',
+              system: prompt.system,
+              prompt: prompt.user,
+              schema: batchedTableDescriptionSchema,
+              temperature: this.settings.temperature,
+              abortSignal,
+            });
+          } catch (error) {
+            // A per-table timeout is not worth retrying (it would just time out
+            // again); surface it as KtxAbortedError so retryAsync stops immediately.
+            // A genuine context cancellation is handled by retryAsync's own signal check.
+            if (enrichTimeout.aborted && !input.context.signal?.aborted) {
+              lastTimedOut = true;
+              throw new KtxAbortedError();
+            }
+            throw error;
+          }
+        },
+        {
+          attempts: enrichAttempts,
+          baseDelayMs: 500,
+          ...(input.context.signal ? { signal: input.context.signal } : {}),
+          onAttemptFailure: (error, attempt) => {
+            this.logger?.warn(
+              `[enrich] llm:retry table=${input.table.name} attempt=${attempt}: ${errorMessage(error)}`,
+              { connectorId: input.connector.id, table: input.table.name, attempt },
+            );
+          },
+        },
+      );
+      this.logger?.info(`[enrich] llm:done table=${input.table.name} ms=${Date.now() - llmStartedAt}`, {
+        connectorId: input.connector.id,
+        table: input.table.name,
       });
       structuredGenerationSucceeded = true;
       tableDescription = generated.tableDescription.trim() || null;
@@ -794,16 +894,25 @@ export class KtxDescriptionGenerator {
         });
       }
     } catch (error) {
-      this.logger?.warn(`Batched table description failed for ${input.table.name}: ${errorMessage(error)}`, {
-        connectorId: input.connector.id,
-        table: input.table.name,
-      });
+      // A genuine cancellation propagates so the stage fails and resumes; a
+      // per-table timeout (context.signal not aborted) still degrades to null.
+      if (input.context.signal?.aborted) {
+        throw error;
+      }
+      const elapsedMs = llmStartedAt ? Date.now() - llmStartedAt : 0;
+      const timedOut = lastTimedOut;
+      this.logger?.warn(
+        `[enrich] llm:${timedOut ? 'TIMEOUT' : 'fail'} table=${input.table.name} cols=${input.table.columns.length} ms=${elapsedMs}: ${errorMessage(error)}`,
+        { connectorId: input.connector.id, table: input.table.name, timedOut, elapsedMs },
+      );
       this.onWarning?.({
-        code: 'enrichment_failed',
-        message: `Failed to generate batched description for table ${input.table.name}: ${errorMessage(error)}`,
+        code: timedOut ? 'enrichment_timeout' : 'enrichment_failed',
+        message: `${
+          timedOut ? `Timed out after ${elapsedMs}ms generating` : 'Failed to generate'
+        } batched description for table ${input.table.name}: ${errorMessage(error)}`,
         table: input.table.name,
         recoverable: true,
-        metadata: { connectorId: input.connector.id },
+        metadata: { connectorId: input.connector.id, ...(timedOut ? { timeoutMs: enrichTimeoutMs } : {}) },
       });
     }
 

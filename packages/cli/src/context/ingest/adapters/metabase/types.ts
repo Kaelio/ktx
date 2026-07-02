@@ -3,7 +3,7 @@ import { z } from 'zod';
 const metabaseSyncModeSchema = z.enum(['ALL', 'ONLY', 'EXCEPT']);
 export type MetabaseSyncMode = z.infer<typeof metabaseSyncModeSchema>;
 
-const metabaseLocalConnectionIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
+const metabaseLocalConnectionIdSchema = z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/);
 
 /**
  * The lean config the adapter needs at `fetch()` time. Lives in the BullMQ payload's

@@ -5,6 +5,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { getKtxCliPackageInfo, type KtxCliIo } from './cli-runtime.js';
+import { createMcpLogger, serializeMcpError } from './context/mcp/logger.js';
 import { createKtxMcpServerFactory } from './mcp-server-factory.js';
 
 const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '::1'] as const;
@@ -173,6 +174,9 @@ export async function runKtxMcpHttpServer(options: RunKtxMcpHttpServerOptions): 
     options.createMcpServer === undefined
       ? await (options.loadProject ?? loadKtxProject)({ projectDir: options.projectDir })
       : undefined;
+  // One logger per process, shared by the tool layer (via the factory) and the
+  // transport lifecycle below. Falls back to a no-op sink for programmatic callers.
+  const logger = createMcpLogger(options.io ?? { stdout: { write() {} }, stderr: { write() {} } });
   const createMcpServer =
     options.createMcpServer ??
     (await createKtxMcpServerFactory({
@@ -180,6 +184,7 @@ export async function runKtxMcpHttpServer(options: RunKtxMcpHttpServerOptions): 
       projectDir: options.projectDir,
       cliVersion: options.cliVersion ?? getKtxCliPackageInfo().version,
       io: options.io,
+      logger,
     }));
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
@@ -189,6 +194,7 @@ export async function runKtxMcpHttpServer(options: RunKtxMcpHttpServerOptions): 
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sessionId) => {
         sessions.set(sessionId, transport);
+        logger.info({ sessionId }, 'session.open');
       },
       onsessionclosed: (sessionId) => {
         sessions.delete(sessionId);
@@ -197,15 +203,25 @@ export async function runKtxMcpHttpServer(options: RunKtxMcpHttpServerOptions): 
       allowedOrigins: config.allowedOrigins,
       enableDnsRebindingProtection: true,
     });
+    // onclose is the universal session-end signal (clean DELETE and dropped connection both
+    // close the transport), so session.close is logged here rather than in onsessionclosed.
     transport.onclose = () => {
       if (transport.sessionId) {
         sessions.delete(transport.sessionId);
+        logger.info({ sessionId: transport.sessionId }, 'session.close');
       }
+    };
+    transport.onerror = (error) => {
+      logger.error(
+        { ...(transport.sessionId ? { sessionId: transport.sessionId } : {}), err: serializeMcpError(error) },
+        'transport.error',
+      );
     };
     await createMcpServer().connect(transport);
     return transport;
   }
 
+  const startedAt = performance.now();
   const server = createServer(async (req, res) => {
     const path = requestPath(req);
     const auth = isMcpRequestAuthorized({ path, headers: req.headers }, config);
@@ -216,7 +232,8 @@ export async function runKtxMcpHttpServer(options: RunKtxMcpHttpServerOptions): 
 
     if (path === '/health' && req.method === 'GET') {
       const port = listenerPort(server, config.port);
-      writeJson(res, 200, { status: 'ok', projectDir: options.projectDir, port });
+      const uptimeMs = Math.round(performance.now() - startedAt);
+      writeJson(res, 200, { status: 'ok', projectDir: options.projectDir, port, uptimeMs });
       return;
     }
 

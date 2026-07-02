@@ -29,9 +29,17 @@ below.
 | `--agents` | Install agent configuration and rules only | `false` |
 | `--target <target>` | Agent target: `claude-code`, `claude-desktop`, `codex`, `cursor`, `opencode`, or `universal` | - |
 | `--global` | Install agent integration into the global target scope for `claude-code` or `codex` | `false` |
-| `--install-dir <path>` | Directory to install project-scoped agent config into. Defaults to the ktx project directory; resolved against the current directory and created if missing. Use it to install `.claude/`, `.mcp.json`, and rules where you open your agent (e.g. `--install-dir .`). Mutually exclusive with `--global` and `--local` | ktx project dir |
+| `--install-dir <path>` | Install project-scoped agent configuration | ktx project dir |
 | `--yes` | Accept project creation and runtime install defaults where setup asks for confirmation | `false` |
 | `--no-input` | Disable interactive terminal input | - |
+
+> **`--install-dir <path>`**
+>
+> Installs project-scoped agent configuration into the specified directory.
+> The path is resolved against the current directory and created if it doesn't
+> exist. Use it to install `.claude/`, `.mcp.json`, and rules where you open
+> your agent (for example, `--install-dir .`). This option is mutually exclusive
+> with `--global` and `--local`.
 
 Use the global `--project-dir <path>` option when setup should target a
 specific directory.
@@ -112,9 +120,9 @@ runtime features are missing.
 
 | Flag | Description |
 |------|-------------|
-| `--database <driver>` | Database driver to configure; repeatable. Choices: `sqlite`, `postgres`, `mysql`, `clickhouse`, `sqlserver`, `bigquery`, `snowflake` |
+| `--database <driver>` | Database driver to configure; repeatable. Choices: `sqlite`, `duckdb`, `postgres`, `mysql`, `clickhouse`, `sqlserver`, `bigquery`, `snowflake` |
 | `--database-connection-id <id>` | Existing selected connection id; repeatable. With `--database` or `--database-url`, connection id for the new connection. |
-| `--database-url <url>` | URL, `env:NAME`, or `file:/path` for one new URL-style database connection; also used as the SQLite path |
+| `--database-url <url>` | URL, `env:NAME`, or `file:/path` for one new URL-style database connection; also used as the SQLite or DuckDB path |
 | `--database-schema <schema>` | Database schema or dataset to include; repeatable |
 | `--skip-databases` | Leave database setup incomplete |
 
@@ -125,6 +133,13 @@ incomplete.
 `--database-schema` maps to the driver's scope field: `schemas` for PostgreSQL,
 MySQL, and SQL Server; `schema_names` for Snowflake; `dataset_ids` for
 BigQuery; and `databases` for ClickHouse.
+
+A BigQuery `--database-schema` value may be qualified as `project.dataset` to
+scan a dataset hosted in another project (such as
+`bigquery-public-data.austin_311`); a bare value stays in the credentials'
+project. Setup does not discover foreign-project datasets, so supply qualified
+entries explicitly. See
+[Primary sources → BigQuery](/docs/integrations/primary-sources#cross-project-datasets).
 
 With `--no-input`, scope for a scope-bearing driver (PostgreSQL, MySQL,
 ClickHouse, SQL Server, BigQuery, Snowflake) must come from `--database-schema`
@@ -178,7 +193,7 @@ sources. This is equivalent to passing `--skip-sources` in scripted setup.
 
 | Flag | Description |
 |------|-------------|
-| `--source <type>` | Context-source connector type: `dbt`, `metricflow`, `metabase`, `looker`, `lookml`, or `notion` |
+| `--source <type>` | Context-source connector type: `dbt`, `metricflow`, `metabase`, `looker`, `lookml`, `notion`, or `sigma` |
 | `--source-connection-id <id>` | Connection id for context-source setup |
 | `--source-path <path>` | Local source path for dbt, MetricFlow, or LookML |
 | `--source-git-url <url>` | Git URL for dbt, MetricFlow, or LookML |
@@ -262,6 +277,13 @@ ktx setup \
   --source-auth-token-ref env:NOTION_TOKEN \
   --notion-crawl-mode selected_roots \
   --notion-root-page-id abc123def456
+
+# Add a Sigma source
+ktx setup \
+  --source sigma \
+  --source-connection-id sigma-main \
+  --source-client-id your-client-id \
+  --source-client-secret-ref env:SIGMA_CLIENT_SECRET
 
 # Install project-scoped agent integration for Codex
 ktx setup --agents --target codex

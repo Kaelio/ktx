@@ -14,7 +14,7 @@ describe('buildLiveDatabaseManifestShards', () => {
   it('builds shard objects with generated joins and preserved external descriptions', () => {
     const existingDescriptions = new Map<string, LiveDatabaseManifestExistingDescriptions>([
       [
-        'orders',
+        'public.orders',
         {
           table: { user: 'Pinned analyst description', db: 'Old db description' },
           columns: new Map([['id', { user: 'Pinned id description', db: 'Old id description' }]]),
@@ -189,7 +189,7 @@ describe('buildLiveDatabaseManifestShards', () => {
   it('preserves external usage keys while replacing historic SQL managed keys', () => {
     const existingUsage = new Map([
       [
-        'orders',
+        'public.orders',
         {
           narrative: 'Old generated usage narrative.',
           frequencyTier: 'low' as const,

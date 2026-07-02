@@ -243,7 +243,9 @@ describe('setup databases step', () => {
         { value: 'mysql', label: 'MySQL' },
         { value: 'clickhouse', label: 'ClickHouse' },
         { value: 'sqlserver', label: 'SQL Server' },
+        { value: 'mongodb', label: 'MongoDB' },
         { value: 'sqlite', label: 'SQLite' },
+        { value: 'duckdb', label: 'DuckDB' },
       ],
       required: true,
     });
@@ -3513,5 +3515,73 @@ describe('setup databases step', () => {
     expect(result.status).toBe('skipped');
     expect(io.stdout()).toContain('ktx cannot work until you add a database.');
     expect(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8')).not.toContain('completed_steps:');
+  });
+
+  it('adds one non-interactive DuckDB connection from --database-url without prompting', async () => {
+    const io = makeIo();
+    const prompts = makePromptAdapter({});
+    const testConnection = vi.fn(async () => 0);
+    const scanConnection = vi.fn(async () => 0);
+
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        databaseDrivers: ['duckdb'],
+        databaseConnectionId: 'duckdb-local',
+        databaseUrl: './warehouse.duckdb',
+        databaseSchemas: [],
+        skipDatabases: false,
+      },
+      io.io,
+      { prompts, testConnection, scanConnection },
+    );
+
+    expect(result.status).toBe('ready');
+    expect(prompts.text).not.toHaveBeenCalled();
+    expect(testConnection).toHaveBeenCalledWith(tempDir, 'duckdb-local', expect.anything());
+    expect(scanConnection).toHaveBeenCalledWith(tempDir, 'duckdb-local', expect.anything());
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections['duckdb-local']).toEqual({
+      driver: 'duckdb',
+      path: './warehouse.duckdb',
+    });
+    expect(config.setup).toEqual({
+      database_connection_ids: ['duckdb-local'],
+    });
+    expect((await readKtxSetupState(tempDir)).completed_steps).toContain('databases');
+  });
+
+  it('adds an interactive DuckDB connection without prompting for a schema', async () => {
+    const prompts = makePromptAdapter({
+      selectValues: ['no'],
+      textValues: ['', './warehouse.duckdb'],
+    });
+    const pickers = makePickerStubs();
+
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'auto',
+        databaseDrivers: ['duckdb'],
+        databaseSchemas: [],
+        skipDatabases: false,
+      },
+      makeIo().io,
+      {
+        prompts,
+        testConnection: vi.fn(async () => 0),
+        scanConnection: vi.fn(async () => 0),
+        pickDatabaseScope: pickers.pickDatabaseScope,
+      },
+    );
+
+    expect(result.status).toBe('ready');
+    expect(pickers.scopeCalls).toHaveLength(0);
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections['duckdb-local']).toEqual({
+      driver: 'duckdb',
+      path: './warehouse.duckdb',
+    });
   });
 });

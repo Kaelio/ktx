@@ -112,6 +112,30 @@ All three fields use REPLACE semantics on update:
 - Pass `[]` → field is cleared.
 - Pass `[values]` → replaces existing with exactly those values (no merging).
 
+## Connection scoping
+
+A project may have several databases whose schemas reuse the same concept names
+(two warehouses each with `orders`, `customers`, …). The `connections`
+frontmatter field keeps database-specific pages from polluting searches about
+other databases.
+
+- The `wiki_write` tool accepts a `connections` field (list of connection ids,
+  same REPLACE semantics as `tags`). Absent or empty ⇒ the page is **unscoped**
+  and applies to every connection.
+- When this ingest/turn is scoped to a connection (its id appears in the prompt
+  context — e.g. `connectionId: warehouse` in the SL Sources header or the
+  `<context>` block), set `connections: [<that id>]` on pages whose content is
+  **specific to that database** ("in this warehouse `user_id` is the device id,
+  not the account id"). Pair this with a connection-distinctive key so two
+  databases' same-concept pages can coexist: `orders_sales_db`, not `orders`.
+- Leave `connections` empty for clearly **org-wide** knowledge ("fiscal year
+  starts in February") so it stays visible everywhere. Do not scope a page to a
+  connection just because the turn happened to be connection-scoped.
+- Keys are still a flat, global namespace; `connections` does not namespace
+  them. A connection-scoped write whose key already belongs to a page scoped to
+  a *different* connection is rejected to prevent silently overwriting it — pick
+  a connection-distinctive key instead.
+
 ## Editing existing pages
 
 Two modes:

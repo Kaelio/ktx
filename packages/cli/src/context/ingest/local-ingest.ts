@@ -104,7 +104,7 @@ class LocalIngestPhase implements IngestJobPhase {
 }
 
 function safeSegment(kind: string, value: string): string {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value)) {
+  if (!/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(value)) {
     throw new Error(`Unsafe ${kind}: ${value}`);
   }
   return value;

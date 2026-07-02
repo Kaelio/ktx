@@ -1,0 +1,10 @@
+{
+  "sigmaId": "wb-xxx111",
+  "name": "Finance Overview",
+  "path": "Finance/Finance Overview",
+  "latestVersion": 5,
+  "updatedAt": "2026-01-14T09:00:00Z",
+  "isArchived": false,
+  "workbookUrlId": "Finance-Overview-xxx111",
+  "description": "Top-level finance dashboard"
+}

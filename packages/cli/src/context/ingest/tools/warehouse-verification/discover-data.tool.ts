@@ -4,7 +4,7 @@ import { BaseTool, type ToolContext, type ToolOutput } from '../../../../context
 
 const discoverDataInputSchema = z.object({
   query: z.string().optional(),
-  connectionId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/).optional(),
+  connectionId: z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/).optional(),
   limit: z.number().int().positive().max(50).optional().default(10),
   sourceName: z.string().optional(),
 }).strict();

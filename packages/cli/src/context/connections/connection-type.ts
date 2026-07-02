@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const connectionTypeSchema = z.enum([
   'POSTGRESQL',
   'SQLITE',
+  'DUCKDB',
   'SQLSERVER',
   'BIGQUERY',
   'SNOWFLAKE',

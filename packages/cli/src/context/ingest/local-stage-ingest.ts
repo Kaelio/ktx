@@ -10,7 +10,7 @@ import type { MemoryFlowEventSink, MemoryFlowPlannedWorkUnit } from './memory-fl
 import { buildSyncId } from './raw-sources-paths.js';
 import { SqliteLocalIngestStore } from './sqlite-local-ingest-store.js';
 import type { KtxTableRefKey } from '../scan/table-ref.js';
-import type { IngestTrigger, SourceAdapter, WorkUnit } from './types.js';
+import type { IngestTrigger, SourceAdapter, SourceFetchReport, WorkUnit } from './types.js';
 
 type LocalIngestStatus = 'running' | 'done' | 'error';
 
@@ -46,6 +46,8 @@ export interface LocalIngestRunRecord {
   workUnits: Array<Pick<WorkUnit, 'unitKey' | 'rawFiles' | 'peerFileIndex' | 'dependencyPaths'>>;
   evictionDeletedRawPaths: string[];
   errors: string[];
+  /** Fetch-phase outcome (e.g. objects skipped during introspection). */
+  fetch?: SourceFetchReport;
 }
 
 export type LocalIngestReport = LocalIngestRunRecord & {
@@ -70,7 +72,7 @@ const LOCAL_AUTHOR = 'ktx';
 const LOCAL_AUTHOR_EMAIL = 'ktx@example.com';
 
 function safeSegment(kind: string, value: string): string {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value)) {
+  if (!/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(value)) {
     throw new Error(`Unsafe ${kind}: ${value}`);
   }
   return value;
@@ -291,6 +293,8 @@ async function runLocalStageOnlyIngestInner(options: RunLocalStageOnlyIngestOpti
     throw new Error(`Adapter "${adapter.source}" did not recognize ${sourceDir ?? 'fetched source output'}`);
   }
 
+  const fetchReport = adapter.readFetchReport ? await adapter.readFetchReport(stagedDir) : null;
+
   const relativeFiles = await walkFiles(stagedDir);
   options.memoryFlow?.update({ sourceDir });
   options.memoryFlow?.emit({
@@ -405,6 +409,7 @@ async function runLocalStageOnlyIngestInner(options: RunLocalStageOnlyIngestOpti
     })),
     evictionDeletedRawPaths: chunkResult.eviction?.deletedRawPaths ?? [],
     errors: [],
+    ...(fetchReport ? { fetch: fetchReport } : {}),
   };
 
   if (!options.dryRun) {

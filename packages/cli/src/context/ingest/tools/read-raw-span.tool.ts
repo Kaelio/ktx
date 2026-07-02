@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { join, normalize, resolve } from 'node:path';
+import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -8,8 +8,13 @@ interface ReadRawSpanDeps {
   allowedPaths: Set<string>;
 }
 
+function normalizeRawPath(path: string): string {
+  return normalize(path).replace(/^[/\\]+/, '').replace(/\\/g, '/');
+}
+
 export function createReadRawSpanTool(deps: ReadRawSpanDeps) {
   const stagedRoot = resolve(deps.stagedDir);
+  const allowedPaths = new Set([...deps.allowedPaths].map(normalizeRawPath));
   return tool({
     description:
       'Read a 1-based inclusive line range from a raw source file. Use this to resolve a provenance pointer like `file.lkml#L15-28` without loading the whole file into context.',
@@ -22,12 +27,13 @@ export function createReadRawSpanTool(deps: ReadRawSpanDeps) {
       if (startLine > endLine) {
         return `Error: startLine must be <= endLine (got startLine=${startLine}, endLine=${endLine})`;
       }
-      const normalized = normalize(path).replace(/^[/\\]+/, '');
-      if (normalized.startsWith('..') || !deps.allowedPaths.has(normalized)) {
-        return `Error: path "${path}" is not accessible from this context. Allowed paths: ${[...deps.allowedPaths].sort().join(', ')}`;
+      const normalized = normalizeRawPath(path);
+      if (normalized.startsWith('..') || !allowedPaths.has(normalized)) {
+        return `Error: path "${path}" is not accessible from this context. Allowed paths: ${[...allowedPaths].sort().join(', ')}`;
       }
       const absolute = resolve(join(stagedRoot, normalized));
-      if (!absolute.startsWith(`${stagedRoot}/`) && absolute !== stagedRoot) {
+      const stagedRelative = relative(stagedRoot, absolute);
+      if (stagedRelative.startsWith('..') || isAbsolute(stagedRelative)) {
         return `Error: path "${path}" is not accessible from this context.`;
       }
       try {

@@ -989,6 +989,33 @@ describe('runKtxCli', () => {
     expect(testIo.stderr()).toMatch(/--text\/--file does not accept a positional connection id/);
   });
 
+  it('threads --verbatim into the text ingest args', async () => {
+    const textIngest = vi.fn(async () => 0);
+    const testIo = makeIo();
+
+    await expect(
+      runKtxCli(['--project-dir', tempDir, 'ingest', '--file', 'doc.md', '--verbatim', '--json'], testIo.io, {
+        textIngest,
+      }),
+    ).resolves.toBe(0);
+
+    expect(textIngest).toHaveBeenCalledWith(expect.objectContaining({ files: ['doc.md'], verbatim: true }), testIo.io);
+  });
+
+  it('rejects --verbatim without --text or --file', async () => {
+    const textIngest = vi.fn(async () => 0);
+    const publicIngest = vi.fn(async () => 0);
+    const testIo = makeIo();
+
+    await expect(
+      runKtxCli(['--project-dir', tempDir, 'ingest', '--verbatim'], testIo.io, { textIngest, publicIngest }),
+    ).resolves.toBe(1);
+
+    expect(textIngest).not.toHaveBeenCalled();
+    expect(publicIngest).not.toHaveBeenCalled();
+    expect(testIo.stderr()).toMatch(/requires --text or --file/);
+  });
+
   it('treats bare ingest as ingest --all', async () => {
     const publicIngest = vi.fn().mockResolvedValue(0);
     const testIo = makeIo();

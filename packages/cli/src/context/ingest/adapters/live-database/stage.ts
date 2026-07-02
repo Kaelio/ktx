@@ -136,13 +136,13 @@ export async function readLiveDatabaseTableFiles(stagedDir: string): Promise<Liv
 }
 
 export async function detectLiveDatabaseStagedDir(stagedDir: string): Promise<boolean> {
+  // A valid live-database staging is identified by its connection.json marker.
+  // An empty table set is a legitimate outcome (an empty database), so the
+  // presence of table files is not required — the total-vs-partial decision is
+  // made earlier by assertLiveDatabaseScanOutcome, before staging.
   try {
     const meta = JSON.parse(await readFile(join(stagedDir, LIVE_DATABASE_META_FILE), 'utf8')) as unknown;
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
-      return false;
-    }
-    const files = await readLiveDatabaseTableFiles(stagedDir);
-    return files.length > 0;
+    return Boolean(meta) && typeof meta === 'object' && !Array.isArray(meta);
   } catch {
     return false;
   }

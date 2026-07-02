@@ -2,6 +2,9 @@ import { KtxIngestEmbeddingPortAdapter } from './context/llm/embedding-port.js';
 import { createDefaultKtxMcpServer } from './context/mcp/server.js';
 import { createLocalProjectMcpContextPorts } from './context/mcp/local-project-ports.js';
 import { createLocalProjectMemoryIngest } from './context/memory/local-memory.js';
+import { assertConfiguredConnectionId } from './context/connections/configured-connections.js';
+import type { KtxMcpLogger } from './context/mcp/logger.js';
+import type { MemoryIngestPort } from './context/mcp/types.js';
 import type { KtxLocalProject } from './context/project/project.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { KtxCliIo } from './cli-runtime.js';
@@ -23,6 +26,7 @@ export async function createKtxMcpServerFactory(input: {
   projectDir: string;
   cliVersion: string;
   io?: KtxCliIo;
+  logger?: KtxMcpLogger;
 }): Promise<() => McpServer> {
   const io = input.io ?? noopMcpIo();
   const queryExecutor = createKtxCliIngestQueryExecutor(input.project);
@@ -57,13 +61,25 @@ export async function createKtxMcpServerFactory(input: {
     },
   });
 
-  let memoryIngest: ReturnType<typeof createLocalProjectMemoryIngest> | undefined;
+  let memoryIngest: MemoryIngestPort | undefined;
   try {
-    memoryIngest = createLocalProjectMemoryIngest(input.project, {
+    const baseMemoryIngest = createLocalProjectMemoryIngest(input.project, {
       semanticLayerCompute,
       queryExecutor,
       embeddingProvider,
     });
+    // Validate the explicit connectionId argument here so a typo is rejected with the
+    // configured ids before the ingest run starts; persisted page scope is validated
+    // separately (warn-only) and must not fail.
+    memoryIngest = {
+      ingest: (ingestInput) => {
+        if (ingestInput.connectionId !== undefined) {
+          assertConfiguredConnectionId(input.project.config.connections, ingestInput.connectionId);
+        }
+        return baseMemoryIngest.ingest(ingestInput);
+      },
+      status: (runId) => baseMemoryIngest.status(runId),
+    };
   } catch (error) {
     io.stderr.write(`ktx MCP memory_ingest disabled: ${error instanceof Error ? error.message : String(error)}\n`);
   }
@@ -75,6 +91,7 @@ export async function createKtxMcpServerFactory(input: {
       userContext: { userId: 'local' },
       projectDir: input.projectDir,
       io,
+      ...(input.logger ? { logger: input.logger } : {}),
       contextTools: {
         ...contextTools,
         ...(memoryIngest ? { memoryIngest } : {}),
