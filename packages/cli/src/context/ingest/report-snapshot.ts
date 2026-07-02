@@ -158,6 +158,19 @@ const finalizationOutcomeSchema = z.object({
   provenanceExclusions: z.array(finalizationProvenanceExclusionSchema).default([]),
 });
 
+const finalGatePrunedReferenceSchema = z.object({
+  kind: z.enum(['join', 'wiki_ref', 'wiki_sl_ref', 'wiki_body_ref']),
+  artifact: z.string(),
+  removedRef: z.string(),
+  absentTarget: z.string(),
+});
+
+const finalGateDroppedSourceSchema = z.object({
+  connectionId: z.string(),
+  sourceName: z.string(),
+  reason: z.string(),
+});
+
 const ingestReportSnapshotSchema = z
   .object({
     id: z.string().min(1),
@@ -187,9 +200,6 @@ const ingestReportSnapshotSchema = z
             resolverAttempts: z.number().int().min(0).default(0),
             resolverRepairs: z.number().int().min(0).default(0),
             resolverFailures: z.number().int().min(0).default(0),
-            gateRepairAttempts: z.number().int().min(0).default(0),
-            gateRepairs: z.number().int().min(0).default(0),
-            gateRepairFailures: z.number().int().min(0).default(0),
           })
           .optional(),
         workUnits: z.array(
@@ -218,6 +228,8 @@ const ingestReportSnapshotSchema = z
         provenanceRows: z.array(provenanceDetailSchema).default([]),
         toolTranscripts: z.array(toolTranscriptSummarySchema).default([]),
         finalization: finalizationOutcomeSchema.optional(),
+        finalGatePrunedReferences: z.array(finalGatePrunedReferenceSchema).default([]),
+        finalGateDroppedSources: z.array(finalGateDroppedSourceSchema).default([]),
         memoryFlow: memoryFlowReplayInputSchema.optional(),
       })
       .passthrough(),

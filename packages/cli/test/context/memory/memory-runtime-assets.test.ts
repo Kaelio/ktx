@@ -16,6 +16,7 @@ const expectedSkillHeadings: Record<string, string> = {
   sl_capture: '# Semantic Layer',
 };
 const expectedAdapterSkillHeadings: Record<string, string> = {
+  gdrive_synthesize: '# Google Drive Doc Synthesis',
   historic_sql_patterns: '# Historic SQL Patterns',
   historic_sql_table_digest: '# Historic SQL Table Digest',
   jira_ingest: '# Jira Ingest',
@@ -24,14 +25,17 @@ const expectedAdapterSkillHeadings: Record<string, string> = {
   lookml_ingest: '# LookML to ktx Semantic Layer',
   metabase_ingest: '# Metabase to ktx Semantic Layer',
   metricflow_ingest: '# MetricFlow to ktx Semantic Layer',
+  sigma_ingest: '# Sigma Ingest',
 };
 const verificationWriterSkills = [
+  'gdrive_synthesize',
   'notion_synthesize',
   'dbt_ingest',
   'lookml_ingest',
   'looker_ingest',
   'metabase_ingest',
   'metricflow_ingest',
+  'sigma_ingest',
   'live_database_ingest',
   'historic_sql_table_digest',
   'historic_sql_patterns',
@@ -140,6 +144,14 @@ describe('memory runtime assets', () => {
     expect(body).toContain('Notion `dataSourceCount` counts Notion databases/data sources only');
     expect(body).toContain('Search existing wiki pages for the same `tables:` or `sl_refs:` frontmatter');
     expect(body).toContain('no_physical_table');
+  });
+
+  it('ships Google Drive guidance for knowledge-only doc synthesis', async () => {
+    const body = await readFile(join(skillsDir, 'gdrive_synthesize', 'SKILL.md'), 'utf-8');
+
+    expect(body).toContain('Google Drive docs are knowledge-only in v1');
+    expect(body).toContain('Do not create semantic-layer sources under the `gdrive` connection');
+    expect(body).toContain('Source: Google Doc -');
   });
 
   it('packages LookML connection-mismatch SL gate guidance', async () => {

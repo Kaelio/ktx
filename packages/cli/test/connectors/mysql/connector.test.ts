@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FieldPacket, RowDataPacket } from 'mysql2/promise';
+import { KtxQueryError } from '../../../src/errors.js';
 import { createMysqlLiveDatabaseIntrospection } from '../../../src/connectors/mysql/live-database-introspection.js';
 import { isKtxMysqlConnectionConfig, KtxMysqlScanConnector, mysqlConnectionPoolConfigFromConfig, prepareMysqlReadOnlyQuery, type KtxMysqlConnectionConfig, type KtxMysqlPoolFactory } from '../../../src/connectors/mysql/connector.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
@@ -83,6 +84,9 @@ function fakePoolFactory(): KtxMysqlPoolFactory {
         ],
         [{ name: 'column_name' }, { name: 'estimated_cardinality' }],
       );
+    }
+    if (/^\s*SET SESSION max_execution_time/i.test(sql)) {
+      return mysqlResult([], []);
     }
     throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
   });
@@ -170,6 +174,9 @@ function multiSchemaMysqlPoolFactory(
         throw options.foreignKeyError;
       }
       expect(params).toEqual(['analytics', 'mart']);
+      return mysqlResult([], []);
+    }
+    if (/^\s*SET SESSION max_execution_time/i.test(sql)) {
       return mysqlResult([], []);
     }
     throw new Error(`Unexpected SQL: ${sql} params=${JSON.stringify(params)}`);
@@ -595,5 +602,48 @@ describe('KtxMysqlScanConnector', () => {
       ],
       foreignKeys: [],
     });
+  });
+
+  it('sets session max_execution_time to the resolved deadline and maps errno 3024 to KtxQueryError', async () => {
+    const issued: Array<{ sql: string; params?: unknown }> = [];
+    const timeoutError = Object.assign(new Error('Query execution was interrupted, maximum statement execution time exceeded'), {
+      errno: 3024,
+      code: 'ER_QUERY_TIMEOUT',
+    });
+    const poolFactory: KtxMysqlPoolFactory = {
+      createPool: vi.fn(() => ({
+        getConnection: vi.fn(async () => ({
+          query: vi.fn(async (sql: string, params?: unknown) => {
+            issued.push({ sql, params });
+            if (/^\s*SET SESSION max_execution_time/i.test(sql)) {
+              return [[], []] as [RowDataPacket[], FieldPacket[]];
+            }
+            throw timeoutError;
+          }),
+          release: vi.fn(),
+        })),
+        end: vi.fn(async () => undefined),
+      })),
+    };
+    const connector = new KtxMysqlScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'mysql',
+        host: 'db.example.test',
+        database: 'analytics',
+        username: 'reader',
+        password: 'test-password', // pragma: allowlist secret
+        query_timeout_ms: 5_000,
+      },
+      poolFactory,
+    });
+
+    const execution = connector.executeReadOnly(
+      { connectionId: 'warehouse', sql: 'select count(*) from orders' },
+      { runId: 'scan-run-1' },
+    );
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('query exceeded 5s');
+    expect(issued[0]).toEqual({ sql: 'SET SESSION max_execution_time = ?', params: [5_000] });
   });
 });

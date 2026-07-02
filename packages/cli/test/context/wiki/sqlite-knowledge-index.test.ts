@@ -142,6 +142,49 @@ describe('SqliteKnowledgeIndex', () => {
     ]);
   });
 
+  it('restricts lexical candidates to the allowlist', () => {
+    const index = new SqliteKnowledgeIndex({ dbPath });
+    index.sync([
+      page({ path: 'wiki/global/revenue.md', key: 'revenue' }),
+      page({ path: 'wiki/global/support.md', key: 'support', content: 'Orders are paid by the support team.' }),
+    ]);
+
+    expect(
+      index
+        .searchLexicalCandidates({ queryText: 'paid', limit: 10, allowedPaths: ['wiki/global/support.md'] })
+        .map((row) => row.path),
+    ).toEqual(['wiki/global/support.md']);
+  });
+
+  it('applies the allowlist before the semantic limit so an in-scope match survives', () => {
+    const index = new SqliteKnowledgeIndex({ dbPath });
+    index.sync([
+      page({ path: 'wiki/global/noise-a.md', key: 'noise-a', embedding: [1, 0] }),
+      page({ path: 'wiki/global/noise-b.md', key: 'noise-b', embedding: [1, 0] }),
+      page({ path: 'wiki/global/target.md', key: 'target', embedding: [1, 0] }),
+    ]);
+
+    // All three tie on similarity; a limit of 1 over the full corpus drops the target.
+    expect(index.searchSemanticCandidates({ queryEmbedding: [1, 0], limit: 1 }).map((row) => row.path)).toEqual([
+      'wiki/global/noise-a.md',
+    ]);
+
+    // Scoped to the target, the limit applies after the allowlist, so it survives.
+    expect(
+      index
+        .searchSemanticCandidates({ queryEmbedding: [1, 0], limit: 1, allowedPaths: ['wiki/global/target.md'] })
+        .map((row) => row.path),
+    ).toEqual(['wiki/global/target.md']);
+  });
+
+  it('treats an empty allowlist as no page in scope', () => {
+    const index = new SqliteKnowledgeIndex({ dbPath });
+    index.sync([page({ embedding: [1, 0] })]);
+
+    expect(index.searchLexicalCandidates({ queryText: 'paid order', limit: 10, allowedPaths: [] })).toEqual([]);
+    expect(index.searchSemanticCandidates({ queryEmbedding: [1, 0], limit: 10, allowedPaths: [] })).toEqual([]);
+  });
+
   it('returns an empty result for blank or punctuation-only queries', () => {
     const index = new SqliteKnowledgeIndex({ dbPath });
     index.rebuild([page()]);

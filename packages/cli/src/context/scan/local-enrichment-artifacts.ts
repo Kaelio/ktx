@@ -1,10 +1,11 @@
 import YAML from 'yaml';
-import { buildLiveDatabaseManifestShards, type LiveDatabaseManifestExistingDescriptions, type LiveDatabaseManifestJoinData, type LiveDatabaseManifestJoinEntry, type LiveDatabaseManifestShard, type LiveDatabaseManifestTableData } from '../../context/ingest/adapters/live-database/manifest.js';
+import { buildLiveDatabaseManifestShards, buildTableRef, type LiveDatabaseManifestExistingDescriptions, type LiveDatabaseManifestJoinData, type LiveDatabaseManifestJoinEntry, type LiveDatabaseManifestShard, type LiveDatabaseManifestTableData } from '../../context/ingest/adapters/live-database/manifest.js';
 import type { TableUsageOutput } from '../../context/ingest/adapters/historic-sql/skill-schemas.js';
 import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { isSlYamlPath } from '../../context/sl/source-files.js';
 import { deriveFederatedConnection } from '../connections/federation.js';
+import { tableRefKey } from './table-ref.js';
 import type { KtxLocalScanEnrichmentResult } from './local-enrichment.js';
 import {
   buildKtxRelationshipArtifacts,
@@ -28,6 +29,12 @@ export interface WriteLocalScanManifestShardsInput {
   dryRun: boolean;
   descriptionUpdates?: KtxLocalScanEnrichmentResult['descriptionUpdates'];
   relationshipUpdate?: KtxLocalScanEnrichmentResult['relationshipUpdate'];
+  /**
+   * When set, write only the shards that contain one of these tables. All shards
+   * are still built (so merging preserves prior content); the unlisted shards are
+   * left untouched on disk. Used by the incremental flush to bound git commits.
+   */
+  onlyChangedTableNames?: ReadonlySet<string>;
 }
 
 export interface WriteLocalScanManifestShardsResult {
@@ -75,9 +82,8 @@ function schemaDir(connectionId: string): string {
 
 function tableDescription(
   table: KtxSchemaTable,
-  descriptionUpdates: LocalDescriptionUpdates = [],
+  update: LocalDescriptionUpdates[number] | undefined,
 ): Record<string, string> | undefined {
-  const update = descriptionUpdates.find((candidate) => candidate.table.name === table.name);
   const descriptions: Record<string, string> = {};
   if (table.comment) {
     descriptions.db = table.comment;
@@ -89,11 +95,9 @@ function tableDescription(
 }
 
 function columnDescription(
-  table: KtxSchemaTable,
   column: KtxSchemaColumn,
-  descriptionUpdates: LocalDescriptionUpdates = [],
+  update: LocalDescriptionUpdates[number] | undefined,
 ): Record<string, string> | undefined {
-  const update = descriptionUpdates.find((candidate) => candidate.table.name === table.name);
   const aiDescription = update?.columnDescriptions[column.name] ?? null;
   const descriptions: Record<string, string> = {};
   if (column.comment) {
@@ -109,19 +113,25 @@ function snapshotTablesToManifestData(
   snapshot: KtxSchemaSnapshot,
   descriptionUpdates: LocalDescriptionUpdates = [],
 ): LiveDatabaseManifestTableData[] {
-  return snapshot.tables.map((table) => ({
-    name: table.name,
-    catalog: table.catalog,
-    db: table.db,
-    descriptions: tableDescription(table, descriptionUpdates),
-    columns: table.columns.map((column) => ({
-      name: column.name,
-      type: column.dimensionType,
-      ...(column.primaryKey ? { pk: true } : {}),
-      ...(column.nullable === false ? { nullable: false } : {}),
-      descriptions: columnDescription(table, column, descriptionUpdates),
-    })),
-  }));
+  // Resolve a table's descriptions by full identity: two same-named tables in
+  // different schemas must not collapse onto one update.
+  const updateByRef = new Map(descriptionUpdates.map((update) => [tableRefKey(update.table), update]));
+  return snapshot.tables.map((table) => {
+    const update = updateByRef.get(tableRefKey({ catalog: table.catalog, db: table.db, name: table.name }));
+    return {
+      name: table.name,
+      catalog: table.catalog,
+      db: table.db,
+      descriptions: tableDescription(table, update),
+      columns: table.columns.map((column) => ({
+        name: column.name,
+        type: column.dimensionType,
+        ...(column.primaryKey ? { pk: true } : {}),
+        ...(column.nullable === false ? { nullable: false } : {}),
+        descriptions: columnDescription(column, update),
+      })),
+    };
+  });
 }
 
 function formalJoins(snapshot: KtxSchemaSnapshot): LiveDatabaseManifestJoinData[] {
@@ -256,7 +266,10 @@ async function loadExistingManifestState(
         if (!validTableNames.has(tableName)) {
           continue;
         }
-        descriptions.set(tableName, {
+        // Descriptions/usage key on the fully-qualified `entry.table` ref so two
+        // same-named tables across schemas stay distinct; joins remain keyed by
+        // bare name to match the bare-name join graph.
+        descriptions.set(entry.table, {
           table: entry.descriptions ? { ...entry.descriptions } : undefined,
           columns: new Map(
             (entry.columns ?? []).flatMap((column) =>
@@ -265,7 +278,7 @@ async function loadExistingManifestState(
           ),
         });
         if (entry.usage) {
-          usage.set(tableName, { ...entry.usage });
+          usage.set(entry.table, { ...entry.usage });
         }
         const joins = (entry.joins ?? []).filter((join) => {
           return (
@@ -284,6 +297,108 @@ async function loadExistingManifestState(
   }
 
   return { descriptions, preservedJoins, usage };
+}
+
+/**
+ * Reconstructs the descriptions already persisted in the on-disk `_schema` as
+ * the in-memory `descriptionUpdates` shape, so a stage-selective run that skips
+ * the descriptions stage (e.g. `--stages relationships`/`--stages embeddings`)
+ * can still feed embeddings + relationships the prior AI descriptions. Tables or
+ * columns with no AI description carry `null`.
+ */
+export async function loadOnDiskDescriptionUpdates(
+  project: KtxLocalProject,
+  connectionId: string,
+  snapshot: KtxSchemaSnapshot,
+): Promise<LocalDescriptionUpdates> {
+  const siblingTargets = await federatedSiblingTargets(project, connectionId);
+  const existing = await loadExistingManifestState(project, connectionId, snapshot, siblingTargets);
+  return snapshot.tables.map((table) => {
+    const entry = existing.descriptions.get(buildTableRef(table.name, table.catalog, table.db));
+    const columnDescriptions: Record<string, string | null> = {};
+    for (const column of table.columns) {
+      columnDescriptions[column.name] = entry?.columns.get(column.name)?.ai ?? null;
+    }
+    return {
+      table: { catalog: table.catalog, db: table.db, name: table.name },
+      tableDescription: entry?.table?.ai ?? null,
+      columnDescriptions,
+    };
+  });
+}
+
+// The incremental descriptions resume record. It lives at a stable, NON-syncId
+// path: a from-scratch interruption gets a fresh syncId on the next run, so a
+// syncId-scoped record would be unreachable on resume. The manifest already lives
+// at the same stable per-connection scope.
+function descriptionsProgressPath(connectionId: string): string {
+  return `raw-sources/${connectionId}/${LIVE_DATABASE_ADAPTER}/enrichment-progress/descriptions.json`;
+}
+
+interface DescriptionsProgressRecord {
+  inputHash: string;
+  descriptions: LocalDescriptionUpdates;
+}
+
+export interface KtxScanDescriptionResumeStore {
+  /** Prior enriched descriptions when the durable record matches `inputHash`, else null. */
+  load(inputHash: string): Promise<LocalDescriptionUpdates | null>;
+  /** Persist the descriptions so far + the manifest shards that gained a table this batch. */
+  flush(input: {
+    inputHash: string;
+    snapshot: KtxSchemaSnapshot;
+    descriptionUpdates: LocalDescriptionUpdates;
+    changedTableNames: ReadonlySet<string>;
+  }): Promise<void>;
+}
+
+export function createKtxScanDescriptionResumeStore(deps: {
+  project: KtxLocalProject;
+  connectionId: string;
+  syncId: string;
+  driver: KtxConnectionDriver;
+}): KtxScanDescriptionResumeStore {
+  const path = descriptionsProgressPath(deps.connectionId);
+  return {
+    async load(inputHash) {
+      let content: string;
+      try {
+        ({ content } = await deps.project.fileStore.readFile(path));
+      } catch {
+        return null;
+      }
+      try {
+        const record = JSON.parse(content) as DescriptionsProgressRecord | null;
+        // A changed inputHash (schema or enrichment settings changed) ignores the
+        // prior record and recomputes — spec-19's inputHash-gated resume semantics.
+        if (!record || record.inputHash !== inputHash || !Array.isArray(record.descriptions)) {
+          return null;
+        }
+        return record.descriptions;
+      } catch {
+        return null;
+      }
+    },
+    async flush({ inputHash, snapshot, descriptionUpdates, changedTableNames }) {
+      const record: DescriptionsProgressRecord = { inputHash, descriptions: descriptionUpdates };
+      await writeJsonArtifact(
+        deps.project,
+        path,
+        record,
+        `scan(${LIVE_DATABASE_ADAPTER}): flush enrichment descriptions progress syncId=${deps.syncId}`,
+      );
+      await writeLocalScanManifestShards({
+        project: deps.project,
+        connectionId: deps.connectionId,
+        syncId: deps.syncId,
+        driver: deps.driver,
+        snapshot,
+        descriptionUpdates,
+        dryRun: false,
+        onlyChangedTableNames: changedTableNames,
+      });
+    },
+  };
 }
 
 async function writeJsonArtifact(
@@ -331,6 +446,9 @@ export async function writeLocalScanManifestShards(
 
   const manifestShards: string[] = [];
   for (const [shardKey, shard] of [...shards.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    if (input.onlyChangedTableNames && !Object.keys(shard.tables).some((table) => input.onlyChangedTableNames!.has(table))) {
+      continue;
+    }
     const path = `${schemaDir(input.connectionId)}/${shardKey}.yaml`;
     await input.project.fileStore.writeFile(
       path,
@@ -348,23 +466,14 @@ export async function writeLocalScanManifestShards(
   };
 }
 
-export async function writeLocalScanEnrichmentArtifacts(
-  input: WriteLocalScanEnrichmentArtifactsInput,
-): Promise<WriteLocalScanEnrichmentArtifactsResult> {
-  if (input.dryRun) {
-    return {
-      enrichmentArtifacts: [],
-      manifestShards: [],
-      manifestShardsWritten: 0,
-    };
-  }
-
-  const enrichmentRoot = artifactDir(input.connectionId, input.syncId);
-  const descriptionsArtifact = `${enrichmentRoot}/descriptions.json`;
-  const embeddingsArtifact = `${enrichmentRoot}/embeddings.json`;
-  const relationshipsArtifact = `${enrichmentRoot}/relationships.json`;
-  const relationshipProfileArtifact = `${enrichmentRoot}/relationship-profile.json`;
-  const relationshipDiagnosticsArtifact = `${enrichmentRoot}/relationship-diagnostics.json`;
+async function writeEnrichmentDescriptionArtifacts(input: {
+  project: KtxLocalProject;
+  enrichmentRoot: string;
+  syncId: string;
+  enrichment: KtxLocalScanEnrichmentResult;
+}): Promise<string[]> {
+  const descriptionsArtifact = `${input.enrichmentRoot}/descriptions.json`;
+  const embeddingsArtifact = `${input.enrichmentRoot}/embeddings.json`;
   const enrichmentArtifacts: string[] = [];
 
   if (
@@ -388,6 +497,67 @@ export async function writeLocalScanEnrichmentArtifacts(
       `scan(${LIVE_DATABASE_ADAPTER}): write enrichment embeddings syncId=${input.syncId}`,
     );
   }
+  return enrichmentArtifacts;
+}
+
+/**
+ * Promote the descriptions + embeddings into the queryable `_schema` manifest
+ * (and the raw enrichment artifacts) before relationship detection runs. The
+ * generated joins and the relationship diagnostics are deliberately left to the
+ * final write, so an interrupted relationship stage never loses the paid LLM
+ * enrichment and never emits empty relationship diagnostics.
+ */
+export async function writeLocalScanEnrichmentCheckpoint(
+  input: WriteLocalScanEnrichmentArtifactsInput,
+): Promise<WriteLocalScanEnrichmentArtifactsResult> {
+  if (input.dryRun) {
+    return { enrichmentArtifacts: [], manifestShards: [], manifestShardsWritten: 0 };
+  }
+
+  const enrichmentArtifacts = await writeEnrichmentDescriptionArtifacts({
+    project: input.project,
+    enrichmentRoot: artifactDir(input.connectionId, input.syncId),
+    syncId: input.syncId,
+    enrichment: input.enrichment,
+  });
+  const manifestResult = await writeLocalScanManifestShards({
+    project: input.project,
+    connectionId: input.connectionId,
+    syncId: input.syncId,
+    driver: input.driver,
+    snapshot: input.enrichment.snapshot,
+    descriptionUpdates: input.enrichment.descriptionUpdates,
+    dryRun: false,
+  });
+
+  return {
+    enrichmentArtifacts,
+    manifestShards: manifestResult.manifestShards,
+    manifestShardsWritten: manifestResult.manifestShardsWritten,
+  };
+}
+
+export async function writeLocalScanEnrichmentArtifacts(
+  input: WriteLocalScanEnrichmentArtifactsInput,
+): Promise<WriteLocalScanEnrichmentArtifactsResult> {
+  if (input.dryRun) {
+    return {
+      enrichmentArtifacts: [],
+      manifestShards: [],
+      manifestShardsWritten: 0,
+    };
+  }
+
+  const enrichmentRoot = artifactDir(input.connectionId, input.syncId);
+  const relationshipsArtifact = `${enrichmentRoot}/relationships.json`;
+  const relationshipProfileArtifact = `${enrichmentRoot}/relationship-profile.json`;
+  const relationshipDiagnosticsArtifact = `${enrichmentRoot}/relationship-diagnostics.json`;
+  const enrichmentArtifacts = await writeEnrichmentDescriptionArtifacts({
+    project: input.project,
+    enrichmentRoot,
+    syncId: input.syncId,
+    enrichment: input.enrichment,
+  });
   enrichmentArtifacts.push(relationshipsArtifact, relationshipProfileArtifact, relationshipDiagnosticsArtifact);
   const hasResolvedRelationships = input.enrichment.resolvedRelationships !== null;
   const relationshipArtifacts = buildKtxRelationshipArtifacts({
@@ -413,6 +583,7 @@ export async function writeLocalScanEnrichmentArtifacts(
     artifacts: relationshipArtifacts,
     profile: relationshipProfile,
     warnings: input.enrichment.warnings,
+    partial: input.enrichment.relationshipPartial,
     thresholds: input.relationshipSettings
       ? {
           acceptThreshold: input.relationshipSettings.acceptThreshold,

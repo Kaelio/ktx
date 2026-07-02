@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { gdriveConnectionToPullConfig, parseGdriveConnectionConfig } from '../../context/connections/gdrive-config.js';
 import { localConnectionToWarehouseDescriptor } from '../../context/connections/local-warehouse-descriptor.js';
 import { notionConnectionToPullConfig, parseNotionConnectionConfig } from '../../context/connections/notion-config.js';
 import { resolveKtxConfigReference } from '../core/config-reference.js';
@@ -7,6 +8,7 @@ import type { KtxLocalProject } from '../../context/project/project.js';
 import type { SqlAnalysisPort } from '../../context/sql-analysis/ports.js';
 import { DbtSourceAdapter } from './adapters/dbt/dbt.adapter.js';
 import { FakeSourceAdapter } from './adapters/fake/fake.adapter.js';
+import { GdriveSourceAdapter } from './adapters/gdrive/gdrive.adapter.js';
 import { HistoricSqlSourceAdapter } from './adapters/historic-sql/historic-sql.adapter.js';
 import { PostgresPgssReader } from './adapters/historic-sql/postgres-pgss-reader.js';
 import { resolveQueryHistoryScopeFloor } from './adapters/historic-sql/scope-floor.js';
@@ -38,6 +40,8 @@ import { pullConfigFromIntegrationConfig } from './adapters/lookml/pull-config.j
 import { createLocalMetabaseSourceAdapter } from './adapters/metabase/local-metabase.adapter.js';
 import type { MetabaseClientLogger } from './adapters/metabase/client.js';
 import type { MetabaseFetchLogger } from './adapters/metabase/fetch.js';
+import { createLocalSigmaSourceAdapter } from './adapters/sigma/local-sigma.adapter.js';
+import type { SigmaFetchLogger } from './adapters/sigma/fetch.js';
 import { MetricflowSourceAdapter } from './adapters/metricflow/metricflow.adapter.js';
 import { pullConfigFromMetricflowIntegration } from './adapters/metricflow/pull-config.js';
 import { LocalNotionRuntimeStore } from './adapters/notion/local-state-store.js';
@@ -71,7 +75,8 @@ export interface DefaultLocalIngestAdaptersOptions {
 type LocalIngestOperationalLogger = MetabaseClientLogger &
   MetabaseFetchLogger &
   LookerClientLogger &
-  NotionFetchLogger;
+  NotionFetchLogger &
+  SigmaFetchLogger;
 
 export function createDefaultLocalIngestAdapters(
   project: KtxLocalProject,
@@ -104,6 +109,10 @@ export function createDefaultLocalIngestAdapters(
     createLocalMetabaseSourceAdapter(project, {
       ...(options.logger ? { logger: options.logger } : {}),
     }),
+    createLocalSigmaSourceAdapter(project, {
+      ...(options.logger ? { logger: options.logger } : {}),
+    }),
+    new GdriveSourceAdapter(),
     new LookerSourceAdapter({
       clientFactory: {
         async createClient(config, ctx) {
@@ -272,6 +281,27 @@ export async function localPullConfigForAdapter(
       'Metabase scheduled pulls fan out by mapping. Call runLocalMetabaseIngest() or use `ktx ingest <metabase-source-id>` from the CLI.',
     );
   }
+  if (adapter.source === 'sigma') {
+    const sigmaConn = project.config.connections[connectionId];
+    const connectionMappings =
+      sigmaConn && 'connectionMappings' in sigmaConn && sigmaConn.connectionMappings != null
+        ? (sigmaConn.connectionMappings as Record<string, string>)
+        : undefined;
+    const workbookFilter =
+      sigmaConn && 'workbookFilter' in sigmaConn && sigmaConn.workbookFilter != null
+        ? (sigmaConn.workbookFilter as { includeArchived?: boolean; includeExplorations?: boolean; updatedSince?: string })
+        : undefined;
+    const dataModelFilter =
+      sigmaConn && 'dataModelFilter' in sigmaConn && sigmaConn.dataModelFilter != null
+        ? (sigmaConn.dataModelFilter as { updatedSince?: string })
+        : undefined;
+    return {
+      sigmaConnectionId: connectionId,
+      ...(connectionMappings ? { connectionMappings } : {}),
+      ...(workbookFilter ? { workbookFilter } : {}),
+      ...(dataModelFilter ? { dataModelFilter } : {}),
+    };
+  }
   const connection = project.config.connections[connectionId];
   if (adapter.source === HISTORIC_SQL_SOURCE_KEY) {
     if (options.historicSqlPullConfigOverride) {
@@ -352,6 +382,9 @@ export async function localPullConfigForAdapter(
       labels: Array.isArray(connection.labels) ? connection.labels.filter((l: unknown) => typeof l === 'string') : [],
       since: typeof connection.since === 'string' ? connection.since : undefined,
     };
+  }
+  if (adapter.source === 'gdrive') {
+    return await gdriveConnectionToPullConfig(parseGdriveConnectionConfig(connection));
   }
   if (adapter.source === 'metricflow') {
     const metricflow = connection.metricflow;

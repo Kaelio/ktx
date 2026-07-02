@@ -45,7 +45,13 @@ const scanWarningCodes = new Set<KtxScanWarning['code']>([
   'enrichment_failed',
   'description_fallback_used',
   'constraint_discovery_unauthorized',
+  'object_introspection_failed',
 ]);
+
+/** @internal */
+export function isKtxScanWarningCode(code: string): code is KtxScanWarning['code'] {
+  return scanWarningCodes.has(code as KtxScanWarning['code']);
+}
 
 function parseWarning(rawWarning: unknown, path: string): KtxScanWarning {
   if (

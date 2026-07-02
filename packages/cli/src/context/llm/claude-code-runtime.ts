@@ -6,6 +6,7 @@ import {
   type SDKResultMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import type { KtxModelRole } from '../../llm/types.js';
 import { createAbortError, isAbortError, throwIfAborted } from '../core/abort.js';
 import { createKtxClaudeCodeEnv } from './claude-code-env.js';
 import { resolveClaudeCodeModel } from './claude-code-models.js';
@@ -13,6 +14,7 @@ import type { RateLimitGovernor, RateLimitSignal } from './rate-limit-governor.j
 import { createClaudeSdkTools, mcpToolIds } from './runtime-tools.js';
 import type {
   KtxGenerateObjectInput,
+  KtxGenerateStructuredJsonInput,
   KtxGenerateTextInput,
   KtxLlmRuntimePort,
   KtxRuntimeToolSet,
@@ -20,6 +22,7 @@ import type {
   RunLoopParams,
   RunLoopResult,
   RunLoopStopReason,
+  SubprocessRuntimeForkSpec,
 } from './runtime-port.js';
 
 type QueryResult = AsyncIterable<SDKMessage> & {
@@ -389,9 +392,15 @@ export class ClaudeCodeKtxLlmRuntime implements KtxLlmRuntimePort {
     return result.result;
   }
 
-  async generateObject<TOutput, TSchema extends z.ZodType<TOutput>>(
-    input: KtxGenerateObjectInput<TOutput, TSchema>,
-  ): Promise<TOutput> {
+  // Structured generation has no tools, so generateObject and
+  // generateStructuredJson (the kill-boundary child path) share this one query.
+  private async runStructuredQuery(input: {
+    role: KtxModelRole;
+    prompt: string;
+    system?: string;
+    jsonSchema: Record<string, unknown>;
+    abortSignal?: AbortSignal;
+  }): Promise<SDKResultMessage> {
     const options = {
       ...baseOptions({
         projectDir: this.deps.projectDir,
@@ -403,19 +412,30 @@ export class ClaudeCodeKtxLlmRuntime implements KtxLlmRuntimePort {
         // 5 leaves headroom without enabling unbounded loops; the json_schema
         // constraint still forces the final answer to be the schema.
         maxTurns: 5,
-        tools: input.tools,
       }),
-      outputFormat: { type: 'json_schema' as const, schema: jsonSchema(input.schema as z.ZodType) },
+      outputFormat: { type: 'json_schema' as const, schema: input.jsonSchema },
     };
-    const startedAt = Date.now();
-    const result = await collectResultWithRateLimitRetry({
+    return collectResultWithRateLimitRetry({
       query: this.runQuery,
       prompt: [input.system, input.prompt].filter(Boolean).join('\n\n'),
       options,
-      allowedToolIds: new Set([...mcpToolIds(input.tools ?? {}), STRUCTURED_OUTPUT_TOOL_NAME]),
-      expectedMcpServerNames: expectedMcpServerNames(input.tools),
+      allowedToolIds: new Set([STRUCTURED_OUTPUT_TOOL_NAME]),
+      expectedMcpServerNames: new Set(),
       rateLimitGovernor: this.deps.rateLimitGovernor,
-      abortSignal: input.abortSignal,
+      ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+    });
+  }
+
+  async generateObject<TOutput, TSchema extends z.ZodType<TOutput>>(
+    input: KtxGenerateObjectInput<TOutput, TSchema>,
+  ): Promise<TOutput> {
+    const startedAt = Date.now();
+    const result = await this.runStructuredQuery({
+      role: input.role,
+      prompt: input.prompt,
+      ...(input.system !== undefined ? { system: input.system } : {}),
+      jsonSchema: jsonSchema(input.schema as z.ZodType),
+      ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     });
     input.onMetrics?.({ totalMs: Date.now() - startedAt, usage: claudeTokenUsage(result) });
     const error = resultError(result);
@@ -426,6 +446,28 @@ export class ClaudeCodeKtxLlmRuntime implements KtxLlmRuntimePort {
       throw new Error(`Claude Code query failed (${result.subtype})`);
     }
     return (input.schema as z.ZodType<TOutput>).parse(result.structured_output);
+  }
+
+  async generateStructuredJson(input: KtxGenerateStructuredJsonInput): Promise<unknown> {
+    const result = await this.runStructuredQuery({
+      role: input.role,
+      prompt: input.prompt,
+      ...(input.system !== undefined ? { system: input.system } : {}),
+      jsonSchema: input.jsonSchema,
+      ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+    });
+    const error = resultError(result);
+    if (error) {
+      throw error;
+    }
+    if (result.subtype !== 'success') {
+      throw new Error(`Claude Code query failed (${result.subtype})`);
+    }
+    return result.structured_output;
+  }
+
+  subprocessForkSpec(): SubprocessRuntimeForkSpec {
+    return { backend: 'claude-code', projectDir: this.deps.projectDir, modelSlots: this.deps.modelSlots };
   }
 
   async runAgentLoop(params: RunLoopParams): Promise<RunLoopResult> {

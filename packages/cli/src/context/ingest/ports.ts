@@ -18,6 +18,7 @@ import type { ToolContext } from '../../context/tools/base-tool.js';
 import type { ToolSession } from '../../context/tools/tool-session.js';
 import type { KnowledgeIndexPort } from '../../context/wiki/ports.js';
 import type { KnowledgeWikiService } from '../../context/wiki/knowledge-wiki.service.js';
+import type { ContentResultCache } from '../cache/content-result-cache.js';
 import type { CanonicalPin } from './canonical-pins.js';
 import type { IngestTraceLevel } from './ingest-trace.js';
 import type { IngestReportSnapshot } from './reports.js';
@@ -141,6 +142,7 @@ export interface IngestSessionWorktreePort {
 
 interface IngestSettingsPort {
   memoryIngestionModel: string;
+  cliVersion: string;
   probeRowCount: number;
   workUnitMaxConcurrency?: number;
   workUnitStepBudget?: number;
@@ -333,6 +335,7 @@ export interface IngestBundleRunnerDeps {
   provenance: IngestProvenancePort;
   reports: IngestReportsPort;
   canonicalPins: IngestCanonicalPinsPort;
+  contentCache: ContentResultCache;
   registry: SourceAdapterRegistryPort;
   diffSetService: DiffSetComputerPort;
   sessionWorktreeService: IngestSessionWorktreePort;

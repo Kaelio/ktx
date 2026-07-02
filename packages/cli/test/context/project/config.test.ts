@@ -86,6 +86,7 @@ connections:
           profileSampleRows: 10000,
           profileConcurrency: 4,
           validationConcurrency: 4,
+          detectionBudgetMs: 600000,
         },
       },
     });
@@ -427,6 +428,7 @@ scan:
     profileConcurrency: 3
     validationConcurrency: 2
     validationBudget: 0
+    detectionBudgetMs: 120000
 `);
 
     expect(config.scan.relationships).toEqual({
@@ -441,6 +443,7 @@ scan:
       profileConcurrency: 3,
       validationConcurrency: 2,
       validationBudget: 0,
+      detectionBudgetMs: 120000,
     });
     expect(serializeKtxProjectConfig(config)).toContain('enabled: false');
     expect(serializeKtxProjectConfig(config)).toContain('llmProposals: false');
@@ -453,6 +456,25 @@ scan:
     expect(serializeKtxProjectConfig(config)).toContain('profileConcurrency: 3');
     expect(serializeKtxProjectConfig(config)).toContain('validationConcurrency: 2');
     expect(serializeKtxProjectConfig(config)).toContain('validationBudget: 0');
+    expect(serializeKtxProjectConfig(config)).toContain('detectionBudgetMs: 120000');
+  });
+
+  it('defaults the relationship detection budget to ten minutes', () => {
+    expect(buildDefaultKtxProjectConfig().scan.relationships.detectionBudgetMs).toBe(600000);
+  });
+
+  it('rejects a non-positive or non-integer relationship detection budget', () => {
+    for (const value of ['0', '-1', '1.5']) {
+      const yaml = `
+scan:
+  relationships:
+    detectionBudgetMs: ${value}
+`;
+      expect(() => parseKtxProjectConfig(yaml)).toThrow(/scan\.relationships\.detectionBudgetMs/);
+      const validation = validateKtxProjectConfig(yaml);
+      expect(validation.ok).toBe(false);
+      expect(validation.issues.map((issue) => issue.path)).toContain('scan.relationships.detectionBudgetMs');
+    }
   });
 
   it('parses the scan relationship validation budget sentinel', () => {

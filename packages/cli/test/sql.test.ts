@@ -348,6 +348,40 @@ describe('runKtxSql', () => {
     expect(io.stderr()).toContain('does not support read-only SQL execution.');
   });
 
+  it('refuses a non-SQL (MongoDB) connection before invoking SQL analysis', async () => {
+    const projectDir = join(tempDir, 'project');
+    await initKtxProject({ projectDir });
+    await writeConnections(projectDir, { mongo: { driver: 'mongodb', url: 'mongodb://localhost:27017/app' } });
+    const sqlAnalysis = makeSqlAnalysis({ ok: true, error: null });
+    const createSqlAnalysis = vi.fn(() => sqlAnalysis);
+    const createScanConnector = vi.fn(async () => makeConnector());
+    const io = makeIo();
+
+    await expect(
+      runKtxSql(
+        {
+          command: 'execute',
+          projectDir,
+          connectionId: 'mongo',
+          sql: 'select 1',
+          maxRows: 1000,
+          output: 'pretty',
+          json: false,
+          cliVersion: '0.0.0-test',
+        },
+        io.io,
+        { createSqlAnalysis, createScanConnector },
+      ),
+    ).resolves.toBe(1);
+
+    // The non-SQL boundary is enforced before any SQL parser/daemon work, so a
+    // MongoDB connection never reaches dialect selection or read-only validation.
+    expect(createSqlAnalysis).not.toHaveBeenCalled();
+    expect(sqlAnalysis.validateReadOnly).not.toHaveBeenCalled();
+    expect(createScanConnector).not.toHaveBeenCalled();
+    expect(io.stderr()).toContain("non-SQL driver 'mongodb'");
+  });
+
   it('routes _ktx_federated through the shared federated executor', async () => {
     const projectDir = join(tempDir, 'project');
     await initKtxProject({ projectDir });

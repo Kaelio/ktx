@@ -194,6 +194,32 @@ function createTestMcpServer() {
   };
 }
 
+function capturingIo() {
+  let buf = '';
+  return {
+    io: { stdout: { write() {} }, stderr: { write(chunk: string) { buf += chunk; } } },
+    text: () => buf,
+    json: () =>
+      buf
+        .split('\n')
+        .filter((line) => line.trim().startsWith('{'))
+        .map((line) => JSON.parse(line) as Record<string, unknown>),
+  };
+}
+
+function initializeBody() {
+  return {
+    jsonrpc: '2.0' as const,
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'vitest', version: '0.0.0' },
+    },
+  };
+}
+
 describe('runKtxMcpHttpServer', () => {
   it('serves /health with project metadata', async () => {
     const handle = await runKtxMcpHttpServer({
@@ -208,11 +234,14 @@ describe('runKtxMcpHttpServer', () => {
       const port = (handle.server.address() as AddressInfo).port;
       const response = await get(port, '/health');
       expect(response.status).toBe(200);
-      expect(JSON.parse(response.body)).toEqual({
+      const body = JSON.parse(response.body);
+      expect(body).toMatchObject({
         status: 'ok',
         projectDir: '/tmp/ktx-project',
         port,
       });
+      expect(typeof body.uptimeMs).toBe('number');
+      expect(body.uptimeMs).toBeGreaterThanOrEqual(0);
     } finally {
       await handle.close();
     }
@@ -270,5 +299,56 @@ describe('runKtxMcpHttpServer', () => {
     } finally {
       await handle.close();
     }
+  });
+
+  it('logs session open and close with the session id', async () => {
+    const cap = capturingIo();
+    const handle = await runKtxMcpHttpServer({
+      projectDir: '/tmp/ktx-project',
+      host: '127.0.0.1',
+      port: 0,
+      allowedHosts: [],
+      allowedOrigins: [],
+      createMcpServer: createTestMcpServer(),
+      io: cap.io,
+    });
+    let sessionId: string | undefined;
+    try {
+      const port = (handle.server.address() as AddressInfo).port;
+      const response = await postJson(port, '/mcp', initializeBody());
+      sessionId = response.headers['mcp-session-id'] as string;
+      expect(sessionId).toBeTruthy();
+    } finally {
+      await handle.close();
+    }
+
+    const lines = cap.json();
+    expect(lines.find((line) => line.msg === 'session.open')?.sessionId).toBe(sessionId);
+    expect(lines.some((line) => line.msg === 'session.close' && line.sessionId === sessionId)).toBe(true);
+  });
+
+  it('never writes the bearer token to the log (headers are not logged)', async () => {
+    const cap = capturingIo();
+    const token = 'super-secret-token-value'; // pragma: allowlist secret
+    const handle = await runKtxMcpHttpServer({
+      projectDir: '/tmp/ktx-project',
+      host: '127.0.0.1',
+      port: 0,
+      token,
+      allowedHosts: [],
+      allowedOrigins: [],
+      createMcpServer: createTestMcpServer(),
+      io: cap.io,
+    });
+    try {
+      const port = (handle.server.address() as AddressInfo).port;
+      const response = await postJson(port, '/mcp', initializeBody(), { authorization: `Bearer ${token}` });
+      expect(response.status).toBe(200);
+    } finally {
+      await handle.close();
+    }
+
+    expect(cap.json().some((line) => line.msg === 'session.open')).toBe(true);
+    expect(cap.text()).not.toContain(token);
   });
 });

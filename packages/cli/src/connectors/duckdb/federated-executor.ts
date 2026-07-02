@@ -7,23 +7,10 @@ import type {
 import { normalizeQueryRows } from '../../context/connections/query-executor.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { attachTypeForDriver, type FederatedMember } from '../../context/connections/federation.js';
+import { toJsonSafeRows } from '../shared/duckdb-json-safe.js';
 
 function quoteDuckdbIdentifier(id: string): string {
   return `"${id.replaceAll('"', '""')}"`;
-}
-
-const MIN_SAFE_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
-const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-
-// DuckDB returns integer columns as JS bigint (unserializable by JSON). Values
-// in Number's safe range become Number; larger magnitudes become strings so a
-// BIGINT beyond 2^53 keeps its exact value instead of silently rounding.
-function jsonSafeBigint(value: bigint): number | string {
-  return value >= MIN_SAFE_BIGINT && value <= MAX_SAFE_BIGINT ? Number(value) : value.toString();
-}
-
-function toJsonSafeRows(rows: unknown[][]): unknown[][] {
-  return rows.map((row) => row.map((cell) => (typeof cell === 'bigint' ? jsonSafeBigint(cell) : cell)));
 }
 
 /** @internal */
@@ -34,13 +21,12 @@ export function buildAttachStatements(members: FederatedMember[], env: NodeJS.Pr
     alias: member.connectionId,
   }));
 
-  const loadStatements = [...new Set(attachments.map((a) => a.type))].map(
-    (type) => `INSTALL ${type}; LOAD ${type};`,
-  );
-  const attachStatements = attachments.map(
-    ({ type, url, alias }) =>
-      `ATTACH '${url.replaceAll("'", "''")}' AS ${quoteDuckdbIdentifier(alias)} (TYPE ${type}, READ_ONLY);`,
-  );
+  const loadTypes = [...new Set(attachments.map((a) => a.type).filter((type): type is string => type !== null))];
+  const loadStatements = loadTypes.map((type) => `INSTALL ${type}; LOAD ${type};`);
+  const attachStatements = attachments.map(({ type, url, alias }) => {
+    const options = type === null ? 'READ_ONLY' : `TYPE ${type}, READ_ONLY`;
+    return `ATTACH '${url.replaceAll("'", "''")}' AS ${quoteDuckdbIdentifier(alias)} (${options});`;
+  });
   return [...loadStatements, ...attachStatements];
 }
 

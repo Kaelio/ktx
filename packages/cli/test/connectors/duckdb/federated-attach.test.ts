@@ -135,6 +135,14 @@ describe('federatedAttachTarget', () => {
     expect(target).toContain('ssl_mode=REQUIRED');
   });
 
+  it('resolves a duckdb member to its database file path', () => {
+    const target = federatedAttachTarget(
+      { connectionId: 'dux', driver: 'duckdb', projectDir: '/p', connection: { driver: 'duckdb', path: 'a.duckdb' } },
+      {},
+    );
+    expect(target).toBe('/p/a.duckdb');
+  });
+
   it('throws for an unsupported driver', () => {
     expect(() => federatedAttachTarget(member({ driver: 'snowflake', connection: { driver: 'snowflake' } }), {})).toThrow(
       /cannot be attached/i,

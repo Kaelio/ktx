@@ -1,0 +1,9 @@
+{
+  "sigmaId": "dm-bbb222",
+  "name": "ARR Model",
+  "path": "Finance/ARR Model",
+  "latestVersion": 1,
+  "updatedAt": "2026-01-10T08:00:00Z",
+  "isArchived": false,
+  "spec": { "schemaVersion": 1, "pages": [] }
+}

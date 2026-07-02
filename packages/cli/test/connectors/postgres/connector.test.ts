@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { KtxQueryError } from '../../../src/errors.js';
 import { createPostgresLiveDatabaseIntrospection } from '../../../src/connectors/postgres/live-database-introspection.js';
 import { isKtxPostgresConnectionConfig, KtxPostgresScanConnector, postgresPoolConfigFromConfig, preparePostgresReadOnlyQuery, type KtxPostgresConnectionConfig, type KtxPostgresPoolFactory } from '../../../src/connectors/postgres/connector.js';
 import { tableRefSet } from '../../../src/context/scan/table-ref.js';
@@ -148,7 +149,7 @@ describe('KtxPostgresScanConnector', () => {
       database: 'analytics',
       user: 'reader',
       password: 'test-password', // pragma: allowlist secret
-      options: '-c search_path=analytics,public',
+      options: '-c search_path=analytics,public -c statement_timeout=30000',
       ssl: { rejectUnauthorized: false },
     });
     const libpqPreferConfig = postgresPoolConfigFromConfig({
@@ -399,6 +400,61 @@ describe('KtxPostgresScanConnector', () => {
     await expect(
       connector.executeReadOnly({ connectionId: 'warehouse', sql: 'delete from orders' }, { runId: 'scan-run-1' }),
     ).rejects.toThrow('Only read-only SELECT/WITH queries can be executed locally');
+  });
+
+  it('applies the resolved deadline as statement_timeout and maps a 57014 cancellation to KtxQueryError', () => {
+    expect(
+      postgresPoolConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'postgres',
+          host: 'db.example.test',
+          database: 'analytics',
+          username: 'reader',
+          password: 'test-password', // pragma: allowlist secret
+          query_timeout_ms: 5_000,
+        },
+      }).options,
+    ).toBe('-c search_path=public -c statement_timeout=5000');
+  });
+
+  it('maps a Postgres statement_timeout cancellation (57014) to a KtxQueryError', async () => {
+    const timeoutError = Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' });
+    const poolFactory: KtxPostgresPoolFactory = {
+      createPool() {
+        return {
+          async connect() {
+            return {
+              query: vi.fn(async () => {
+                throw timeoutError;
+              }),
+              release: vi.fn(),
+            };
+          },
+          end: vi.fn(async () => undefined),
+        };
+      },
+    };
+    const connector = new KtxPostgresScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'postgres',
+        host: 'db.example.test',
+        database: 'analytics',
+        username: 'reader',
+        password: 'test-password', // pragma: allowlist secret
+        query_timeout_ms: 5_000,
+      },
+      poolFactory,
+    });
+
+    const execution = connector.executeReadOnly(
+      { connectionId: 'warehouse', sql: 'select count(*) from orders' },
+      { runId: 'scan-run-1' },
+    );
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('query exceeded 5s');
+    await expect(execution).rejects.toMatchObject({ cause: timeoutError });
   });
 
   it('limits introspection to tables in tableScope', async () => {

@@ -1,5 +1,5 @@
 import type { KtxLlmRuntimePort } from '../../context/llm/runtime-port.js';
-import type { KtxDialect } from '../connections/dialects.js';
+import type { KtxSqlDialect } from '../connections/dialects.js';
 import type { KtxScanRelationshipConfig } from '../project/config.js';
 import type { KtxEnrichedRelationship, KtxEnrichedSchema, KtxRelationshipUpdate } from './enrichment-types.js';
 import {
@@ -11,6 +11,11 @@ import {
   discoverKtxCompositeRelationships,
   type KtxCompositeRelationshipCandidate,
 } from './relationship-composite-candidates.js';
+import {
+  createKtxRelationshipDetectionBudget,
+  type KtxRelationshipDetectionBudget,
+  type KtxRelationshipDetectionStopReason,
+} from './relationship-detection-budget.js';
 import { collectKtxFormalMetadataRelationships } from './relationship-formal-metadata.js';
 import {
   type KtxResolvedRelationshipDiscoveryCandidate,
@@ -25,6 +30,7 @@ import {
 } from './relationship-profiling.js';
 import { validateKtxRelationshipDiscoveryCandidates } from './relationship-validation.js';
 import type {
+  KtxProgressPort,
   KtxScanConnector,
   KtxScanContext,
   KtxScanEnrichmentSummary,
@@ -34,12 +40,14 @@ import type {
 
 export interface DiscoverKtxRelationshipsInput {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect | null;
   connector: KtxScanConnector;
   schema: KtxEnrichedSchema;
   context: KtxScanContext;
   settings: KtxScanRelationshipConfig;
   llmRuntime?: KtxLlmRuntimePort | null;
+  progress?: KtxProgressPort;
+  now?: () => number;
 }
 
 export interface DiscoverKtxRelationshipsResult {
@@ -51,6 +59,7 @@ export interface DiscoverKtxRelationshipsResult {
   statisticalValidation: KtxScanEnrichmentSummary['statisticalValidation'];
   llmRelationshipValidation: KtxScanEnrichmentSummary['llmRelationshipValidation'];
   warnings: KtxScanWarning[];
+  partial: { reason: KtxRelationshipDetectionStopReason } | null;
 }
 
 function relationshipFromResolved(candidate: KtxResolvedRelationshipDiscoveryCandidate): KtxEnrichedRelationship {
@@ -122,24 +131,29 @@ function compositeSummary(relationships: readonly KtxCompositeRelationshipCandid
 
 async function detectCompositeRelationships(input: {
   connectionId: string;
-  dialect: KtxDialect;
+  dialect: KtxSqlDialect | null;
   schema: KtxEnrichedSchema;
   profile: KtxRelationshipProfileArtifact;
   executor: KtxRelationshipReadOnlyExecutor | null;
   context: DiscoverKtxRelationshipsInput['context'];
   warnings: KtxScanWarning[];
+  budget: KtxRelationshipDetectionBudget;
+  progress?: KtxProgressPort;
 }): Promise<KtxCompositeRelationshipCandidate[]> {
-  if (!input.executor || !input.profile.sqlAvailable) {
+  if (!input.executor || !input.profile.sqlAvailable || !input.dialect) {
     return [];
   }
+  const dialect = input.dialect;
   try {
     const compositeDetection = await discoverKtxCompositeRelationships({
       connectionId: input.connectionId,
-      dialect: input.dialect,
+      dialect,
       schema: input.schema,
       profiles: input.profile,
       executor: input.executor,
       ctx: input.context,
+      budget: input.budget,
+      ...(input.progress ? { progress: input.progress } : {}),
     });
     for (const warning of compositeDetection.warnings) {
       input.warnings.push({
@@ -219,10 +233,16 @@ export async function discoverKtxRelationships(
   input: DiscoverKtxRelationshipsInput,
 ): Promise<DiscoverKtxRelationshipsResult> {
   const { executor, warnings } = sqlExecutor(input);
+  const budget = createKtxRelationshipDetectionBudget({
+    budgetMs: input.settings.detectionBudgetMs,
+    ...(input.context.signal ? { signal: input.context.signal } : {}),
+    ...(input.now ? { now: input.now } : {}),
+  });
   const formalMetadata = collectKtxFormalMetadataRelationships(input.schema);
   const profileCache = createKtxRelationshipProfileCache();
   const profile = await profileKtxRelationshipSchema({
     connectionId: input.connectionId,
+    driver: input.connector.driver,
     dialect: input.dialect,
     schema: input.schema,
     executor,
@@ -230,6 +250,8 @@ export async function discoverKtxRelationships(
     profileSampleRows: input.settings.profileSampleRows,
     profileConcurrency: input.settings.profileConcurrency,
     cache: profileCache,
+    budget,
+    ...(input.progress ? { progress: input.progress } : {}),
   });
   const deterministicCandidates: KtxRelationshipDiscoveryCandidate[] = generateKtxRelationshipDiscoveryCandidates(
     input.schema,
@@ -238,17 +260,21 @@ export async function discoverKtxRelationships(
       profiles: profile,
     },
   );
-  const llmProposalResult = input.settings.llmProposals
-    ? await proposeKtxRelationshipCandidatesWithLlm({
-        connectionId: input.connectionId,
-        schema: input.schema,
-        profile,
-        llmRuntime: input.llmRuntime ?? null,
-        settings: {
-          maxTablesPerBatch: input.settings.maxLlmTablesPerBatch,
-        },
-      })
-    : { candidates: [], warnings: [], llmCalls: 0, summary: 'skipped' as const };
+  // The LLM proposal is one more unit of relationship work, so it honors the same
+  // budget/abort gate as profiling, validation, and composite probing — a stage
+  // that already exhausted its budget (or was aborted) must not start a fresh call.
+  const llmProposalResult =
+    input.settings.llmProposals && !budget.check()
+      ? await proposeKtxRelationshipCandidatesWithLlm({
+          connectionId: input.connectionId,
+          schema: input.schema,
+          profile,
+          llmRuntime: input.llmRuntime ?? null,
+          settings: {
+            maxTablesPerBatch: input.settings.maxLlmTablesPerBatch,
+          },
+        })
+      : { candidates: [], warnings: [], llmCalls: 0, summary: 'skipped' as const };
   const candidates = mergeKtxRelationshipDiscoveryCandidates([
     ...deterministicCandidates,
     ...llmProposalResult.candidates,
@@ -269,6 +295,8 @@ export async function discoverKtxRelationships(
       concurrency: input.settings.validationConcurrency,
       validationBudget: input.settings.validationBudget,
     },
+    budget,
+    ...(input.progress ? { progress: input.progress } : {}),
   });
   const graph = resolveKtxRelationshipGraph({
     schema: input.schema,
@@ -288,6 +316,8 @@ export async function discoverKtxRelationships(
     executor,
     context: input.context,
     warnings,
+    budget,
+    ...(input.progress ? { progress: input.progress } : {}),
   });
   const inferredAccepted = nonFormalAcceptedRelationships({
     formalIds: formalMetadata.acceptedIds,
@@ -310,6 +340,7 @@ export async function discoverKtxRelationships(
     resolvedRelationships: graph.relationships,
   });
   const compositeCounts = compositeSummary(compositeRelationships);
+  const stopReason = budget.stopReason();
 
   return {
     relationshipUpdate: {
@@ -327,8 +358,11 @@ export async function discoverKtxRelationships(
     profile,
     resolvedRelationships: graph.relationships,
     compositeRelationships,
-    statisticalValidation: profile.sqlAvailable ? 'completed' : 'skipped',
+    // A budget/abort stop means profiling did not finish, so report it as not
+    // completed even though the SQL capability was available.
+    statisticalValidation: profile.sqlAvailable && !stopReason ? 'completed' : 'skipped',
     llmRelationshipValidation: llmProposalResult.summary,
     warnings,
+    partial: stopReason ? { reason: stopReason } : null,
   };
 }

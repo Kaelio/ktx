@@ -3,8 +3,11 @@ import { DefaultLookerConnectionClientFactory } from './context/ingest/adapters/
 import type { LookerClient } from './context/ingest/adapters/looker/client.js';
 import type { MetabaseRuntimeClient } from './context/ingest/adapters/metabase/client-port.js';
 import { type NotionBotInfo, NotionClient } from './context/ingest/adapters/notion/notion-client.js';
+import { parseGdriveConnectionConfig, resolveGdriveServiceAccountKey } from './context/connections/gdrive-config.js';
 import { createLocalLookerCredentialResolver } from './context/ingest/adapters/looker/local-looker.adapter.js';
 import { metabaseRuntimeConfigFromLocalConnection } from './context/ingest/adapters/metabase/local-metabase.adapter.js';
+import { createGoogleDocsClients, verifyGdriveFolderAndCountDocs } from './context/ingest/adapters/gdrive/gdrive-client.js';
+import { gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
 import { testRepoConnection } from './context/ingest/repo-fetch.js';
 import { federatedConnectionListing } from './context/connections/federation.js';
 import { getDriverRegistration } from './context/connections/drivers.js';
@@ -31,6 +34,10 @@ export type KtxConnectionArgs =
 type MetabaseTestPort = Pick<MetabaseRuntimeClient, 'testConnection' | 'getDatabases' | 'cleanup'>;
 type LookerTestPort = Pick<LookerClient, 'testConnection'>;
 type NotionTestPort = Pick<NotionClient, 'retrieveBotUser'>;
+type GdriveTestPort = Pick<
+  ReturnType<typeof createGoogleDocsClients>['drive'],
+  'listFiles' | 'getFile'
+>;
 type TestRepoConnection = typeof testRepoConnection;
 
 export interface KtxConnectionDeps {
@@ -38,11 +45,13 @@ export interface KtxConnectionDeps {
   createMetabaseClient?: (project: KtxLocalProject, connectionId: string) => Promise<MetabaseTestPort>;
   createLookerClient?: (project: KtxLocalProject, connectionId: string) => Promise<LookerTestPort>;
   createNotionClient?: (project: KtxLocalProject, connectionId: string) => Promise<NotionTestPort>;
+  createGdriveClient?: (project: KtxLocalProject, connectionId: string) => Promise<GdriveTestPort>;
   testRepoConnection?: TestRepoConnection;
 }
 
 const SUPPORTED_TEST_DRIVERS = [
   'sqlite',
+  'duckdb',
   'postgres',
   'mysql',
   'clickhouse',
@@ -52,6 +61,7 @@ const SUPPORTED_TEST_DRIVERS = [
   'metabase',
   'looker',
   'notion',
+  'gdrive',
   'dbt',
   'metricflow',
   'lookml',
@@ -183,6 +193,34 @@ async function testNotionConnection(
   return { bot: describeNotionBot(bot) };
 }
 
+async function createDefaultGdriveClient(
+  project: KtxLocalProject,
+  connectionId: string,
+): Promise<GdriveTestPort> {
+  const connection = project.config.connections[connectionId];
+  if (!connection) {
+    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
+  }
+  const parsed = parseGdriveConnectionConfig(connection);
+  const keyText = await resolveGdriveServiceAccountKey(parsed.service_account_key_ref);
+  const key = gdriveServiceAccountKeySchema.parse(JSON.parse(keyText));
+  return createGoogleDocsClients(key).drive;
+}
+
+async function testGdriveConnection(
+  project: KtxLocalProject,
+  connectionId: string,
+  createClient: (project: KtxLocalProject, connectionId: string) => Promise<GdriveTestPort>,
+): Promise<{ docs: number }> {
+  const connection = project.config.connections[connectionId];
+  if (!connection) {
+    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
+  }
+  const parsed = parseGdriveConnectionConfig(connection);
+  const client = await createClient(project, connectionId);
+  return { docs: await verifyGdriveFolderAndCountDocs(client, parsed.folder_id) };
+}
+
 interface GitConnectionFields {
   repoUrl: string;
   authToken: string | null;
@@ -269,6 +307,15 @@ async function testConnectionByDriver(
       deps.createNotionClient ?? createDefaultNotionClient,
     );
     return { driver, detailKey: 'Bot', detailValue: result.bot };
+  }
+
+  if (driver === 'gdrive') {
+    const result = await testGdriveConnection(
+      project,
+      connectionId,
+      deps.createGdriveClient ?? createDefaultGdriveClient,
+    );
+    return { driver, detailKey: 'Docs', detailValue: String(result.docs) };
   }
 
   if (driver === 'dbt' || driver === 'metricflow' || driver === 'lookml') {

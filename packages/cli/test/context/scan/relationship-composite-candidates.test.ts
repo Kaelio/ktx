@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { getDialectForDriver } from '../../../src/context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../../src/context/connections/dialects.js';
 import { snapshotToKtxEnrichedSchema } from '../../../src/context/scan/local-enrichment.js';
 import { loadKtxRelationshipBenchmarkFixture, maskKtxRelationshipBenchmarkSnapshot } from '../../../src/context/scan/relationship-benchmarks.js';
 import { discoverKtxCompositeRelationships } from '../../../src/context/scan/relationship-composite-candidates.js';
@@ -42,7 +42,8 @@ describe('composite relationship discovery detector', () => {
     const executor = new TestSqliteExecutor(fixture.dataPath ?? '');
     const profiles = await profileKtxRelationshipSchema({
       connectionId: snapshot.connectionId,
-      dialect: getDialectForDriver(snapshot.driver),
+      driver: snapshot.driver,
+      dialect: getSqlDialectForDriver(snapshot.driver),
       schema,
       executor,
       ctx: { runId: 'test:composite-profile' },
@@ -50,7 +51,7 @@ describe('composite relationship discovery detector', () => {
 
     const result = await discoverKtxCompositeRelationships({
       connectionId: snapshot.connectionId,
-      dialect: getDialectForDriver(snapshot.driver),
+      dialect: getSqlDialectForDriver(snapshot.driver),
       schema,
       profiles,
       executor,

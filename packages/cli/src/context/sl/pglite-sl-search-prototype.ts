@@ -93,7 +93,7 @@ async function loadCandidates(
       listed.files
         .map((path) => path.split('/')[1])
         .filter((connectionId): connectionId is string =>
-          typeof connectionId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(connectionId),
+          typeof connectionId === 'string' && /^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(connectionId),
         ),
     ),
   ].sort();

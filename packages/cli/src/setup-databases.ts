@@ -64,12 +64,14 @@ const execFileAsync = promisify(execFileCallback);
 
 export type KtxSetupDatabaseDriver =
   | 'sqlite'
+  | 'duckdb'
   | 'postgres'
   | 'mysql'
   | 'clickhouse'
   | 'sqlserver'
   | 'bigquery'
-  | 'snowflake';
+  | 'snowflake'
+  | 'mongodb';
 
 export interface KtxSetupDatabasesArgs {
   projectDir: string;
@@ -156,7 +158,9 @@ const DRIVER_OPTIONS: Array<{ value: KtxSetupDatabaseDriver; label: string }> = 
   { value: 'mysql', label: 'MySQL' },
   { value: 'clickhouse', label: 'ClickHouse' },
   { value: 'sqlserver', label: 'SQL Server' },
+  { value: 'mongodb', label: 'MongoDB' },
   { value: 'sqlite', label: 'SQLite' },
+  { value: 'duckdb', label: 'DuckDB' },
 ];
 
 const DRIVER_LABELS = Object.fromEntries(DRIVER_OPTIONS.map((option) => [option.value, option.label])) as Record<
@@ -172,12 +176,14 @@ const HISTORIC_SQL_DIALECT_BY_DRIVER: Partial<Record<KtxSetupDatabaseDriver, His
 
 const DEFAULT_CONNECTION_IDS: Record<KtxSetupDatabaseDriver, string> = {
   sqlite: 'sqlite-local',
+  duckdb: 'duckdb-local',
   postgres: 'postgres-warehouse',
   mysql: 'mysql-warehouse',
   clickhouse: 'clickhouse-warehouse',
   sqlserver: 'sqlserver-warehouse',
   bigquery: 'bigquery-warehouse',
   snowflake: 'snowflake-warehouse',
+  mongodb: 'mongodb-source',
 };
 
 interface ScopeDiscoverySpec {
@@ -228,6 +234,13 @@ const SCOPE_DISCOVERY_SPECS: Partial<Record<KtxSetupDatabaseDriver, ScopeDiscove
     noun: 'database',
     nounPlural: 'databases',
     promptLabel: 'ClickHouse databases',
+    configArrayField: 'databases',
+    suggest: defaultSuggest,
+  },
+  mongodb: {
+    noun: 'database',
+    nounPlural: 'databases',
+    promptLabel: 'MongoDB databases',
     configArrayField: 'databases',
     suggest: defaultSuggest,
   },
@@ -310,7 +323,7 @@ function unique(values: string[]): string[] {
 }
 
 function assertSafeDatabaseConnectionId(connectionId: string): void {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(connectionId)) {
+  if (!/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(connectionId)) {
     throw new Error(`Unsafe connection id: ${connectionId}`);
   }
 }
@@ -748,6 +761,41 @@ async function buildUrlConnectionConfig(input: {
   }
 }
 
+async function buildMongoConnectionConfig(input: {
+  connectionId: string;
+  args: KtxSetupDatabasesArgs;
+  prompts: KtxSetupDatabasesPromptAdapter;
+  existingConnection?: KtxProjectConnectionConfig;
+}): Promise<KtxProjectConnectionConfig | null | 'back'> {
+  if (input.args.inputMode === 'disabled' && !input.args.databaseUrl) return null;
+
+  const rawUrl =
+    input.args.databaseUrl ??
+    (await promptText(
+      input.prompts,
+      'MongoDB connection URL\nFor example mongodb+srv://user:pass@cluster.example.net/app.', // pragma: allowlist secret
+      stringConfigField(input.existingConnection, 'url'),
+    ));
+  if (rawUrl === undefined) return 'back';
+  if (!rawUrl) return null;
+
+  const url = normalizeInputReference(rawUrl);
+  const scope = scriptedScopeConfigForDriver('mongodb', input.args.databaseSchemas);
+
+  if (url.startsWith('env:') || url.startsWith('file:')) {
+    return { driver: 'mongodb', url, ...scope };
+  }
+  if (urlHasCredentials(url)) {
+    const ref = await writeProjectLocalSecretReference({
+      projectDir: input.args.projectDir,
+      fileName: `${input.connectionId}-url`,
+      value: url,
+    });
+    return { driver: 'mongodb', url: ref, ...scope };
+  }
+  return { driver: 'mongodb', url, ...scope };
+}
+
 async function buildConnectionConfig(input: {
   driver: KtxSetupDatabaseDriver;
   connectionId: string;
@@ -768,9 +816,29 @@ async function buildConnectionConfig(input: {
     if (path === undefined) return 'back';
     return path ? { driver: 'sqlite', path } : null;
   }
+  if (driver === 'duckdb') {
+    if (args.inputMode === 'disabled' && !args.databaseUrl) return null;
+    const path =
+      args.databaseUrl ??
+      (await promptText(
+        prompts,
+        'DuckDB database file\nEnter a relative or absolute path, for example ./warehouse.duckdb.',
+        stringConfigField(input.existingConnection, 'path'),
+      ));
+    if (path === undefined) return 'back';
+    return path ? { driver: 'duckdb', path } : null;
+  }
   if (driver === 'postgres' || driver === 'mysql' || driver === 'clickhouse' || driver === 'sqlserver') {
     return await buildUrlConnectionConfig({
       driver,
+      connectionId: input.connectionId,
+      args,
+      prompts,
+      existingConnection: input.existingConnection,
+    });
+  }
+  if (driver === 'mongodb') {
+    return await buildMongoConnectionConfig({
       connectionId: input.connectionId,
       args,
       prompts,
@@ -1364,9 +1432,11 @@ async function maybeConfigureDatabaseScope(input: {
   const project = await loadKtxProject({ projectDir: input.projectDir });
   const connection = project.config.connections[input.connectionId];
   const driver = normalizeDriver(connection?.driver);
-  if (!driver || driver === 'sqlite') return okValidateResult();
+  const spec = driver ? SCOPE_DISCOVERY_SPECS[driver] : undefined;
+  // Drivers with no scope spec are single-namespace (sqlite, duckdb): there is no
+  // schema to choose, so skip the scope picker and ingest every table.
+  if (!driver || !spec) return okValidateResult();
 
-  const spec = SCOPE_DISCOVERY_SPECS[driver];
   const existingTables = connection?.enabled_tables;
   const hasExistingTables = Array.isArray(existingTables) && existingTables.length > 0;
   const existingScope = spec ? configuredScopeValues(connection, spec) : [];

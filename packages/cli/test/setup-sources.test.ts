@@ -281,6 +281,35 @@ describe('setup sources step', () => {
     expect((await readConfig()).connections['notion-main']?.last_successful_cursor).toBeUndefined();
   });
 
+  it('writes Google Drive config with a non-recursive default', async () => {
+    await addPrimarySource();
+    const validateGdrive = vi.fn(async () => ({ ok: true as const, detail: 'docs=2' }));
+
+    await expect(
+      runKtxSetupSourcesStep(
+        {
+          projectDir,
+          inputMode: 'disabled',
+          source: 'gdrive',
+          sourceConnectionId: 'gdrive-main',
+          gdriveServiceAccountKeyRef: 'file:/tmp/gdrive-key.json', // pragma: allowlist secret
+          gdriveFolderId: 'folder-123',
+          runInitialSourceIngest: false,
+          skipSources: false,
+        },
+        makeIo().io,
+        { validateGdrive },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['gdrive-main'] });
+
+    expect((await readConfig()).connections['gdrive-main']).toMatchObject({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/gdrive-key.json', // pragma: allowlist secret
+      folder_id: 'folder-123',
+      recursive: false,
+    });
+  });
+
   it('rejects --source-api-key-ref for Notion and points at --source-auth-token-ref', async () => {
     await addPrimarySource();
     const io = makeIo();
@@ -766,6 +795,7 @@ describe('setup sources step', () => {
     );
     const options = vi.mocked(testPrompts.multiselect).mock.calls[0]?.[0].options ?? [];
     expect(options).toContainEqual({ value: 'notion', label: 'Notion' });
+    expect(options).toContainEqual({ value: 'gdrive', label: 'Google Drive' });
   });
 
   it('shows already configured context sources in the interactive checklist', async () => {
@@ -1334,6 +1364,18 @@ describe('setup sources step', () => {
         deps: { validateNotion: vi.fn(async () => ({ ok: true as const, detail: 'roots=0' })) },
         expectedLabel: 'Notion',
       },
+      {
+        source: 'sigma',
+        connectionId: 'sigma-main',
+        connection: {
+          driver: 'sigma',
+          api_url: 'https://api.sigmacomputing.com',
+          client_id: 'my-client-id',
+          client_secret_ref: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+        },
+        deps: { validateSigma: vi.fn(async () => ({ ok: true as const, detail: 'Sigma API connection verified' })) },
+        expectedLabel: 'Sigma Computing',
+      },
     ];
 
     for (const testCase of cases) {
@@ -1429,6 +1471,39 @@ describe('setup sources step', () => {
       auth_token_ref: 'env:NOTION_TOKEN',
       crawl_mode: 'selected_roots',
       root_page_ids: ['new-page'],
+    });
+  });
+
+  it('edits an existing Google Drive source with the current key ref, folder id, and recursion flag', async () => {
+    await addPrimarySource();
+    await addConnection('gdrive-main', {
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/old-key.json', // pragma: allowlist secret
+      folder_id: 'old-folder',
+      recursive: false,
+    });
+    const testPrompts = prompts({
+      multiselect: [['gdrive']],
+      select: ['edit:gdrive-main', 'true', 'done'],
+      text: ['file:/tmp/new-key.json', 'new-folder'],
+    });
+
+    await expect(
+      runKtxSetupSourcesStep(
+        { projectDir, inputMode: 'auto', runInitialSourceIngest: false, skipSources: false },
+        makeIo().io,
+        {
+          prompts: testPrompts,
+          validateGdrive: vi.fn(async () => ({ ok: true as const, detail: 'docs=3' })),
+        },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['gdrive-main'] });
+
+    expect((await readConfig()).connections['gdrive-main']).toMatchObject({
+      driver: 'gdrive',
+      service_account_key_ref: 'file:/tmp/new-key.json', // pragma: allowlist secret
+      folder_id: 'new-folder',
+      recursive: true,
     });
   });
 
@@ -1971,5 +2046,207 @@ describe('setup sources step', () => {
       source_dir: dbtDir,
       path: 'staging',
     });
+  });
+
+  it('writes Sigma config in non-interactive mode', async () => {
+    await addPrimarySource();
+    const validateSigma = vi.fn(async () => ({ ok: true as const, detail: 'Sigma API connection verified' }));
+
+    await expect(
+      runKtxSetupSourcesStep(
+        {
+          projectDir,
+          inputMode: 'disabled',
+          source: 'sigma',
+          sourceConnectionId: 'sigma-prod',
+          sourceUrl: 'https://api.sigmacomputing.com',
+          sourceClientId: 'my-client-id',
+          sourceClientSecretRef: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+          runInitialSourceIngest: false,
+          skipSources: false,
+        },
+        makeIo().io,
+        { validateSigma },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['sigma-prod'] });
+
+    expect((await readConfig()).connections['sigma-prod']).toMatchObject({
+      driver: 'sigma',
+      api_url: 'https://api.sigmacomputing.com',
+      client_id: 'my-client-id',
+      client_secret_ref: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+    });
+    expect(validateSigma).toHaveBeenCalledOnce();
+  });
+
+  it('defaults Sigma api_url when --source-url is omitted', async () => {
+    await addPrimarySource();
+    const validateSigma = vi.fn(async () => ({ ok: true as const, detail: 'Sigma API connection verified' }));
+
+    await expect(
+      runKtxSetupSourcesStep(
+        {
+          projectDir,
+          inputMode: 'disabled',
+          source: 'sigma',
+          sourceConnectionId: 'sigma-main',
+          sourceClientId: 'my-client-id',
+          sourceClientSecretRef: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+          runInitialSourceIngest: false,
+          skipSources: false,
+        },
+        makeIo().io,
+        { validateSigma },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['sigma-main'] });
+
+    expect((await readConfig()).connections['sigma-main']).toMatchObject({
+      driver: 'sigma',
+      api_url: 'https://api.sigmacomputing.com',
+    });
+  });
+
+  it('rejects --source-auth-token-ref for Sigma and points at --source-client-secret-ref', async () => {
+    await addPrimarySource();
+    const io = makeIo();
+
+    await expect(
+      runKtxSetupSourcesStep(
+        {
+          projectDir,
+          inputMode: 'disabled',
+          source: 'sigma',
+          sourceConnectionId: 'sigma-main',
+          sourceClientId: 'my-client-id',
+          sourceAuthTokenRef: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+          runInitialSourceIngest: false,
+          skipSources: false,
+        },
+        io.io,
+        {},
+      ),
+    ).resolves.toEqual({ status: 'failed', projectDir });
+
+    expect(io.stderr()).toContain('--source-auth-token-ref does not apply to --source sigma; use --source-client-secret-ref.');
+  });
+
+  it('runs interactive Sigma setup with API URL, client ID, and env credential', async () => {
+    await addPrimarySource();
+    const validateSigma = vi.fn(async () => ({ ok: true as const, detail: 'Sigma API connection verified' }));
+    const testPrompts = prompts({
+      multiselect: [['sigma']],
+      select: ['env', 'done'],
+      // connection name, API URL (default accepted), client ID
+      text: ['sigma-main', 'https://api.sigmacomputing.com', 'my-client-id'],
+    });
+
+    await expect(
+      runKtxSetupSourcesStep(
+        { projectDir, inputMode: 'auto', runInitialSourceIngest: false, skipSources: false },
+        makeIo().io,
+        { prompts: testPrompts, validateSigma },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['sigma-main'] });
+
+    expect(testPrompts.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: textInputPrompt(connectionNamePrompt('Sigma Computing')),
+        initialValue: 'sigma-main',
+      }),
+    );
+    expect(testPrompts.text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: textInputPrompt('Sigma API URL') }),
+    );
+    expect(testPrompts.text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: textInputPrompt('Sigma client ID') }),
+    );
+    expect(testPrompts.select).toHaveBeenCalledWith({
+      message: 'How should ktx find your Sigma client secret?',
+      options: [
+        { value: 'paste', label: 'Paste a key and save it as a local secret file' },
+        { value: 'env', label: 'Use SIGMA_CLIENT_SECRET from the environment' },
+        { value: 'back', label: 'Back' },
+      ],
+    });
+    expect((await readConfig()).connections['sigma-main']).toMatchObject({
+      driver: 'sigma',
+      api_url: 'https://api.sigmacomputing.com',
+      client_id: 'my-client-id',
+      client_secret_ref: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+    });
+  });
+
+  it('edits an existing Sigma source with current URL and client ID as defaults', async () => {
+    await addPrimarySource();
+    await addConnection('sigma-main', {
+      driver: 'sigma',
+      api_url: 'https://api.sigmacomputing.com',
+      client_id: 'old-client-id',
+      client_secret_ref: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+    });
+    const testPrompts = prompts({
+      multiselect: [['sigma']],
+      select: ['edit:sigma-main', 'keep', 'done'],
+      // API URL and new client ID
+      text: ['https://api.sigmacomputing.com', 'new-client-id'],
+    });
+
+    await expect(
+      runKtxSetupSourcesStep(
+        { projectDir, inputMode: 'auto', runInitialSourceIngest: false, skipSources: false },
+        makeIo().io,
+        {
+          prompts: testPrompts,
+          validateSigma: vi.fn(async () => ({ ok: true as const, detail: 'Sigma API connection verified' })),
+        },
+      ),
+    ).resolves.toEqual({ status: 'ready', projectDir, connectionIds: ['sigma-main'] });
+
+    expect(testPrompts.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: textInputPrompt('Sigma API URL'),
+        initialValue: 'https://api.sigmacomputing.com',
+      }),
+    );
+    expect(testPrompts.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: textInputPrompt('Sigma client ID'),
+        initialValue: 'old-client-id',  // pre-filled from existing connection
+      }),
+    );
+    expect(testPrompts.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'How should ktx find your Sigma client secret?',
+        options: expect.arrayContaining([{ value: 'keep', label: 'Keep existing credential' }]),
+      }),
+    );
+    expect((await readConfig()).connections['sigma-main']).toMatchObject({
+      driver: 'sigma',
+      client_id: 'new-client-id',
+      client_secret_ref: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+    });
+  });
+
+  it('fails Sigma setup when validation rejects the credentials', async () => {
+    await addPrimarySource();
+    const io = makeIo();
+
+    const result = await runKtxSetupSourcesStep(
+      {
+        projectDir,
+        inputMode: 'disabled',
+        source: 'sigma',
+        sourceConnectionId: 'sigma-main',
+        sourceClientId: 'bad-client-id',
+        sourceClientSecretRef: 'env:SIGMA_CLIENT_SECRET', // pragma: allowlist secret
+        runInitialSourceIngest: false,
+        skipSources: false,
+      },
+      io.io,
+      { validateSigma: vi.fn(async () => ({ ok: false as const, message: 'Sigma auth failed (401): Unauthorized' })) },
+    );
+
+    expect(result.status).toBe('failed');
+    expect(io.stderr()).toContain('Sigma auth failed (401): Unauthorized');
   });
 });

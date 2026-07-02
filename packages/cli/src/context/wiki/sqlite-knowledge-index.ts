@@ -85,6 +85,22 @@ function parseEmbedding(raw: string | null): number[] | null {
   }
 }
 
+/** A provided-but-empty allowlist means "no page is in scope", distinct from an absent (unfiltered) one. */
+function isEmptyAllowlist(allowedPaths: readonly string[] | undefined): boolean {
+  return allowedPaths !== undefined && allowedPaths.length === 0;
+}
+
+/** Build a `<keyword> path IN (?, …)` fragment so the scope filter applies inside the query, before any LIMIT. */
+function pathInClause(
+  keyword: 'AND' | 'WHERE',
+  allowedPaths: readonly string[] | undefined,
+): { sql: string; params: string[] } {
+  if (allowedPaths === undefined || allowedPaths.length === 0) {
+    return { sql: '', params: [] };
+  }
+  return { sql: ` ${keyword} path IN (${allowedPaths.map(() => '?').join(', ')})`, params: [...allowedPaths] };
+}
+
 function normalizeFtsQuery(query: string): string {
   const terms = query
     .toLowerCase()
@@ -217,23 +233,28 @@ export class SqliteKnowledgeIndex {
     );
   }
 
-  searchLexicalCandidates(input: { queryText: string; limit: number }): WikiSqliteLaneCandidate[] {
+  searchLexicalCandidates(input: {
+    queryText: string;
+    limit: number;
+    allowedPaths?: readonly string[];
+  }): WikiSqliteLaneCandidate[] {
     const ftsQuery = normalizeFtsQuery(input.queryText);
-    if (!ftsQuery) {
+    if (!ftsQuery || isEmptyAllowlist(input.allowedPaths)) {
       return [];
     }
 
+    const pathFilter = pathInClause('AND', input.allowedPaths);
     const rows = this.db
       .prepare(
         `
         SELECT path, bm25(knowledge_pages_fts) AS rank
         FROM knowledge_pages_fts
-        WHERE knowledge_pages_fts MATCH ?
+        WHERE knowledge_pages_fts MATCH ?${pathFilter.sql}
         ORDER BY rank ASC, path ASC
         LIMIT ?
       `,
       )
-      .all(ftsQuery, Math.max(1, input.limit)) as SearchRow[];
+      .all(ftsQuery, ...pathFilter.params, Math.max(1, input.limit)) as SearchRow[];
 
     return rows.map((row, index) => ({
       id: row.path,
@@ -243,16 +264,25 @@ export class SqliteKnowledgeIndex {
     }));
   }
 
-  searchSemanticCandidates(input: { queryEmbedding: number[]; limit: number }): WikiSqliteLaneCandidate[] {
+  searchSemanticCandidates(input: {
+    queryEmbedding: number[];
+    limit: number;
+    allowedPaths?: readonly string[];
+  }): WikiSqliteLaneCandidate[] {
+    if (isEmptyAllowlist(input.allowedPaths)) {
+      return [];
+    }
+
+    const pathFilter = pathInClause('WHERE', input.allowedPaths);
     const rows = this.db
       .prepare(
         `
         SELECT path, embedding_json
-        FROM knowledge_pages
+        FROM knowledge_pages${pathFilter.sql}
         ORDER BY path ASC
       `,
       )
-      .all() as IndexedPageRow[];
+      .all(...pathFilter.params) as IndexedPageRow[];
 
     return rows
       .flatMap((row) => {

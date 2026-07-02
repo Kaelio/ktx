@@ -2,6 +2,26 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MemoryIngestStatus } from '../src/context/memory/memory-runs.js';
 import type { KtxLocalProject } from '../src/context/project/project.js';
 import { runKtxTextIngest, type TextMemoryIngestPort } from '../src/text-ingest.js';
+import type { VerbatimIngestItem, VerbatimIngestorPort } from '../src/verbatim-ingest.js';
+
+function fakeVerbatim(
+  options: { calls?: VerbatimIngestItem[]; throwOn?: (item: VerbatimIngestItem) => boolean } = {},
+): VerbatimIngestorPort {
+  return {
+    ingest: vi.fn(async (item: VerbatimIngestItem) => {
+      options.calls?.push(item);
+      if (options.throwOn?.(item)) {
+        throw new Error(`verbatim write failed for ${item.origin.kind}`);
+      }
+      return {
+        pageKey: item.origin.kind === 'file' && item.origin.path ? 'haversine' : 'page',
+        outcome: 'written' as const,
+        connections: item.connectionId ? [item.connectionId] : [],
+        commitHash: null,
+      };
+    }),
+  };
+}
 
 function makeIo(options: { isTTY?: boolean } = {}) {
   let stdout = '';
@@ -335,5 +355,103 @@ describe('runKtxTextIngest', () => {
       ),
     ).resolves.toBe(1);
     expect(emptyIo.stderr()).toContain('Text item "text-1" is empty');
+  });
+
+  it('routes verbatim file items to the verbatim ingestor instead of the memory agent', async () => {
+    const io = makeIo();
+    const calls: VerbatimIngestItem[] = [];
+    const verbatim = fakeVerbatim({ calls });
+    const createMemoryIngest = vi.fn(() => fakeIngest());
+
+    await expect(
+      runKtxTextIngest(
+        {
+          projectDir: '/tmp/project',
+          texts: [],
+          files: ['/tmp/docs/haversine.md'],
+          userId: 'local-cli',
+          json: true,
+          failFast: false,
+          verbatim: true,
+        },
+        io.io,
+        {
+          loadProject: vi.fn(async () => fakeProject()),
+          createMemoryIngest,
+          createVerbatimIngestor: vi.fn(() => verbatim),
+          readFile: vi.fn(async (path) => `file:${path}`),
+          now: () => 1,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(createMemoryIngest).not.toHaveBeenCalled();
+    expect(verbatim.ingest).toHaveBeenCalledTimes(1);
+    expect(calls[0]?.origin).toEqual({ kind: 'file', path: '/tmp/docs/haversine.md' });
+    expect(calls[0]?.content).toBe('file:/tmp/docs/haversine.md');
+    expect(JSON.parse(io.stdout())).toMatchObject({
+      status: 'done',
+      results: [{ status: 'done', captured: { wiki: ['haversine'] } }],
+    });
+  });
+
+  it('routes verbatim inline text with a text origin and forwards the connection id', async () => {
+    const io = makeIo();
+    const calls: VerbatimIngestItem[] = [];
+    const verbatim = fakeVerbatim({ calls });
+
+    await expect(
+      runKtxTextIngest(
+        {
+          projectDir: '/tmp/project',
+          texts: ['# Title\n\nbody'],
+          files: [],
+          connectionId: 'db1',
+          userId: 'local-cli',
+          json: true,
+          failFast: false,
+          verbatim: true,
+        },
+        io.io,
+        {
+          loadProject: vi.fn(async () => fakeProject()),
+          createVerbatimIngestor: vi.fn(() => verbatim),
+          now: () => 1,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(calls[0]?.origin).toEqual({ kind: 'text' });
+    expect(calls[0]?.content).toBe('# Title\n\nbody');
+    expect(calls[0]?.connectionId).toBe('db1');
+  });
+
+  it('fails the run when a verbatim item throws and honors fail-fast', async () => {
+    const io = makeIo();
+    const calls: VerbatimIngestItem[] = [];
+    const verbatim = fakeVerbatim({ calls, throwOn: () => true });
+
+    await expect(
+      runKtxTextIngest(
+        {
+          projectDir: '/tmp/project',
+          texts: [],
+          files: ['/tmp/a.md', '/tmp/b.md'],
+          userId: 'local-cli',
+          json: true,
+          failFast: true,
+          verbatim: true,
+        },
+        io.io,
+        {
+          loadProject: vi.fn(async () => fakeProject()),
+          createVerbatimIngestor: vi.fn(() => verbatim),
+          readFile: vi.fn(async (path) => `file:${path}`),
+          now: () => 1,
+        },
+      ),
+    ).resolves.toBe(1);
+
+    expect(verbatim.ingest).toHaveBeenCalledTimes(1);
   });
 });

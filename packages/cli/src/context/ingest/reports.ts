@@ -1,6 +1,7 @@
 import type { MemoryAction } from '../../context/memory/types.js';
 import type { TouchedSlSource } from '../../context/tools/touched-sl-sources.js';
 import type { MemoryFlowReplayInput } from './memory-flow/types.js';
+import type { FinalGateDroppedSource, FinalGatePrunedReference } from './final-gate-prune.js';
 import type { IngestProvenanceInsert } from './ports.js';
 import type {
   ArtifactResolutionRecord,
@@ -93,9 +94,6 @@ export interface IngestReportBody {
     resolverAttempts?: number;
     resolverRepairs?: number;
     resolverFailures?: number;
-    gateRepairAttempts?: number;
-    gateRepairs?: number;
-    gateRepairFailures?: number;
   };
   workUnits: IngestReportWorkUnit[];
   failedWorkUnits: string[];
@@ -115,6 +113,8 @@ export interface IngestReportBody {
   provenanceRows: IngestReportProvenanceDetail[];
   toolTranscripts: IngestReportToolTranscriptSummary[];
   finalization?: IngestReportFinalizationOutcome;
+  finalGatePrunedReferences?: FinalGatePrunedReference[];
+  finalGateDroppedSources?: FinalGateDroppedSource[];
   wikiSlRefRepairs?: WikiSlRefRepair[];
   wikiSlRefRepairWarnings?: string[];
   memoryFlow?: MemoryFlowReplayInput;
@@ -153,7 +153,10 @@ export function ingestReportOutcome(report: IngestReportSnapshot): IngestReportO
   if (report.body.status === 'failed') {
     return 'error';
   }
-  if (report.body.failedWorkUnits.length === 0) {
+  const hasPruneOrDrop =
+    (report.body.finalGatePrunedReferences?.length ?? 0) > 0 ||
+    (report.body.finalGateDroppedSources?.length ?? 0) > 0;
+  if (report.body.failedWorkUnits.length === 0 && !hasPruneOrDrop) {
     return 'done';
   }
   const { wikiCount, slCount } = savedMemoryCountsForReport(report);

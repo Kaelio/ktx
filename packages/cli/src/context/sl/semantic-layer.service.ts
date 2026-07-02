@@ -20,7 +20,7 @@ interface WriteSourceOptions {
 }
 
 const SL_DIR_PREFIX = 'semantic-layer';
-const CONNECTION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+const CONNECTION_ID_PATTERN = /^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/;
 
 export interface LoadAllSourcesResult {
   sources: SemanticLayerSource[];

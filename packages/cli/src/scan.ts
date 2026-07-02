@@ -1,4 +1,10 @@
-import type { KtxProgressPort, KtxScanMode, KtxScanReport, KtxScanWarning } from './context/scan/types.js';
+import type {
+  KtxProgressPort,
+  KtxScanEnrichmentStage,
+  KtxScanMode,
+  KtxScanReport,
+  KtxScanWarning,
+} from './context/scan/types.js';
 import { runLocalScan } from './context/scan/local-scan.js';
 import { loadKtxProject, type KtxLocalProject } from './context/project/project.js';
 import { getKtxCliPackageInfo } from './cli-runtime.js';
@@ -21,6 +27,8 @@ export interface KtxScanArgs {
   mode: KtxScanMode;
   detectRelationships: boolean;
   dryRun: boolean;
+  /** Enrichment stages to (re)run; omit to run all eligible stages. */
+  stages?: KtxScanEnrichmentStage[];
   databaseIntrospectionUrl?: string;
   cliVersion?: string;
   runtimeInstallPolicy?: KtxManagedPythonInstallPolicy;
@@ -180,8 +188,14 @@ function describeWarningGroup(code: string, count: number): string {
       return `${count} LLM relationship ${plural(count, 'proposal')} failed.`;
     case 'scan_enrichment_backend_not_configured':
       return 'Scan enrichment backend is not configured; AI stages were skipped.';
+    case 'enrichment_stage_skipped':
+      return `${count} requested ${plural(count, 'enrichment stage')} could not run (prerequisite missing).`;
+    case 'enrichment_stage_stale':
+      return `${count} enrichment ${plural(count, 'stage')} are stale after a selective run; re-run them to refresh.`;
     case 'credential_redacted':
       return `${count} ${plural(count, 'credential')} were redacted from scan output.`;
+    case 'object_introspection_failed':
+      return `${count} ${plural(count, 'object')} skipped during introspection (broken or inaccessible objects were excluded; the rest were ingested).`;
     default:
       return `${count} ${plural(count, 'warning')} (${code})`;
   }
@@ -348,6 +362,7 @@ export async function runKtxScan(args: KtxScanArgs, io: KtxCliIo = process, deps
         connectionId: args.connectionId,
         mode: args.mode,
         detectRelationships: args.detectRelationships,
+        ...(args.stages ? { stages: args.stages } : {}),
         dryRun: args.dryRun,
         trigger: 'cli',
         databaseIntrospectionUrl: args.databaseIntrospectionUrl,

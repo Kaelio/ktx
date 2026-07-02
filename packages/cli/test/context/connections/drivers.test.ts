@@ -22,6 +22,12 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     schemas: ['public'],
   }),
   sqlite: () => ({ driver: 'sqlite', path: 'warehouse.db' }),
+  duckdb: (projectDir) => ({ driver: 'duckdb', path: join(projectDir, 'warehouse.duckdb') }),
+  mongodb: () => ({
+    driver: 'mongodb',
+    url: 'mongodb://localhost:27017/app',
+    databases: ['app'],
+  }),
   mysql: () => ({
     driver: 'mysql',
     host: 'localhost',
@@ -96,6 +102,8 @@ describe('driverRegistrations', () => {
     expect(listSupportedDrivers()).toEqual([
       'bigquery',
       'clickhouse',
+      'duckdb',
+      'mongodb',
       'mysql',
       'postgres',
       'snowflake',
@@ -132,7 +140,7 @@ describe('driverRegistrations', () => {
     expect(connector.listTables).toEqual(expect.any(Function));
     await connector.cleanup?.();
 
-    if (registration.driver === 'sqlite') {
+    if (registration.driver === 'sqlite' || registration.driver === 'duckdb') {
       expect(registration.scopeConfigKey).toBeNull();
     } else {
       expect(registration.scopeConfigKey).not.toBeNull();

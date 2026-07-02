@@ -69,7 +69,7 @@ describe('createKtxCliScanConnector', () => {
         '    driver: bigquery',
         '    dataset_id: analytics',
         '    max_bytes_billed: "987654321"',
-        '    job_timeout_ms: 30000',
+        '    query_timeout_ms: 30000',
         '',
       ].join('\n'),
       'utf-8',
@@ -85,14 +85,14 @@ describe('createKtxCliScanConnector', () => {
         connectionId: 'warehouse',
         connection: expect.objectContaining({
           max_bytes_billed: '987654321',
-          job_timeout_ms: 30000,
+          query_timeout_ms: 30000,
         }),
       }),
     ]);
     expect(bigQueryMock.constructorInputs[0]).not.toHaveProperty('maxBytesBilled');
   });
 
-  it('rejects daemon-only fallback driver configs at config parse time', async () => {
+  it('resolves a duckdb connection to the DuckDB scan connector', async () => {
     await initKtxProject({ projectDir: tempDir });
     await writeFile(
       join(tempDir, 'ktx.yaml'),
@@ -105,10 +105,12 @@ describe('createKtxCliScanConnector', () => {
       ].join('\n'),
       'utf-8',
     );
+    const project = await loadKtxProject({ projectDir: tempDir });
 
-    await expect(loadKtxProject({ projectDir: tempDir })).rejects.toThrow(
-      /connections\.warehouse\.driver:.*Invalid discriminator value/,
-    );
+    const connector = await createKtxCliScanConnector(project, 'warehouse');
+
+    expect(connector.id).toBe('duckdb:warehouse');
+    expect(connector.driver).toBe('duckdb');
   });
 
   it('rejects connection blocks with no driver field at config parse time', async () => {
