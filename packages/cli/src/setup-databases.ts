@@ -895,25 +895,32 @@ async function buildConnectionConfig(input: {
       stringConfigField(input.existingConnection, 'database'),
     );
     if (database === undefined) return 'back';
-    const username = await promptText(
-      prompts,
-      'Snowflake username',
-      stringConfigField(input.existingConnection, 'username'),
-    );
-    if (username === undefined) return 'back';
     const authChoice = await prompts.select({
       message: 'Snowflake authentication method',
       options: [
         { value: 'password', label: 'Password' },
         { value: 'rsa', label: 'Key-pair (RSA / JWT)' },
+        { value: 'oauth', label: 'OAuth token' },
+        { value: 'pat', label: 'Programmatic access token' },
+        { value: 'externalbrowser', label: 'Browser SSO' },
         { value: 'back', label: 'Back' },
       ],
     });
     if (authChoice === 'back') return 'back';
-    const authMethod: 'password' | 'rsa' = authChoice === 'rsa' ? 'rsa' : 'password';
+    const authMethod = authChoice as 'password' | 'rsa' | 'oauth' | 'pat' | 'externalbrowser';
+    const usernameRequired = authMethod === 'password' || authMethod === 'rsa';
+    const username = await promptText(
+      prompts,
+      usernameRequired
+        ? 'Snowflake username'
+        : 'Snowflake username (optional)\nPress Enter to skip — identity is carried by the token or resolved by the IDP.',
+      stringConfigField(input.existingConnection, 'username'),
+    );
+    if (username === undefined) return 'back';
     let passwordRef: string | null = null;
     let privateKeyInput: string | undefined;
     let passphraseRef: string | null = null;
+    let tokenRef: string | null = null;
     if (authMethod === 'password') {
       const ref = await promptCredential({
         prompts,
@@ -924,7 +931,7 @@ async function buildConnectionConfig(input: {
       });
       if (ref === 'back') return 'back'; // pragma: allowlist secret
       passwordRef = ref;
-    } else {
+    } else if (authMethod === 'rsa') {
       privateKeyInput = await promptText(
         prompts,
         'Path to Snowflake private key (PEM)\nFor example ~/.ssh/snowflake_rsa_key.p8, or $ENV_VAR / env:NAME / file:/abs/path.',
@@ -940,7 +947,18 @@ async function buildConnectionConfig(input: {
       });
       if (phr === 'back') return 'back';
       passphraseRef = phr;
+    } else if (authMethod === 'oauth' || authMethod === 'pat') {
+      const ref = await promptCredential({
+        prompts,
+        message: authMethod === 'oauth' ? 'Snowflake OAuth token' : 'Snowflake programmatic access token (PAT)',
+        projectDir: args.projectDir,
+        connectionId: input.connectionId,
+        secretName: 'token', // pragma: allowlist secret
+      });
+      if (ref === 'back') return 'back';
+      tokenRef = ref;
     }
+    // externalbrowser needs no credential prompt — the SDK opens a browser for SSO/MFA.
     const role = await promptText(
       prompts,
       'Snowflake role (optional)\nPress Enter to skip.',
@@ -961,20 +979,46 @@ async function buildConnectionConfig(input: {
         ...(role ? { role } : {}),
       };
     }
-    const resolvedPrivateKey = privateKeyInput
-      ? normalizeFileReference(privateKeyInput)
-      : stringConfigField(input.existingConnection, 'privateKey');
-    if (!account || !warehouse || !database || !username || !resolvedPrivateKey) return null;
-    const resolvedPassphrase = passphraseRef ?? stringConfigField(input.existingConnection, 'passphrase');
+    if (authMethod === 'rsa') {
+      const resolvedPrivateKey = privateKeyInput
+        ? normalizeFileReference(privateKeyInput)
+        : stringConfigField(input.existingConnection, 'privateKey');
+      if (!account || !warehouse || !database || !username || !resolvedPrivateKey) return null;
+      const resolvedPassphrase = passphraseRef ?? stringConfigField(input.existingConnection, 'passphrase');
+      return {
+        driver: 'snowflake',
+        authMethod: 'rsa',
+        account,
+        warehouse,
+        database,
+        username,
+        privateKey: resolvedPrivateKey,
+        ...(resolvedPassphrase ? { passphrase: resolvedPassphrase } : {}),
+        ...(role ? { role } : {}),
+      };
+    }
+    if (authMethod === 'oauth' || authMethod === 'pat') {
+      const resolvedToken = tokenRef ?? stringConfigField(input.existingConnection, 'token');
+      if (!account || !warehouse || !database || !resolvedToken) return null;
+      return {
+        driver: 'snowflake',
+        authMethod,
+        account,
+        warehouse,
+        database,
+        ...(username ? { username } : {}),
+        token: resolvedToken,
+        ...(role ? { role } : {}),
+      };
+    }
+    if (!account || !warehouse || !database) return null;
     return {
       driver: 'snowflake',
-      authMethod: 'rsa',
+      authMethod: 'externalbrowser',
       account,
       warehouse,
       database,
-      username,
-      privateKey: resolvedPrivateKey,
-      ...(resolvedPassphrase ? { passphrase: resolvedPassphrase } : {}),
+      ...(username ? { username } : {}),
       ...(role ? { role } : {}),
     };
   }

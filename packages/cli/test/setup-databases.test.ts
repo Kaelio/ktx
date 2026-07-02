@@ -2705,6 +2705,137 @@ describe('setup databases step', () => {
     expect(config.connections.snowflake.password).toBeUndefined();
   });
 
+  it('configures Snowflake with OAuth token auth via setup wizard', async () => {
+    const io = makeIo();
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        databaseDrivers: ['snowflake'],
+        databaseConnectionId: 'snowflake',
+        databaseSchemas: ['PUBLIC'],
+        skipDatabases: false,
+      },
+      io.io,
+      {
+        testConnection: vi.fn(async () => 0),
+        scanConnection: vi.fn(async () => 0),
+        prompts: makePromptAdapter({
+          selectValues: ['oauth'],
+          textValues: ['env:SNOWFLAKE_ACCOUNT', 'WH', 'ANALYTICS', 'svc_account', ''],
+          passwordValues: ['env:SNOWFLAKE_OAUTH_TOKEN'],
+        }),
+      },
+    );
+
+    expect(result.status).toBe('ready');
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections.snowflake).toMatchObject({
+      driver: 'snowflake',
+      authMethod: 'oauth',
+      account: 'env:SNOWFLAKE_ACCOUNT',
+      warehouse: 'WH',
+      database: 'ANALYTICS',
+      username: 'svc_account',
+      token: 'env:SNOWFLAKE_OAUTH_TOKEN', // pragma: allowlist secret
+    });
+    expect(config.connections.snowflake.password).toBeUndefined();
+  });
+
+  it('configures Snowflake with browser SSO auth via setup wizard, without prompting for credentials', async () => {
+    const io = makeIo();
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        databaseDrivers: ['snowflake'],
+        databaseConnectionId: 'snowflake',
+        databaseSchemas: ['PUBLIC'],
+        skipDatabases: false,
+      },
+      io.io,
+      {
+        testConnection: vi.fn(async () => 0),
+        scanConnection: vi.fn(async () => 0),
+        prompts: makePromptAdapter({
+          selectValues: ['externalbrowser'],
+          textValues: ['env:SNOWFLAKE_ACCOUNT', 'WH', 'ANALYTICS', '', ''],
+        }),
+      },
+    );
+
+    expect(result.status).toBe('ready');
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections.snowflake).toMatchObject({
+      driver: 'snowflake',
+      authMethod: 'externalbrowser',
+      account: 'env:SNOWFLAKE_ACCOUNT',
+      warehouse: 'WH',
+      database: 'ANALYTICS',
+    });
+    expect(config.connections.snowflake.username).toBeUndefined();
+    expect(config.connections.snowflake.password).toBeUndefined();
+    expect(config.connections.snowflake.token).toBeUndefined();
+  });
+
+  it('round-trips an existing OAuth Snowflake connection when re-editing via setup wizard', async () => {
+    await writeFile(
+      join(tempDir, 'ktx.yaml'),
+      [
+        'connections:',
+        '  warehouse:',
+        '    driver: snowflake',
+        '    authMethod: oauth',
+        '    account: env:SNOWFLAKE_ACCOUNT',
+        '    warehouse: WH',
+        '    database: ANALYTICS',
+        '    username: svc_account',
+        '    token: env:SNOWFLAKE_OAUTH_TOKEN',
+        'setup:',
+        '  database_connection_ids:',
+        '    - warehouse',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    await writeKtxSetupState(tempDir, { completed_steps: ['databases'] });
+    const prompts = makePromptAdapter({ textValues: [], passwordValues: [] });
+    let primaryMenuCount = 0;
+    vi.mocked(prompts.select).mockImplementation(async (options) => {
+      if (options.message === 'Databases configured: warehouse\nWhat would you like to do?') {
+        primaryMenuCount += 1;
+        return primaryMenuCount === 1 ? 'edit' : 'continue';
+      }
+      if (options.message === 'Database to edit') return 'warehouse';
+      if (options.message === 'Snowflake authentication method') return 'oauth';
+      if (options.message.startsWith('Enable query-history ingest')) return 'no';
+      return 'back';
+    });
+    const testConnection = vi.fn(async () => 0);
+    const scanConnection = vi.fn(async () => 0);
+    const listSchemas = vi.fn(async () => ['PUBLIC']);
+    const listTables = vi.fn(async () => [{ catalog: 'ANALYTICS', schema: 'PUBLIC', name: 'ORDERS', kind: 'table' as const }]);
+    const pickers = makePickerStubs({ scopes: [{ schemas: ['PUBLIC'], tables: [] }] });
+
+    const result = await runKtxSetupDatabasesStep(
+      { projectDir: tempDir, inputMode: 'auto', skipDatabases: false, databaseSchemas: [] },
+      makeIo().io,
+      { prompts, testConnection, scanConnection, listSchemas, listTables, pickDatabaseScope: pickers.pickDatabaseScope },
+    );
+
+    expect(result).toEqual({ status: 'ready', projectDir: tempDir, connectionIds: ['warehouse'] });
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections.warehouse).toMatchObject({
+      driver: 'snowflake',
+      authMethod: 'oauth',
+      account: 'env:SNOWFLAKE_ACCOUNT',
+      warehouse: 'WH',
+      database: 'ANALYTICS',
+      username: 'svc_account',
+      token: 'env:SNOWFLAKE_OAUTH_TOKEN', // pragma: allowlist secret
+    });
+  });
+
   it('writes Postgres query history config with minExecutions and ignores window/redaction output', async () => {
     const io = makeIo();
     const result = await runKtxSetupDatabasesStep(
