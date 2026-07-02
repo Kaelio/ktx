@@ -154,7 +154,10 @@ async function tryPull(cacheDir: string, authUrl: string, branch: string): Promi
     await git.remote(['set-url', 'origin', authUrl]);
     await git.fetch(['origin', branch]);
     await git.checkout(branch);
-    await git.pull('origin', branch);
+    // --ff-only makes divergence fail deterministically instead of silently rebasing or
+    // merging per the caller's ambient pull.rebase/pull.ff config, which would let a
+    // locally-diverged cache survive instead of falling back to cloneFresh below.
+    await git.pull('origin', branch, ['--ff-only']);
     return true;
   } catch {
     return false;
