@@ -174,7 +174,7 @@ connections:
     role: ANALYST
 ```
 
-`token` follows the same reference syntax as other secrets: `env:VAR` reads from an environment variable, `file:/path/to/token` reads from a file, or a literal value can be supplied directly.
+`token` follows the same reference syntax as other secrets: `env:VAR` reads from an environment variable, `file:/path/to/token` reads from a file, or a literal value can be supplied directly. <!-- pragma: allowlist secret -->
 
 Browser SSO authentication is interactive — running `ktx connection test` or `ktx setup` will open a browser window to complete the Snowflake SSO flow. Not suitable for headless or CI environments. `ktx setup`'s Snowflake wizard supports all five auth methods, both when creating a new connection and when editing an existing one.
 
