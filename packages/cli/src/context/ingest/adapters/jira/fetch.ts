@@ -18,10 +18,22 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
+/**
+ * JQL date literals accept only `yyyy-MM-dd` or `yyyy-MM-dd HH:mm`. The config `since` field
+ * is already date-only, but the incremental floor derived from a staged issue's `updated` field
+ * is a full ISO-8601 timestamp, which Jira rejects as invalid JQL. Normalize to minute precision.
+ */
+function toJqlDateLiteral(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const d = new Date(value);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
 function buildJql(projects: string[], labels: string[], effectiveSince?: string): string {
   const projectList = projects.map((p) => `"${p}"`).join(',');
   const labelList = labels.map((l) => `"${l}"`).join(',');
-  const datePart = effectiveSince ? ` AND updated >= "${effectiveSince}"` : '';
+  const datePart = effectiveSince ? ` AND updated >= "${toJqlDateLiteral(effectiveSince)}"` : '';
   return `project IN (${projectList}) AND labels IN (${labelList})${datePart} ORDER BY updated DESC`;
 }
 

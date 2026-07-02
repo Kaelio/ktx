@@ -76,6 +76,7 @@ describe('local ingest adapters', () => {
       'looker',
       'metricflow',
       'notion',
+      'jira',
     ]);
     expect(adapters.find((adapter) => adapter.source === 'metabase')?.fetch).toBeTypeOf('function');
   });

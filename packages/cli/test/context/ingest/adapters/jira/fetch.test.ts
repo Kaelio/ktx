@@ -102,8 +102,11 @@ describe('fetchJiraSnapshot', () => {
 
     await fetchJiraSnapshot({ config: BASE_CONFIG, stagedDir });
 
-    // JQL uses the prior issue's updated timestamp as the since floor.
-    expect(capturedUrls[0]).toContain(encodeURIComponent(priorUpdated));
+    // JQL uses the prior issue's updated timestamp as the since floor, normalized to the
+    // "yyyy-MM-dd HH:mm" literal JQL accepts (it rejects full ISO-8601 timestamps).
+    // URLSearchParams encodes the space as `+`, not `%20`.
+    expect(capturedUrls[0]).toContain('2026-05-01+00%3A00');
+    expect(capturedUrls[0]).not.toContain(encodeURIComponent(priorUpdated));
 
     // Both the prior issue and the newly fetched one are present.
     const { access } = await import('node:fs/promises');

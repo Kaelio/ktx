@@ -46,8 +46,8 @@ The `description` field is pre-converted from ADF (Atlassian Document Format) to
   "baseUrl": "https://sigmacomputing.atlassian.net",
   "projects": ["DOCS"],
   "labels": ["kb", "decision", "policy"],
+  "since": "2026-06-01T00:00:00.000Z",
   "issueCount": 47,
-  "capped": false,
   "warnings": []
 }
 ```
