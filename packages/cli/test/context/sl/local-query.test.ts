@@ -67,6 +67,22 @@ grain: []
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  it('injects predefined_measures_only when the connection query_policy is semantic-layer-only', async () => {
+    project.config.connections.warehouse = { driver: 'postgres', query_policy: 'semantic-layer-only' };
+
+    await compileLocalSlQuery(project, {
+      connectionId: 'warehouse',
+      query: { measures: ['orders.order_count'], dimensions: [], limit: 10 },
+      compute,
+    });
+
+    expect(compute.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ predefined_measures_only: true }),
+      }),
+    );
+  });
+
   it('refuses a non-SQL (context-only) connection instead of compiling it as Postgres', async () => {
     project.config.connections['mongo-prod'] = { driver: 'mongodb', url: 'mongodb://localhost:27017/app' };
     await expect(
@@ -109,6 +125,7 @@ grain: []
         measures: ['orders.order_count'],
         dimensions: ['orders.status'],
         limit: 25,
+        predefined_measures_only: false,
       },
     });
     expect(result).toEqual({
@@ -190,6 +207,7 @@ grain: []
       query: {
         measures: ['sum(payments.amount)'],
         dimensions: [],
+        predefined_measures_only: false,
       },
     });
   });

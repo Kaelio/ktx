@@ -4,6 +4,7 @@ import type { KtxMcpProgressCallback } from '../mcp/types.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { isSqlQueryableDriver } from '../connections/dialects.js';
 import { FEDERATED_CONNECTION_ID } from '../connections/federation.js';
+import { connectionQueryPolicy } from '../connections/query-policy.js';
 import { resolveRequiredConnectionId } from '../connections/resolve-connection.js';
 import { sqlAnalysisDialectForDriver } from '../sql-analysis/dialect.js';
 import { loadLocalSlSourceRecords } from './local-sl.js';
@@ -93,11 +94,13 @@ export async function compileLocalSlQuery(
   const dialect = sqlAnalysisDialectForDriver(driver);
   const sources = await loadComputableSources(project, connectionId);
 
+  const predefinedMeasuresOnly =
+    connectionQueryPolicy(project.config.connections[connectionId]) === 'semantic-layer-only';
   await options.onProgress?.({ progress: 0.3, message: 'Generating SQL' });
   const response = await options.compute.query({
     sources,
     dialect,
-    query: options.query,
+    query: { ...options.query, predefined_measures_only: predefinedMeasuresOnly },
   });
 
   if (!options.execute) {
