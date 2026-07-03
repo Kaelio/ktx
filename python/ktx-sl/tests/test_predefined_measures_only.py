@@ -62,6 +62,55 @@ def test_rejects_query_time_derivation_over_predefined_measures() -> None:
         )
 
 
+def test_rejects_composed_aggregate_in_filter() -> None:
+    # A HAVING-classified filter must not smuggle a runtime aggregate the
+    # measures guard would reject (threshold-probing bypass).
+    with pytest.raises(ValueError, match="compose aggregate expressions") as excinfo:
+        _engine().query(
+            {
+                "measures": ["orders.revenue"],
+                "dimensions": ["orders.status"],
+                "filters": ["avg(orders.amount) > 100"],
+                "predefined_measures_only": True,
+            }
+        )
+    assert "avg(orders.amount) > 100" in str(excinfo.value)
+    assert "query_policy: semantic-layer-only" in str(excinfo.value)
+
+
+def test_rejects_composed_aggregate_in_compound_filter() -> None:
+    with pytest.raises(ValueError, match="compose aggregate expressions"):
+        _engine().query(
+            {
+                "measures": ["orders.revenue"],
+                "filters": ["orders.status = 'active' AND sum(orders.amount) > 5000"],
+                "predefined_measures_only": True,
+            }
+        )
+
+
+def test_allows_predefined_measure_having_filter() -> None:
+    result = _engine().query(
+        {
+            "measures": ["orders.revenue"],
+            "dimensions": ["orders.status"],
+            "filters": ["orders.revenue > 100"],
+            "predefined_measures_only": True,
+        }
+    )
+    assert "having" in result.sql.lower()
+
+
+def test_composed_aggregate_filter_allowed_when_flag_absent() -> None:
+    result = _engine().query(
+        {
+            "measures": ["orders.revenue"],
+            "filters": ["avg(orders.amount) > 100"],
+        }
+    )
+    assert "having" in result.sql.lower()
+
+
 def test_allows_predefined_measure_with_dimensions_and_filters() -> None:
     result = _engine().query(
         {

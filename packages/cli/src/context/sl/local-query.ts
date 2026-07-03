@@ -4,7 +4,7 @@ import type { KtxMcpProgressCallback } from '../mcp/types.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { isSqlQueryableDriver } from '../connections/dialects.js';
 import { FEDERATED_CONNECTION_ID } from '../connections/federation.js';
-import { connectionQueryPolicy } from '../connections/query-policy.js';
+import { connectionQueryPolicy, restrictedFederatedMemberIds } from '../connections/query-policy.js';
 import { resolveRequiredConnectionId } from '../connections/resolve-connection.js';
 import { sqlAnalysisDialectForDriver } from '../sql-analysis/dialect.js';
 import { loadLocalSlSourceRecords } from './local-sl.js';
@@ -15,11 +15,31 @@ import type { SemanticLayerQueryExecutionResult, SemanticLayerQueryInput, Semant
 const COMPILE_ONLY_REASON =
   'Local semantic-layer query compiled SQL but no data-source execution adapter is configured.';
 
-const FEDERATED_SL_QUERY_UNSUPPORTED =
-  `Semantic-layer queries are per-connection and cannot target the federated connection '${FEDERATED_CONNECTION_ID}'. ` +
-  `Run a cross-database query as read-only SQL instead — ktx sql -c ${FEDERATED_CONNECTION_ID} "SELECT ..." or the sql_execution tool — ` +
-  'using catalog-qualified table names (connectionId.schema.table, or connectionId.table for sqlite; ' +
-  'double-quote ids that are not bare identifiers, e.g. "books-db".public.books).';
+const FEDERATED_SL_QUERY_PREFIX =
+  `Semantic-layer queries are per-connection and cannot target the federated connection '${FEDERATED_CONNECTION_ID}'. `;
+
+// The raw-SQL fallback is only valid when federated raw SQL is allowed; when a
+// member is restricted (query_policy: semantic-layer-only), assertRawSqlAllowed
+// rejects the same path, so directing the agent there would burn a guaranteed
+// failure. Derive the message from the restricted-member set instead.
+function federatedSlQueryUnsupportedMessage(project: KtxLocalProject): string {
+  const restricted = restrictedFederatedMemberIds(project.config, project.projectDir);
+  if (restricted.length > 0) {
+    return (
+      FEDERATED_SL_QUERY_PREFIX +
+      `Cross-database SQL through '${FEDERATED_CONNECTION_ID}' is also disabled because member connection(s) ` +
+      `${restricted.map((id) => `'${id}'`).join(', ')} are restricted to semantic-layer queries ` +
+      '(query_policy: semantic-layer-only). Query each connection on its own through the semantic layer ' +
+      '(the sl_query tool or `ktx sl query` with its connection id).'
+    );
+  }
+  return (
+    FEDERATED_SL_QUERY_PREFIX +
+    `Run a cross-database query as read-only SQL instead — ktx sql -c ${FEDERATED_CONNECTION_ID} "SELECT ..." or the sql_execution tool — ` +
+    'using catalog-qualified table names (connectionId.schema.table, or connectionId.table for sqlite; ' +
+    'double-quote ids that are not bare identifiers, e.g. "books-db".public.books).'
+  );
+}
 
 export interface CompileLocalSlQueryOptions {
   connectionId?: string;
@@ -80,7 +100,7 @@ export async function compileLocalSlQuery(
   options: CompileLocalSlQueryOptions,
 ): Promise<CompileLocalSlQueryResult> {
   if (options.connectionId === FEDERATED_CONNECTION_ID) {
-    throw new Error(FEDERATED_SL_QUERY_UNSUPPORTED);
+    throw new Error(federatedSlQueryUnsupportedMessage(project));
   }
   await options.onProgress?.({ progress: 0, message: 'Compiling query' });
   const connectionId = resolveLocalConnectionId(project, options.connectionId);
