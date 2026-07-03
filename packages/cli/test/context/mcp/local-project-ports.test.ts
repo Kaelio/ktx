@@ -247,6 +247,80 @@ describe('createLocalProjectMcpContextPorts', () => {
     expect(connector.cleanup).toHaveBeenCalled();
   });
 
+  it('omits sql_execution when every SQL connection is semantic-layer-only', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.warehouse = {
+      driver: 'postgres',
+      url: 'env:DATABASE_URL',
+      query_policy: 'semantic-layer-only',
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis: {
+        analyzeForFingerprint: vi.fn(),
+        analyzeBatch: vi.fn(),
+        validateReadOnly: vi.fn(async () => ({ ok: true, error: null })),
+      },
+      localScan: { createConnector: vi.fn(async () => testConnector()) },
+      embeddingService: null,
+    });
+
+    expect(ports.sqlExecution).toBeUndefined();
+  });
+
+  it('keeps sql_execution in mixed projects but rejects restricted connections and flags them in connection_list', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.warehouse = {
+      driver: 'postgres',
+      url: 'env:DATABASE_URL',
+    };
+    project.config.connections.finance = {
+      driver: 'postgres',
+      url: 'env:FINANCE_URL',
+      query_policy: 'semantic-layer-only',
+    };
+    const createConnector = vi.fn(async () => testConnector());
+    const sqlAnalysis = {
+      analyzeForFingerprint: vi.fn(),
+      analyzeBatch: vi.fn(),
+      validateReadOnly: vi.fn(async () => ({ ok: true, error: null })),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis,
+      localScan: { createConnector },
+      embeddingService: null,
+    });
+
+    expect(ports.sqlExecution).toBeDefined();
+    const execution = ports.sqlExecution?.execute({
+      connectionId: 'finance',
+      sql: 'select 1',
+      maxRows: 5,
+    });
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow(/query_policy: semantic-layer-only/);
+    expect(sqlAnalysis.validateReadOnly).not.toHaveBeenCalled();
+    expect(createConnector).not.toHaveBeenCalled();
+
+    // Both postgres members federate, so the restricted member also blocks federated raw SQL.
+    await expect(
+      ports.sqlExecution?.execute({ connectionId: '_ktx_federated', sql: 'select 1', maxRows: 5 }),
+    ).rejects.toThrow(/"finance"/);
+
+    await expect(ports.connections?.list()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'finance',
+        queryPolicy: 'semantic-layer-only',
+        hint: expect.stringContaining('sl_query'),
+      }),
+      expect.objectContaining({ id: 'warehouse' }),
+      expect.objectContaining({
+        id: '_ktx_federated',
+        queryPolicy: 'semantic-layer-only',
+        hint: expect.stringContaining('finance'),
+      }),
+    ]);
+  });
+
   it('rejects sql_execution against an unconfigured connection with an actionable expected error', async () => {
     const project = await initKtxProject({ projectDir: tempDir });
     project.config.connections.warehouse = {

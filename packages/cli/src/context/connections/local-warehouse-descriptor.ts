@@ -1,5 +1,6 @@
 import type { KtxProjectConnectionConfig } from '../project/config.js';
 import type { ConnectionType } from './connection-type.js';
+import { connectionQueryPolicy } from './query-policy.js';
 
 export interface LocalWarehouseDescriptor {
   id: string;
@@ -18,6 +19,7 @@ export interface LocalConnectionInfo {
   connectionType: string;
   members?: string[];
   hint?: string;
+  queryPolicy?: 'semantic-layer-only';
 }
 
 const DRIVER_TO_CONNECTION_TYPE: Record<string, ConnectionType> = {
@@ -92,10 +94,17 @@ export function localConnectionInfoFromConfig(
   if (!connection) {
     return null;
   }
+  const restricted = connectionQueryPolicy(connection) === 'semantic-layer-only';
   return {
     id,
     name: id,
     connectionType: localConnectionTypeForConfig(id, connection),
+    ...(restricted
+      ? {
+          queryPolicy: 'semantic-layer-only' as const,
+          hint: 'Raw SQL is disabled on this connection; query it with sl_query using predefined measures.',
+        }
+      : {}),
   };
 }
 
