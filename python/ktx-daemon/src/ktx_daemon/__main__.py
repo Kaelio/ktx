@@ -26,7 +26,6 @@ from ktx_daemon.embeddings import (
 from ktx_daemon.lookml import ParseLookMLRequest, parse_lookml_project
 from ktx_daemon.semantic_layer import (
     SemanticLayerQueryRequest,
-    SemanticLayerRequestError,
     ValidateSourcesRequest,
     query_semantic_layer,
     validate_semantic_layer,
@@ -36,12 +35,11 @@ from ktx_daemon.source_generation import (
     generate_sources_response,
 )
 
-# Exit code semantic-query returns when the engine rejects an invalid agent
-# request (ValueError). The Node caller maps it to KtxExpectedError so routine,
-# caller-driven rejections stay out of Error Tracking. Mirror of
-# DAEMON_REQUEST_REJECTION_EXIT_CODE in
-# packages/cli/src/context/daemon/semantic-layer-compute.ts.
-EXPECTED_REQUEST_REJECTION_EXIT_CODE = 3
+# The caller (the Node client) sent a well-formed request the compute layer
+# refused as invalid — e.g. the planner rejecting an agent's query. A distinct
+# exit code lets the client classify it as an expected outcome rather than a
+# ktx fault. Kept in sync with DAEMON_INPUT_REJECTED_EXIT_CODE on the Node side.
+INPUT_REJECTED_EXIT_CODE = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -218,18 +216,17 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         sys.stdout.write(response.model_dump_json() + "\n")
         return 0
-    except SemanticLayerRequestError as error:
-        # The engine rejected an invalid semantic-query request (unknown source,
-        # ambiguous measure, no join path). Signal a caller-driven rejection with
-        # a distinct exit code so the Node caller keeps it out of Error Tracking.
-        sys.stderr.write(f"{error}\n")
-        return EXPECTED_REQUEST_REJECTION_EXIT_CODE
-    except (json.JSONDecodeError, ValidationError, ValueError) as error:
-        # Malformed stdin, a payload that violates the request schema, or any
-        # other bad-input ValueError is a contract fault, not a caller-driven
-        # rejection.
+    except (json.JSONDecodeError, ValidationError) as error:
+        # Malformed request envelope — ktx sent bad JSON or a mis-shaped payload.
+        # That is a ktx fault, so keep the generic non-zero code (JSONDecodeError
+        # subclasses ValueError, so this clause must precede the ValueError one).
         sys.stderr.write(f"{error}\n")
         return 1
+    except ValueError as error:
+        # The compute layer refused a well-formed request as invalid (e.g. the
+        # planner rejecting the agent's measures). Expected, not a fault.
+        sys.stderr.write(f"{error}\n")
+        return INPUT_REJECTED_EXIT_CODE
     except Exception as error:
         from ktx_daemon.telemetry import report_exception
 

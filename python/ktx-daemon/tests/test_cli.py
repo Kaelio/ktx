@@ -23,26 +23,20 @@ ORDERS_SOURCE = {
 }
 
 
-def run_daemon_command_raw(
-    command: str, stdin: str
+def run_daemon_command(
+    command: str, payload: dict[str, object]
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     src_path = str(Path(__file__).resolve().parents[1] / "src")
     env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
     return subprocess.run(
         [sys.executable, "-m", "ktx_daemon", command],
-        input=stdin,
+        input=json.dumps(payload),
         text=True,
         capture_output=True,
         check=False,
         env=env,
     )
-
-
-def run_daemon_command(
-    command: str, payload: dict[str, object]
-) -> subprocess.CompletedProcess[str]:
-    return run_daemon_command_raw(command, json.dumps(payload))
 
 
 def test_semantic_query_command_reads_stdin_and_writes_json() -> None:
@@ -62,54 +56,6 @@ def test_semantic_query_command_reads_stdin_and_writes_json() -> None:
     parsed = json.loads(result.stdout)
     assert "public.orders" in parsed["sql"]
     assert parsed["columns"][0]["name"] == "orders.status"
-
-
-def test_semantic_query_returns_rejection_code_for_invalid_request() -> None:
-    from ktx_daemon.__main__ import EXPECTED_REQUEST_REJECTION_EXIT_CODE
-
-    result = run_daemon_command(
-        "semantic-query",
-        {
-            "sources": [ORDERS_SOURCE],
-            "dialect": "postgres",
-            "query": {"measures": ["credit_usage.amount"]},
-        },
-    )
-
-    assert result.returncode == EXPECTED_REQUEST_REJECTION_EXIT_CODE
-    assert result.stdout == ""
-    assert "credit_usage" in result.stderr
-    assert not result.stderr.startswith("ValueError")
-
-
-def test_semantic_query_returns_fault_code_for_malformed_source() -> None:
-    from ktx_daemon.__main__ import EXPECTED_REQUEST_REJECTION_EXIT_CODE
-
-    invalid_source = {
-        key: value for key, value in ORDERS_SOURCE.items() if key != "table"
-    }
-    result = run_daemon_command(
-        "semantic-query",
-        {
-            "sources": [invalid_source],
-            "dialect": "postgres",
-            "query": {"measures": ["orders.order_count"]},
-        },
-    )
-
-    assert result.returncode == 1
-    assert result.returncode != EXPECTED_REQUEST_REJECTION_EXIT_CODE
-    assert result.stdout == ""
-
-
-def test_semantic_query_returns_fault_code_for_non_object_stdin() -> None:
-    from ktx_daemon.__main__ import EXPECTED_REQUEST_REJECTION_EXIT_CODE
-
-    result = run_daemon_command_raw("semantic-query", "[1, 2]")
-
-    assert result.returncode == 1
-    assert result.returncode != EXPECTED_REQUEST_REJECTION_EXIT_CODE
-    assert "stdin JSON must be an object" in result.stderr
 
 
 def test_semantic_validate_command_reads_stdin_and_writes_json() -> None:
@@ -143,6 +89,22 @@ def test_command_returns_nonzero_for_invalid_json() -> None:
 
     assert result.returncode == 1
     assert "Expecting property name enclosed in double quotes" in result.stderr
+
+
+def test_semantic_query_rejects_invalid_query_with_input_rejected_code() -> None:
+    # A planner ValueError (agent's measure references no source) is an expected
+    # input rejection, distinguished from a fault by INPUT_REJECTED_EXIT_CODE (3).
+    result = run_daemon_command(
+        "semantic-query",
+        {
+            "sources": [ORDERS_SOURCE],
+            "dialect": "postgres",
+            "query": {"measures": ["count(*)"], "dimensions": []},
+        },
+    )
+
+    assert result.returncode == 3, result.stderr
+    assert "does not reference any source" in result.stderr
 
 
 def test_serve_http_command_starts_uvicorn_without_reading_stdin(

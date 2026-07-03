@@ -2,6 +2,7 @@ import YAML from 'yaml';
 import type { KtxFileStorePort } from '../../context/core/file-store.js';
 import type { KtxLogger } from '../../context/core/config.js';
 import { noopLogger } from '../../context/core/config.js';
+import { dialectForConnectionType } from '../connections/connection-type-dialect.js';
 import type { TableUsageOutput } from '../ingest/adapters/historic-sql/skill-schemas.js';
 import type { SlConnectionCatalogPort, SlPythonPort } from './ports.js';
 import { normalizeSemanticLayerDescriptions } from './description-normalization.js';
@@ -674,7 +675,7 @@ export class SemanticLayerService {
     if (!connection) {
       throw new Error(`Data source not found: ${connectionId}`);
     }
-    return SemanticLayerService.mapDialect(connection.connectionType);
+    return dialectForConnectionType(connection.connectionType);
   }
 
   async listFilesForConnection(connectionId: string): Promise<string[]> {
@@ -1108,25 +1109,6 @@ export class SemanticLayerService {
   }
 
   /**
-   * All callers should use this instead of maintaining their own dialect maps.
-   */
-  static mapDialect(connectionType: string): string {
-    const normalized = connectionType.toUpperCase();
-    const map: Record<string, string> = {
-      POSTGRES: 'postgres',
-      BIGQUERY: 'bigquery',
-      SNOWFLAKE: 'snowflake',
-      MYSQL: 'mysql',
-      SQLSERVER: 'tsql',
-      SQLITE: 'sqlite',
-      DUCKDB: 'duckdb',
-      CLICKHOUSE: 'clickhouse',
-      DATABRICKS: 'databricks',
-    };
-    return map[normalized] ?? 'postgres';
-  }
-
-  /**
    * Execute a semantic layer query: load composed sources, generate SQL via
    * the python SL engine, and execute the generated SQL against the data source.
    */
@@ -1153,7 +1135,7 @@ export class SemanticLayerService {
     if (!connection) {
       throw new Error(`Data source not found: ${connectionId}`);
     }
-    const dialect = SemanticLayerService.mapDialect(connection.connectionType);
+    const dialect = dialectForConnectionType(connection.connectionType);
 
     // 3. Generate SQL via python SL engine
     const { data: slResult, error: slError } = await this.python.query({

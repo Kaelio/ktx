@@ -243,6 +243,7 @@ describe('setup databases step', () => {
         { value: 'mysql', label: 'MySQL' },
         { value: 'clickhouse', label: 'ClickHouse' },
         { value: 'sqlserver', label: 'SQL Server' },
+        { value: 'athena', label: 'Amazon Athena' },
         { value: 'mongodb', label: 'MongoDB' },
         { value: 'sqlite', label: 'SQLite' },
         { value: 'duckdb', label: 'DuckDB' },
@@ -615,6 +616,29 @@ describe('setup databases step', () => {
         expectedPasswordPrompts: [
           {
             message: 'Snowflake password',
+          },
+        ],
+      },
+      {
+        driver: 'athena',
+        textValues: ['', 'us-east-1', 's3://my-bucket/athena-results/', '', ''],
+        expectedTextPrompts: [
+          {
+            message: connectionNamePrompt('Amazon Athena'),
+            placeholder: 'athena-warehouse',
+            initialValue: 'athena-warehouse',
+          },
+          {
+            message: 'AWS region\nFor example us-east-1.',
+          },
+          {
+            message: 'S3 staging directory\nAthena writes query results here. For example s3://my-bucket/athena-results/.',
+          },
+          {
+            message: 'Athena workgroup (optional)\nPress Enter to use the default workgroup "primary".',
+          },
+          {
+            message: 'Glue Data Catalog name (optional)\nPress Enter to use the default "AwsDataCatalog".',
           },
         ],
       },
@@ -1965,6 +1989,40 @@ describe('setup databases step', () => {
       databases: ['analytics', 'mart'],
     });
     expect(project.config.connections['clickhouse-warehouse']).not.toHaveProperty('schemas');
+  });
+
+  it('maps Athena scripted database schema input to databases field', async () => {
+    await writeFile(
+      join(tempDir, 'ktx.yaml'),
+      [
+        'connections:',
+        '  athena-warehouse:',
+        '    driver: athena',
+        '    region: us-east-1',
+        '    s3_staging_dir: s3://my-bucket/athena-results/',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        skipDatabases: false,
+        databaseConnectionIds: ['athena-warehouse'],
+        databaseSchemas: ['analytics', 'raw'],
+      },
+      makeIo().io,
+      { testConnection: vi.fn(async () => 0), scanConnection: vi.fn(async () => 0) },
+    );
+
+    const project = await loadKtxProject({ projectDir: tempDir });
+    expect(project.config.connections['athena-warehouse']).toMatchObject({
+      driver: 'athena',
+      databases: ['analytics', 'raw'],
+    });
+    expect(project.config.connections['athena-warehouse']).not.toHaveProperty('schemas');
   });
 
   it('does not prompt for a bootstrap BigQuery dataset before scope discovery', async () => {

@@ -139,6 +139,11 @@ connections are declared. It surfaces in `ktx connection` and in the agent's
 connection list so the id is discoverable. Querying a single member database
 directly with its own connection id (`ktx sql -c pg_books ...`) is unchanged.
 
+If any member connection sets
+[`query_policy: semantic-layer-only`](/docs/configuration/ktx-yaml#query-policy),
+raw SQL against `_ktx_federated` is rejected as a whole: a federated query can
+touch any member's tables, so one restricted member restricts the federation.
+
 ## Federated queries are read-only
 
 DuckDB attaches every member database with read-only access. Federated queries

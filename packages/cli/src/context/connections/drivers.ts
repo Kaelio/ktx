@@ -26,6 +26,23 @@ function invalidConnectionConfig(driver: KtxConnectionDriver): Error {
 
 /** @internal */
 export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistration> = {
+  athena: {
+    driver: 'athena',
+    scopeConfigKey: 'databases',
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/athena/connector.js');
+      return {
+        isConnectionConfig: (connection) => m.isKtxAthenaConnectionConfig(connection),
+        createScanConnector: ({ connectionId, connection }) => {
+          if (!m.isKtxAthenaConnectionConfig(connection)) {
+            throw invalidConnectionConfig('athena');
+          }
+          return new m.KtxAthenaScanConnector({ connectionId, connection });
+        },
+      };
+    },
+  },
   bigquery: {
     driver: 'bigquery',
     scopeConfigKey: 'dataset_ids',

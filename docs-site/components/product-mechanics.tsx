@@ -68,14 +68,14 @@ const EDGE_STROKE = "#94a3b8";
 const sourceData: SourceNodeData[] = [
   {
     title: "Databases",
-    body: "Schemas, columns, keys, row counts, and query history.",
-    items: ["PostgreSQL", "Snowflake", "BigQuery", "SQLite"],
+    body: "Schemas, keys, row counts, query history.",
+    items: ["PostgreSQL", "Snowflake", "BigQuery", "Athena", "MongoDB", "& more"],
     accent: "#3b82f6",
   },
   {
     title: "BI tools",
     body: "Dashboards, questions, explores, usage, and trusted examples.",
-    items: ["Metabase", "Looker"],
+    items: ["Metabase", "Looker", "Sigma"],
     accent: "#f97316",
   },
   {
@@ -87,7 +87,7 @@ const sourceData: SourceNodeData[] = [
   {
     title: "Docs and notes",
     body: "Policies, caveats, team definitions, and analyst context.",
-    items: ["Notion", "Any text"],
+    items: ["Notion", "Google Drive", "Any text"],
     accent: "#10b981",
   },
 ];
