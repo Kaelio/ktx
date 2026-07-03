@@ -2,7 +2,16 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { URL } from 'node:url';
 import { spawn } from 'node:child_process';
+import { KtxExpectedError } from '../../errors.js';
 import type { ResolvedSemanticLayerSource, SemanticLayerQueryInput } from '../sl/types.js';
+
+// Exit code the daemon returns when the engine rejects an invalid semantic-query
+// request; the HTTP transport signals the same rejection with status 400. Both
+// map to KtxExpectedError so routine, caller-driven rejections stay out of Error
+// Tracking. Mirror of EXPECTED_REQUEST_REJECTION_EXIT_CODE in
+// python/ktx-daemon/src/ktx_daemon/__main__.py.
+const DAEMON_REQUEST_REJECTION_EXIT_CODE = 3;
+const DAEMON_REQUEST_REJECTION_HTTP_STATUS = 400;
 
 interface KtxSemanticLayerComputeQueryResult {
   sql: string;
@@ -128,7 +137,8 @@ function runProcessJson(
         const stdoutText = Buffer.concat(stdout).toString('utf8').trim();
         const stderrText = Buffer.concat(stderr).toString('utf8').trim();
         if (code !== 0) {
-          reject(new Error(`ktx-daemon ${subcommand} failed: ${stderrText || `exit code ${code}`}`));
+          const message = `ktx-daemon ${subcommand} failed: ${stderrText || `exit code ${code}`}`;
+          reject(code === DAEMON_REQUEST_REJECTION_EXIT_CODE ? new KtxExpectedError(message) : new Error(message));
           return;
         }
         try {
@@ -168,7 +178,10 @@ function postJson(baseUrl: string): KtxDaemonHttpJsonRunner {
             const text = Buffer.concat(chunks).toString('utf8');
             const statusCode = response.statusCode ?? 0;
             if (statusCode < 200 || statusCode >= 300) {
-              reject(new Error(`ktx-daemon HTTP ${path} failed with ${statusCode}: ${text}`));
+              const message = `ktx-daemon HTTP ${path} failed with ${statusCode}: ${text}`;
+              reject(
+                statusCode === DAEMON_REQUEST_REJECTION_HTTP_STATUS ? new KtxExpectedError(message) : new Error(message),
+              );
               return;
             }
             try {

@@ -6,10 +6,17 @@ import time
 from typing import Any
 
 from ktx_daemon.telemetry import error_class, report_exception, track_telemetry_event
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from semantic_layer.duplicate_check import validate_measure_duplicates
 from semantic_layer.engine import SemanticEngine
 from semantic_layer.models import QueryResult, SourceDefinition
+
+
+class SemanticLayerRequestError(ValueError):
+    """The engine rejected an otherwise well-formed semantic-query request
+    (unknown source, ambiguous measure, no join path) — an expected,
+    caller-driven outcome. A pydantic ValidationError is a ktx contract fault
+    and is never surfaced as this."""
 
 
 class SemanticLayerQueryRequest(BaseModel):
@@ -150,6 +157,13 @@ def query_semantic_layer(
             track_telemetry_event(
                 "sql_gen_completed", sql_fields, project_id=request.project_id
             )
+        # The engine rejects an invalid request with a plain ValueError (unknown
+        # source, ambiguous measure, ...) — an expected, caller-driven outcome
+        # recorded above, so it stays out of Error Tracking. A pydantic
+        # ValidationError is a ValueError subclass but signals a malformed source
+        # or response (a ktx contract fault), so it is reported like any fault.
+        if isinstance(error, ValueError) and not isinstance(error, ValidationError):
+            raise SemanticLayerRequestError(str(error)) from error
         report_exception(
             error,
             source="semantic-query",

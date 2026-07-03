@@ -2,6 +2,24 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import { createHttpSemanticLayerComputePort, createPythonSemanticLayerComputePort } from '../../../src/context/daemon/semantic-layer-compute.js';
+import { KtxExpectedError } from '../../../src/errors.js';
+
+const exitingCommand = (code: number, stderr: string) => ({
+  command: process.execPath,
+  args: [
+    '-e',
+    `process.stdin.on('data',()=>{});process.stdin.on('end',()=>{process.stderr.write(${JSON.stringify(stderr)});process.exit(${code})});`,
+  ],
+});
+
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => {
+      throw new Error('expected rejection');
+    },
+    (error) => error,
+  );
+}
 
 const source = {
   name: 'orders',
@@ -172,6 +190,28 @@ describe('createPythonSemanticLayerComputePort', () => {
 
     expect(runJson).toHaveBeenCalledWith('semantic-generate-sources', sourceGenerationDaemonPayload);
   });
+
+  it('classifies a daemon request-rejection exit code as an expected error', async () => {
+    const port = createPythonSemanticLayerComputePort(exitingCommand(3, "Measure 'x' is ambiguous"));
+
+    const error = await rejection(
+      port.query({ sources: [source], dialect: 'postgres', query: { measures: ['orders.order_count'], dimensions: [] } }),
+    );
+
+    expect(error).toBeInstanceOf(KtxExpectedError);
+    expect((error as Error).message).toContain("Measure 'x' is ambiguous");
+  });
+
+  it('classifies a daemon fault exit code as a plain error', async () => {
+    const port = createPythonSemanticLayerComputePort(exitingCommand(1, 'ModuleNotFoundError: pydantic_core'));
+
+    const error = await rejection(
+      port.query({ sources: [source], dialect: 'postgres', query: { measures: ['orders.order_count'], dimensions: [] } }),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(KtxExpectedError);
+  });
 });
 
 describe('createHttpSemanticLayerComputePort', () => {
@@ -336,6 +376,51 @@ describe('createHttpSemanticLayerComputePort', () => {
           body: sourceGenerationDaemonPayload,
         },
       ]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('classifies an HTTP 400 request rejection as an expected error', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ detail: "Measure 'x' is ambiguous" }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        throw new Error('expected TCP server address');
+      }
+      const port = createHttpSemanticLayerComputePort({ baseUrl: `http://127.0.0.1:${address.port}` });
+      const error = await rejection(
+        port.query({ sources: [source], dialect: 'postgres', query: { measures: ['orders.order_count'], dimensions: [] } }),
+      );
+      expect(error).toBeInstanceOf(KtxExpectedError);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('classifies an HTTP 500 fault as a plain error', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ detail: 'boom' }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        throw new Error('expected TCP server address');
+      }
+      const port = createHttpSemanticLayerComputePort({ baseUrl: `http://127.0.0.1:${address.port}` });
+      const error = await rejection(
+        port.query({ sources: [source], dialect: 'postgres', query: { measures: ['orders.order_count'], dimensions: [] } }),
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(KtxExpectedError);
     } finally {
       server.close();
     }

@@ -42,6 +42,7 @@ from ktx_daemon.lookml import (
 from ktx_daemon.semantic_layer import (
     SemanticLayerQueryRequest,
     SemanticLayerQueryResponse,
+    SemanticLayerRequestError,
     ValidateSourcesRequest,
     ValidateSourcesResponse,
     query_semantic_layer,
@@ -268,7 +269,7 @@ def create_app(
     ) -> SemanticLayerQueryResponse:
         try:
             return query_semantic_layer(request)
-        except ValueError as error:
+        except SemanticLayerRequestError as error:
             logger.warning("Semantic query rejected: %s", error)
             raise HTTPException(status_code=400, detail=str(error)) from error
 
