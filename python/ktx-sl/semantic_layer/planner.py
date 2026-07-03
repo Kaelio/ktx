@@ -62,6 +62,10 @@ class QueryPlanner:
         # 2. Resolve measures (parse, look up pre-defined, classify)
         raw_measures = self._resolve_measures(query.measures)
 
+        if query.predefined_measures_only:
+            self._reject_composed_measures(raw_measures)
+            self._reject_composed_filter_aggregates(query.filters)
+
         # 3. Topological sort for derived measures
         measures = self._topological_sort_measures(raw_measures)
 
@@ -238,6 +242,42 @@ class QueryPlanner:
         # Qualify duplicate measure names across sources
         measures = self._qualify_duplicate_names(measures)
         return measures
+
+    def _reject_composed_measures(self, measures: list[ResolvedMeasure]) -> None:
+        composed = [m for m in measures if m.provenance is Provenance.COMPOSED]
+        if not composed:
+            return
+        rejected = ", ".join(f"'{m.expr}'" for m in composed)
+        raise ValueError(
+            f"Only predefined semantic-layer measures can be queried on this "
+            f"connection (query_policy: semantic-layer-only); composed measure "
+            f"expressions are not allowed: {rejected}. Use measures declared "
+            f"on the semantic-layer sources, referenced as 'source.measure'."
+        )
+
+    def _reject_composed_filter_aggregates(self, filters: list[str]) -> None:
+        # Predefined measures are compared in HAVING by name (e.g.
+        # `orders.revenue > 100`), which parses as a plain column ref. Any
+        # aggregate function written into a filter is therefore a runtime-composed
+        # aggregate the policy forbids — without this guard it would slip through
+        # `_classify_filters` into HAVING and evaluate an arbitrary aggregate.
+        composed: list[str] = []
+        for f in filters:
+            if not f or not f.strip():
+                continue
+            for clause in self._split_top_level_and(f):
+                if self.parser.parse(clause).is_aggregate:
+                    composed.append(clause)
+        if not composed:
+            return
+        rejected = ", ".join(f"'{c}'" for c in composed)
+        raise ValueError(
+            f"Only predefined semantic-layer measures can be queried on this "
+            f"connection (query_policy: semantic-layer-only); filters may not "
+            f"compose aggregate expressions: {rejected}. Filter on declared "
+            f"dimensions or columns, or compare a predefined measure by name "
+            f"(e.g. 'orders.revenue > 100')."
+        )
 
     def _collect_colliding_predefined_names(self, raw: list[str | dict]) -> set[str]:
         counts: Counter[str] = Counter()

@@ -12,6 +12,7 @@ describe('sqlAnalysisDialectForDriver', () => {
     expect(sqlAnalysisDialectForDriver('duckdb')).toBe('duckdb');
     expect(sqlAnalysisDialectForDriver('clickhouse')).toBe('clickhouse');
     expect(sqlAnalysisDialectForDriver('databricks')).toBe('databricks');
+    expect(sqlAnalysisDialectForDriver('athena')).toBe('athena');
   });
 
   it('maps local connection-type spellings to sqlglot dialects', () => {

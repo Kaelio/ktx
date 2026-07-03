@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initKtxProject } from '../../../src/context/project/project.js';
 import { KtxExpectedError, KtxQueryError } from '../../../src/errors.js';
+import { KtxDaemonComputeError } from '../../../src/context/daemon/semantic-layer-compute.js';
 import { createKtxConnectorCapabilities, type KtxQueryResult, type KtxScanConnector, type KtxSchemaSnapshot } from '../../../src/context/scan/types.js';
 import { SemanticLayerService } from '../../../src/context/sl/semantic-layer.service.js';
 import type { SemanticLayerSource } from '../../../src/context/sl/types.js';
@@ -245,6 +246,80 @@ describe('createLocalProjectMcpContextPorts', () => {
       { runId: 'mcp-sql-execution' },
     );
     expect(connector.cleanup).toHaveBeenCalled();
+  });
+
+  it('omits sql_execution when every SQL connection is semantic-layer-only', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.warehouse = {
+      driver: 'postgres',
+      url: 'env:DATABASE_URL',
+      query_policy: 'semantic-layer-only',
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis: {
+        analyzeForFingerprint: vi.fn(),
+        analyzeBatch: vi.fn(),
+        validateReadOnly: vi.fn(async () => ({ ok: true, error: null })),
+      },
+      localScan: { createConnector: vi.fn(async () => testConnector()) },
+      embeddingService: null,
+    });
+
+    expect(ports.sqlExecution).toBeUndefined();
+  });
+
+  it('keeps sql_execution in mixed projects but rejects restricted connections and flags them in connection_list', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.warehouse = {
+      driver: 'postgres',
+      url: 'env:DATABASE_URL',
+    };
+    project.config.connections.finance = {
+      driver: 'postgres',
+      url: 'env:FINANCE_URL',
+      query_policy: 'semantic-layer-only',
+    };
+    const createConnector = vi.fn(async () => testConnector());
+    const sqlAnalysis = {
+      analyzeForFingerprint: vi.fn(),
+      analyzeBatch: vi.fn(),
+      validateReadOnly: vi.fn(async () => ({ ok: true, error: null })),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis,
+      localScan: { createConnector },
+      embeddingService: null,
+    });
+
+    expect(ports.sqlExecution).toBeDefined();
+    const execution = ports.sqlExecution?.execute({
+      connectionId: 'finance',
+      sql: 'select 1',
+      maxRows: 5,
+    });
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow(/query_policy: semantic-layer-only/);
+    expect(sqlAnalysis.validateReadOnly).not.toHaveBeenCalled();
+    expect(createConnector).not.toHaveBeenCalled();
+
+    // Both postgres members federate, so the restricted member also blocks federated raw SQL.
+    await expect(
+      ports.sqlExecution?.execute({ connectionId: '_ktx_federated', sql: 'select 1', maxRows: 5 }),
+    ).rejects.toThrow(/"finance"/);
+
+    await expect(ports.connections?.list()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'finance',
+        queryPolicy: 'semantic-layer-only',
+        hint: expect.stringContaining('sl_query'),
+      }),
+      expect.objectContaining({ id: 'warehouse' }),
+      expect.objectContaining({
+        id: '_ktx_federated',
+        queryPolicy: 'semantic-layer-only',
+        hint: expect.stringContaining('finance'),
+      }),
+    ]);
   });
 
   it('rejects sql_execution against an unconfigured connection with an actionable expected error', async () => {
@@ -1102,5 +1177,87 @@ describe('createLocalProjectMcpContextPorts', () => {
         maxRows: 5,
       }),
     );
+  });
+
+  async function seedOrdersWarehouse() {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.warehouse = { driver: 'postgres', url: 'env:DATABASE_URL' };
+    await seedSlSourceFile(project, {
+      connectionId: 'warehouse',
+      sourceName: 'orders',
+      yaml: ['name: orders', 'table: public.orders', 'grain:', '  - id', 'columns:', '  - name: id', '    type: number', 'joins: []', 'measures: []', ''].join('\n'),
+    });
+    return project;
+  }
+
+  it('promotes a daemon input-rejection to an expected KtxQueryError carrying the daemon detail', async () => {
+    const project = await seedOrdersWarehouse();
+    const semanticLayerCompute = {
+      validateSources: vi.fn(),
+      generateSources: vi.fn(),
+      query: vi.fn(async () => {
+        throw new KtxDaemonComputeError("ktx-daemon semantic-query failed: Measure expr 'count(*)' does not reference any source", {
+          inputRejected: true,
+          detail: "Measure expr 'count(*)' does not reference any source",
+        });
+      }),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, { semanticLayerCompute, embeddingService: null });
+
+    const rejection = ports.semanticLayer?.query({
+      connectionId: 'warehouse',
+      query: { measures: [{ expr: 'count(*)', name: 'n' }], dimensions: [] },
+    });
+    await expect(rejection).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(rejection).rejects.toThrow("Measure expr 'count(*)' does not reference any source");
+  });
+
+  it('leaves a daemon crash as an unexpected fault', async () => {
+    const project = await seedOrdersWarehouse();
+    const semanticLayerCompute = {
+      validateSources: vi.fn(),
+      generateSources: vi.fn(),
+      query: vi.fn(async () => {
+        throw new KtxDaemonComputeError('ktx-daemon semantic-query failed: KeyError: boom', {
+          inputRejected: false,
+          detail: 'KeyError: boom',
+        });
+      }),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, { semanticLayerCompute, embeddingService: null });
+
+    const rejection = ports.semanticLayer?.query({
+      connectionId: 'warehouse',
+      query: { measures: ['orders.order_count'], dimensions: [] },
+    });
+    await expect(rejection).rejects.toBeInstanceOf(KtxDaemonComputeError);
+    await expect(rejection).rejects.not.toBeInstanceOf(KtxQueryError);
+  });
+
+  it('wraps a warehouse execution rejection from sl_query as KtxQueryError', async () => {
+    const project = await seedOrdersWarehouse();
+    const semanticLayerCompute = {
+      validateSources: vi.fn(),
+      generateSources: vi.fn(),
+      query: vi.fn(async () => ({
+        sql: 'select count(*) from public.orders',
+        dialect: 'postgres',
+        columns: [{ name: 'orders.order_count' }],
+        plan: {},
+      })),
+    };
+    const queryExecutor = {
+      execute: vi.fn(async () => {
+        throw new Error("Unknown column '검사 유형' in 'SELECT'");
+      }),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, { semanticLayerCompute, queryExecutor, embeddingService: null });
+
+    const rejection = ports.semanticLayer?.query({
+      connectionId: 'warehouse',
+      query: { measures: ['orders.order_count'], dimensions: [], limit: 5 },
+    });
+    await expect(rejection).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(rejection).rejects.toThrow("Unknown column '검사 유형' in 'SELECT'");
   });
 });

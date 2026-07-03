@@ -23,6 +23,16 @@ def test_parse_table_identifier_supported_dialects_and_aliases() -> None:
                 sql_table_name="RAW.PUBLIC.ORDERS",
                 dialect="snowflake",
             ),
+            ParseTableIdentifierItem(
+                key="athena",
+                sql_table_name="analytics.orders",
+                dialect="athena",
+            ),
+            ParseTableIdentifierItem(
+                key="duckdb",
+                sql_table_name="analytics.orders",
+                dialect="duckdb",
+            ),
         ]
     )
 
@@ -37,6 +47,14 @@ def test_parse_table_identifier_supported_dialects_and_aliases() -> None:
     assert response["sf"].catalog == "RAW"
     assert response["sf"].schema_ == "PUBLIC"
     assert response["sf"].name == "ORDERS"
+    assert response["athena"].ok is True
+    assert response["athena"].schema_ == "analytics"
+    assert response["athena"].name == "orders"
+    assert response["athena"].canonical_table == "analytics.orders"
+    assert response["duckdb"].ok is True
+    assert response["duckdb"].schema_ == "analytics"
+    assert response["duckdb"].name == "orders"
+    assert response["duckdb"].canonical_table == "analytics.orders"
 
 
 def test_parse_table_identifier_rejects_non_physical_inputs() -> None:

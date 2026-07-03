@@ -1,6 +1,6 @@
 ---
 title: Primary Sources
-description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, or MongoDB.
+description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, MongoDB, or Amazon Athena.
 ---
 
 **ktx** connects to your data warehouse or database to build schema context,
@@ -26,17 +26,23 @@ Agents should prefer environment or file references over literal secrets.
 
 | Field | Required | Applies to | Description |
 |-------|----------|------------|-------------|
-| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, or `mongodb` |
+| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, `mongodb`, or `athena` |
 | `url` | One of the connection methods | URL-style connectors | Database URL, `env:NAME`, or `file:/path/to/secret` |
 | `host`, `port`, `database`, `username`, `password` | One of the connection methods | PostgreSQL, MySQL, SQL Server | Field-by-field connection values |
 | `schema` or `schemas` | No | schema-aware warehouses | Single schema or list of schemas to scan |
-| `databases` | No | ClickHouse, MongoDB | List of databases to scan |
+| `databases` | No | ClickHouse, MongoDB, Athena | List of databases to scan |
 | `sample_size`, `order_by` | No | MongoDB | Schema-inference sampling controls (recent documents, sort field) |
 | `context.queryHistory` | No | PostgreSQL, Snowflake, BigQuery | Enables query-history ingestion when the warehouse supports it |
 | `path` | Yes for path-style SQLite/DuckDB | SQLite, DuckDB | Local SQLite or DuckDB database path or `env:NAME` reference |
 | `max_bytes_billed` | No | BigQuery | Maximum bytes billed per query job |
 | `query_timeout_ms` | No | all warehouses | Maximum execution time for a single read-only query, in milliseconds (default 30000). A query exceeding it is cancelled server-side (or, for SQLite, by terminating the off-process executor) and returns a `query exceeded Ns` error so the agent can revise. |
 | `project_id` | No | BigQuery | Optional local descriptor and mapping metadata; not used for BigQuery authentication |
+| `region` | Yes | Athena | AWS region where the Athena workgroup and Glue catalog reside (e.g. `us-east-1`) |
+| `s3_staging_dir` | Yes | Athena | S3 URI for Athena query result storage (e.g. `s3://my-bucket/athena-results/`) |
+| `workgroup` | No | Athena | Athena workgroup name (default `primary`) |
+| `catalog` | No | Athena | Glue Data Catalog name (default `AwsDataCatalog`) |
+| `database` | No | Athena | Default Glue database name passed as the query execution context |
+| `databases` | No | Athena | Glue databases to include in schema scans; written by `ktx setup` and read by `ktx ingest` |
 
 ## PostgreSQL
 
@@ -301,6 +307,76 @@ staged artifact shape as Postgres and Snowflake.
 - Arrays flattened to comma-separated strings in results
 - Location specified at query execution time
 - Supports the `max_bytes_billed` limit from `ktx.yaml`; the shared `query_timeout_ms` field maps to the query job's `jobTimeoutMs`
+
+---
+
+## Amazon Athena
+
+Connects to Amazon Athena using the AWS Glue Data Catalog for schema introspection and the Athena query API for read-only SQL execution. Authentication uses the standard AWS credential chain — no credentials are embedded in `ktx.yaml`.
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  my-athena:
+    driver: athena
+    region: us-east-1
+    s3_staging_dir: s3://my-bucket/athena-results/
+```
+
+With optional fields:
+
+```yaml title="ktx.yaml"
+connections:
+  my-athena:
+    driver: athena
+    region: us-east-1
+    s3_staging_dir: env:ATHENA_S3_STAGING_DIR
+    workgroup: analytics
+    catalog: AwsDataCatalog
+    database: my_default_database
+    databases:
+      - analytics
+      - raw
+```
+
+`ktx setup` writes the `databases` array when you select Glue databases during setup. `ktx scan` reads it to limit introspection to those databases.
+
+### Authentication
+
+**ktx** uses the AWS SDK default credential chain — no credentials appear in `ktx.yaml`. The chain resolves credentials in this order:
+
+| Method | How to configure |
+|--------|-----------------|
+| Environment variables | Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN` |
+| Shared credentials file | Configure `~/.aws/credentials` with a `[default]` or named profile; set `AWS_PROFILE` to select a non-default profile |
+| IAM instance profile | Attach an IAM role to the EC2 instance or ECS task — no local configuration needed |
+| IAM roles for service accounts (EKS) | Annotate the pod's service account with the IAM role ARN |
+
+The IAM principal must have `athena:StartQueryExecution`, `athena:GetQueryExecution`, `athena:GetQueryResults`, `glue:GetDatabases`, and `glue:GetTables` permissions, plus read access to the S3 results bucket.
+
+### Features
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Tables & views | Yes | Via AWS Glue Data Catalog |
+| Primary keys | No | Glue does not expose constraint metadata |
+| Foreign keys | No | Not available in Glue/Athena |
+| Row count estimates | No | Glue table statistics are often stale |
+| Column statistics | No | - |
+| Query history | No | - |
+| Table sampling | Yes | `SELECT ... LIMIT n` |
+
+### Dialect notes
+
+- SQL dialect is Presto/Trino; identifiers are quoted with double-quotes
+- Table names use three-part format: `"catalog"."database"."table"` (e.g. `"AwsDataCatalog"."analytics"."orders"`)
+- Partition columns (`PartitionKeys` in Glue) are included after regular columns in the schema and are fully queryable
+- Athena does not support `TABLESAMPLE`; random sampling uses `ORDER BY rand()`
+- Query execution is asynchronous: **ktx** starts the query, polls until completion, then fetches results from S3
+- Results are stored in `s3_staging_dir`; the IAM principal needs write access to that bucket
+- Use `workgroup` to apply per-workgroup cost controls and result configuration
+- The connector always uses your account's default Glue Data Catalog; cross-account catalog access (`CatalogId` pointing to another account) is not supported
 
 ---
 
@@ -675,7 +751,9 @@ nullability from how often the field is present:
 | Error or symptom | Likely cause | Recovery |
 |------------------|--------------|----------|
 | Connection URL appears in git diff | A literal credential URL was written to `ktx.yaml` | Replace it with `env:NAME` or `file:/path/to/secret` and rotate exposed credentials |
-| Database ingest returns no tables | Schema, database, or project filter is wrong, or the user lacks metadata permissions | Verify the schema list and grant metadata read permissions |
+| Database ingest returns no tables | Schema, database, or project filter is wrong, or the user lacks metadata permissions | Verify the schema list and grant metadata read permissions. For Athena, confirm the IAM principal has `glue:GetDatabases` and `glue:GetTables` permissions |
 | Query history is empty | Query history extension or warehouse history view is unavailable | Enable the warehouse-specific history feature, then rerun `ktx ingest <connectionId> --query-history` or `ktx setup` |
 | Column statistics are missing | Connector cannot access stats tables or the warehouse does not expose them | Grant stats permissions where supported; otherwise rely on schema-level context without column statistics |
 | Semantic query execution fails | Connection is missing, unreachable, or query execution is disabled | Run `ktx connection test <id>` and check the `ktx sl query` flags |
+| Athena query fails with `ACCESS_DENIED` | IAM principal lacks `athena:StartQueryExecution` or S3 write access to `s3_staging_dir` | Attach a policy granting Athena query permissions and `s3:PutObject` on the staging bucket |
+| Athena ingest finds databases but no tables | IAM principal has `glue:GetDatabases` but not `glue:GetTables` | Grant `glue:GetTables` on the relevant Glue catalog resources |

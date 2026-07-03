@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveKtxConfigReference, resolveKtxHomePath } from '../../../src/context/core/config-reference.js';
+import { KtxExpectedError } from '../../../src/errors.js';
 
 describe('ktx config references', () => {
   it('resolves env references without returning empty values', () => {
@@ -20,6 +21,17 @@ describe('ktx config references', () => {
     await writeFile(keyPath, 'file-gateway-key\n', 'utf8');
 
     expect(resolveKtxConfigReference(`file:${keyPath}`, {})).toBe('file-gateway-key');
+  });
+
+  it('raises an expected error when a file reference is missing', () => {
+    const missing = join(tmpdir(), `ktx-config-reference-missing-${process.pid}`, 'absent-password');
+    try {
+      resolveKtxConfigReference(`file:${missing}`, {});
+      expect.unreachable('expected a thrown error for the missing secret file');
+    } catch (error) {
+      expect(error).toBeInstanceOf(KtxExpectedError);
+      expect((error as Error).message).toContain(missing);
+    }
   });
 
   it('returns literal values unchanged after trimming blank-only values', () => {

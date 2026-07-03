@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KtxSemanticLayerComputePort } from '../../../src/context/daemon/semantic-layer-compute.js';
+import { FEDERATED_CONNECTION_ID } from '../../../src/context/connections/federation.js';
 import { initKtxProject, type KtxLocalProject } from '../../../src/context/project/project.js';
-import { KtxExpectedError, KtxQueryError } from '../../../src/errors.js';
 import { compileLocalSlQuery } from '../../../src/context/sl/local-query.js';
 
 describe('compileLocalSlQuery', () => {
@@ -68,6 +68,59 @@ grain: []
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  it('injects predefined_measures_only when the connection query_policy is semantic-layer-only', async () => {
+    project.config.connections.warehouse = { driver: 'postgres', query_policy: 'semantic-layer-only' };
+
+    await compileLocalSlQuery(project, {
+      connectionId: 'warehouse',
+      query: { measures: ['orders.order_count'], dimensions: [], limit: 10 },
+      compute,
+    });
+
+    expect(compute.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ predefined_measures_only: true }),
+      }),
+    );
+  });
+
+  it('rejects a federated sl_query, pointing to per-connection SL when a member is restricted', async () => {
+    project.config.connections.warehouse = { driver: 'postgres', query_policy: 'semantic-layer-only' };
+    project.config.connections.analytics = { driver: 'postgres' };
+
+    let message = '';
+    try {
+      await compileLocalSlQuery(project, {
+        connectionId: FEDERATED_CONNECTION_ID,
+        query: { measures: ['orders.order_count'], dimensions: [] },
+        compute,
+      });
+      throw new Error('expected compileLocalSlQuery to reject');
+    } catch (e) {
+      message = (e as Error).message;
+    }
+
+    expect(message).toContain("member connection(s) 'warehouse'");
+    expect(message).toContain('query_policy: semantic-layer-only');
+    // Must not send the agent down the raw-SQL path that assertRawSqlAllowed rejects.
+    expect(message).not.toContain(`ktx sql -c ${FEDERATED_CONNECTION_ID}`);
+    expect(message).not.toContain('sql_execution');
+    expect(compute.query).not.toHaveBeenCalled();
+  });
+
+  it('rejects a federated sl_query, pointing to raw federated SQL when no member is restricted', async () => {
+    project.config.connections.analytics = { driver: 'postgres' };
+
+    await expect(
+      compileLocalSlQuery(project, {
+        connectionId: FEDERATED_CONNECTION_ID,
+        query: { measures: ['orders.order_count'], dimensions: [] },
+        compute,
+      }),
+    ).rejects.toThrow(`ktx sql -c ${FEDERATED_CONNECTION_ID}`);
+    expect(compute.query).not.toHaveBeenCalled();
+  });
+
   it('refuses a non-SQL (context-only) connection instead of compiling it as Postgres', async () => {
     project.config.connections['mongo-prod'] = { driver: 'mongodb', url: 'mongodb://localhost:27017/app' };
     await expect(
@@ -110,6 +163,7 @@ grain: []
         measures: ['orders.order_count'],
         dimensions: ['orders.status'],
         limit: 25,
+        predefined_measures_only: false,
       },
     });
     expect(result).toEqual({
@@ -191,6 +245,7 @@ grain: []
       query: {
         measures: ['sum(payments.amount)'],
         dimensions: [],
+        predefined_measures_only: false,
       },
     });
   });
@@ -356,55 +411,5 @@ grain: []
         compute,
       }),
     ).rejects.toThrow('Connection "DIG_SMART_REP" is not configured in ktx.yaml. Configured connections: warehouse.');
-  });
-
-  it('classifies a warehouse execution rejection as an expected query error', async () => {
-    const queryExecutor = {
-      execute: vi.fn(async () => {
-        throw new Error('No matching signature for operator >= for argument types: TIMESTAMP, INT64');
-      }),
-    };
-
-    const promise = compileLocalSlQuery(project, {
-      connectionId: 'warehouse',
-      query: { measures: ['orders.order_count'], dimensions: [] },
-      compute,
-      execute: true,
-      queryExecutor,
-    });
-
-    await expect(promise).rejects.toBeInstanceOf(KtxQueryError);
-    await expect(promise).rejects.toThrow(/No matching signature/);
-  });
-
-  it('lets a native programming fault from the executor propagate unclassified', async () => {
-    const queryExecutor = {
-      execute: vi.fn(async () => {
-        throw new TypeError('cannot read properties of undefined');
-      }),
-    };
-
-    const promise = compileLocalSlQuery(project, {
-      connectionId: 'warehouse',
-      query: { measures: ['orders.order_count'], dimensions: [] },
-      compute,
-      execute: true,
-      queryExecutor,
-    });
-
-    await expect(promise).rejects.toBeInstanceOf(TypeError);
-    await expect(promise).rejects.not.toBeInstanceOf(KtxExpectedError);
-  });
-
-  it('classifies the non-SQL-connection refusal as an expected error', async () => {
-    project.config.connections['mongo-prod'] = { driver: 'mongodb', url: 'mongodb://localhost:27017/app' };
-
-    await expect(
-      compileLocalSlQuery(project, {
-        connectionId: 'mongo-prod',
-        query: { measures: ['orders.order_count'], dimensions: [] },
-        compute,
-      }),
-    ).rejects.toBeInstanceOf(KtxExpectedError);
   });
 });

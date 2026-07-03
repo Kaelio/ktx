@@ -2,9 +2,10 @@ import YAML from 'yaml';
 import type { GitService } from '../../../context/core/git.service.js';
 import type { KtxFileListResult, KtxFileReadResult, KtxFileStorePort } from '../../../context/core/file-store.js';
 import { SYSTEM_GIT_AUTHOR } from '../../../context/tools/authors.js';
+import { dialectForConnectionType } from '../../connections/connection-type-dialect.js';
 import type { SlConnectionCatalogPort, SlSourcesIndexPort } from '../ports.js';
 import { sourceOverlaySchema } from '../schemas.js';
-import { SemanticLayerService } from '../semantic-layer.service.js';
+import type { SemanticLayerService } from '../semantic-layer.service.js';
 import { resolveSlSourceFile, slSourceFilePath } from '../source-files.js';
 import type { SemanticLayerSource } from '../types.js';
 import { sourceDefinitionSchema } from './base-semantic-layer.tool.js';
@@ -28,7 +29,7 @@ function resolveDialect(warehouse: string | null): string | null {
   if (!warehouse) {
     return null;
   }
-  return SemanticLayerService.mapDialect(warehouse);
+  return dialectForConnectionType(warehouse);
 }
 
 function wrapWithZeroRowQuery(sql: string, dialect: string): string {

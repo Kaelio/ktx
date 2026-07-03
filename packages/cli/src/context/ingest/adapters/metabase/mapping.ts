@@ -8,8 +8,8 @@ export const METABASE_ENGINE_TO_CONNECTION_TYPE = {
   snowflake: 'SNOWFLAKE',
   sqlserver: 'SQLSERVER',
   mysql: 'MYSQL',
+  athena: 'ATHENA',
 } as const;
-
 
 export interface DiscoveredMetabaseDatabase {
   id: number;

@@ -9,6 +9,7 @@ export type KtxConnectionDriver =
   | 'snowflake'
   | 'mysql'
   | 'clickhouse'
+  | 'athena'
   | 'mongodb';
 
 /** Canonical scan-mode registry. Runtime validation derives its allowlist here. */

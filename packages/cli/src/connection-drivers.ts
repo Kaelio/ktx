@@ -10,6 +10,7 @@ export const KTX_DATABASE_DRIVER_IDS = [
   'sqlserver',
   'bigquery',
   'snowflake',
+  'athena',
 ] as const;
 
 // mongodb is a database driver but has no SQL dialect, so it sits outside the

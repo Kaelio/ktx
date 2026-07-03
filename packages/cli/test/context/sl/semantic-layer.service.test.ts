@@ -960,6 +960,28 @@ describe('validateWithProposedSource', () => {
     );
   });
 
+  it('uses the Athena sqlglot dialect when validating Athena sources', async () => {
+    pythonPort.validateSources.mockResolvedValue({
+      data: { errors: [], warnings: [] },
+    });
+    service = new SemanticLayerService(configService as never, connectionCatalog('ATHENA'), pythonPort);
+
+    await service.validateWithProposedSource('conn-1', {
+      name: 'orders',
+      table: 'analytics.orders',
+      grain: ['id'],
+      columns: [{ name: 'id', type: 'number' }],
+      joins: [],
+      measures: [],
+    });
+
+    expect(pythonPort.validateSources).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dialect: 'athena',
+      }),
+    );
+  });
+
   it('composes a bare overlay with its manifest base before validating', async () => {
     const schemaPath = 'semantic-layer/conn-1/_schema/core.yaml';
     const listFilesImpl = (dir: string): Promise<{ files: string[] }> => {
@@ -1323,6 +1345,44 @@ describe('validateWithProposedSource', () => {
 
     expect(result.errors.join('\n')).toMatch(/orders: join target "orbit_analytics.accounts" does not exist/);
     expect(pythonPort.validateSources).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeQuery dialect resolution', () => {
+  it('passes the Athena sqlglot dialect to the Python query engine for Athena connections', async () => {
+    pythonPort.query.mockResolvedValue({ data: { sql: 'SELECT * FROM orders' } });
+    const catalog = connectionCatalog('ATHENA');
+    catalog.executeQuery.mockResolvedValue({ headers: ['id'], rows: [[1]], totalRows: 1 });
+    const configService = {
+      listFiles: vi.fn().mockResolvedValue({
+        files: ['semantic-layer/conn-1/orders.yaml'],
+      }),
+      readFile: vi.fn().mockResolvedValue({
+        content: [
+          'name: orders',
+          'table: analytics.orders',
+          'grain:',
+          '  - id',
+          'columns:',
+          '  - name: id',
+          '    type: number',
+          'joins: []',
+          'measures:',
+          '  - name: count',
+          '    expr: count(*)',
+        ].join('\n'),
+      }),
+    };
+    const service = new SemanticLayerService(configService as never, catalog, pythonPort);
+
+    await service.executeQuery('conn-1', { measures: ['count'] } as never);
+
+    expect(pythonPort.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dialect: 'athena',
+      }),
+    );
+    expect(catalog.executeQuery).toHaveBeenCalledWith('conn-1', 'SELECT * FROM orders');
   });
 });
 

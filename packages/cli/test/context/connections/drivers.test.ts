@@ -70,6 +70,11 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     database: 'ANALYTICS',
     schema: 'PUBLIC',
   }),
+  athena: () => ({
+    driver: 'athena',
+    region: 'us-east-1',
+    s3_staging_dir: 's3://my-bucket/athena-results/',
+  }),
 };
 
 const allowedScopeKeys = new Set(['dataset_ids', 'databases', 'schemas', 'schema_names']);
@@ -100,6 +105,7 @@ describe('driverRegistrations', () => {
     const registryDrivers = Object.keys(driverRegistrations).sort();
     expect(listSupportedDrivers()).toEqual(registryDrivers);
     expect(listSupportedDrivers()).toEqual([
+      'athena',
       'bigquery',
       'clickhouse',
       'duckdb',

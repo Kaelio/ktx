@@ -4,6 +4,44 @@ import { URL } from 'node:url';
 import { spawn } from 'node:child_process';
 import type { ResolvedSemanticLayerSource, SemanticLayerQueryInput } from '../sl/types.js';
 
+// The daemon signals "the caller sent a well-formed request I refused as
+// invalid" with a distinct subprocess exit code (INPUT_REJECTED_EXIT_CODE in
+// python/ktx-daemon/__main__.py) or HTTP 400. Kept in sync across the boundary.
+const DAEMON_INPUT_REJECTED_EXIT_CODE = 3;
+const DAEMON_INPUT_REJECTED_HTTP_STATUS = 400;
+
+/**
+ * A ktx-daemon compute call failed. `inputRejected` is true when the daemon
+ * refused the request as invalid (a caller-driven outcome) rather than faulting;
+ * callers can promote those to an expected KtxQueryError while letting genuine
+ * daemon crashes reach Error Tracking. `detail` is the daemon's own message,
+ * unwrapped for surfacing to the caller.
+ */
+export class KtxDaemonComputeError extends Error {
+  readonly inputRejected: boolean;
+  readonly detail: string;
+
+  constructor(message: string, options: { inputRejected: boolean; detail: string; cause?: unknown }) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    this.name = 'KtxDaemonComputeError';
+    this.inputRejected = options.inputRejected;
+    this.detail = options.detail;
+  }
+}
+
+/** The daemon reports HTTP failures as `{ "detail": "…" }`; fall back to the raw body. */
+function daemonHttpErrorDetail(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && typeof (parsed as { detail?: unknown }).detail === 'string') {
+      return (parsed as { detail: string }).detail;
+    }
+  } catch {
+    // Non-JSON body (e.g. a proxy error page) — surface it verbatim.
+  }
+  return raw;
+}
+
 interface KtxSemanticLayerComputeQueryResult {
   sql: string;
   dialect: string;
@@ -128,7 +166,13 @@ function runProcessJson(
         const stdoutText = Buffer.concat(stdout).toString('utf8').trim();
         const stderrText = Buffer.concat(stderr).toString('utf8').trim();
         if (code !== 0) {
-          reject(new Error(`ktx-daemon ${subcommand} failed: ${stderrText || `exit code ${code}`}`));
+          const detail = stderrText || `exit code ${code}`;
+          reject(
+            new KtxDaemonComputeError(`ktx-daemon ${subcommand} failed: ${detail}`, {
+              inputRejected: code === DAEMON_INPUT_REJECTED_EXIT_CODE,
+              detail,
+            }),
+          );
           return;
         }
         try {
@@ -168,7 +212,12 @@ function postJson(baseUrl: string): KtxDaemonHttpJsonRunner {
             const text = Buffer.concat(chunks).toString('utf8');
             const statusCode = response.statusCode ?? 0;
             if (statusCode < 200 || statusCode >= 300) {
-              reject(new Error(`ktx-daemon HTTP ${path} failed with ${statusCode}: ${text}`));
+              reject(
+                new KtxDaemonComputeError(`ktx-daemon HTTP ${path} failed with ${statusCode}: ${text}`, {
+                  inputRejected: statusCode === DAEMON_INPUT_REJECTED_HTTP_STATUS,
+                  detail: daemonHttpErrorDetail(text),
+                }),
+              );
               return;
             }
             try {

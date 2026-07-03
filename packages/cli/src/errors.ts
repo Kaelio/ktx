@@ -46,20 +46,3 @@ export function isNativeProgrammingFault(error: unknown): boolean {
     error instanceof URIError
   );
 }
-
-/**
- * Reclassifies a caught boundary rejection as an expected error and rethrows. A native
- * JS fault (TypeError, etc.) or an already-expected error is rethrown unchanged so Error
- * Tracking still sees genuine ktx bugs; anything else — the warehouse or daemon refusing
- * the query — is wrapped in `ErrorClass` (default KtxQueryError), preserving the original
- * message and keeping the cause, so `reportException` keeps it out of Error Tracking.
- */
-export function markExpected(
-  error: unknown,
-  ErrorClass: new (message: string, options?: ErrorOptions) => KtxExpectedError = KtxQueryError,
-): never {
-  if (isNativeProgrammingFault(error) || error instanceof KtxExpectedError) {
-    throw error;
-  }
-  throw new ErrorClass(error instanceof Error ? error.message : String(error), { cause: error });
-}
