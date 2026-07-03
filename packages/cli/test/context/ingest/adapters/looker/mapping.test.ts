@@ -72,6 +72,8 @@ describe('looker dialect and target validation helpers', () => {
   it('maps Looker dialect names to ktx connection types', () => {
     expect(lookerDialectToConnectionType('bigquery_standard_sql')).toBe('BIGQUERY');
     expect(lookerDialectToConnectionType('postgres')).toBe('POSTGRESQL');
+    expect(lookerDialectToConnectionType('awsathena')).toBe('ATHENA');
+    expect(lookerDialectToConnectionType('AWSATHENA')).toBe('ATHENA');
     expect(lookerDialectToConnectionType('mssql')).toBeNull();
     expect(lookerDialectToConnectionType('tsql')).toBeNull();
     expect(lookerDialectToConnectionType('unknown')).toBeNull();
@@ -80,6 +82,7 @@ describe('looker dialect and target validation helpers', () => {
   it('maps supported warehouse connection types to sqlglot dialects', () => {
     expect(sqlglotDialectForConnectionType('BIGQUERY')).toBe('bigquery');
     expect(sqlglotDialectForConnectionType('POSTGRESQL')).toBe('postgres');
+    expect(sqlglotDialectForConnectionType('ATHENA')).toBe('athena');
     expect(sqlglotDialectForConnectionType('LOOKER')).toBeNull();
   });
 
@@ -254,6 +257,44 @@ describe('collectExploreParseItems and projectParsedIdentifier', () => {
           key: 'b2b.sales_pipeline.accounts',
           sql_table_name: 'proj.analytics.accounts',
           dialect: 'bigquery',
+        },
+      ],
+    });
+  });
+
+  it('collects Athena parser inputs with the athena sqlglot dialect', () => {
+    expect(
+      collectExploreParseItems({
+        explore: {
+          ...mappedExplore,
+          rawSqlTableName: 'analytics.orders',
+          joins: [
+            {
+              name: 'line_items',
+              type: 'left_outer',
+              relationship: 'one_to_many',
+              rawSqlTableName: 'analytics.line_items',
+              sqlOn: null,
+              from: null,
+              targetTable: null,
+            },
+          ],
+        },
+        connectionMappings: { b2b_sandbox_bq: 'athena-warehouse' },
+        targetConnections: new Map([['athena-warehouse', { id: 'athena-warehouse', connection_type: 'ATHENA' }]]),
+      }),
+    ).toEqual({
+      parsedTargetTables: {},
+      parseItems: [
+        {
+          key: 'b2b.sales_pipeline',
+          sql_table_name: 'analytics.orders',
+          dialect: 'athena',
+        },
+        {
+          key: 'b2b.sales_pipeline.line_items',
+          sql_table_name: 'analytics.line_items',
+          dialect: 'athena',
         },
       ],
     });

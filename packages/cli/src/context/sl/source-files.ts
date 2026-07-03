@@ -136,6 +136,27 @@ export function slDeclaredSourceName(content: string): string | null {
 }
 
 /**
+ * Every standalone/overlay source file for a connection (excludes the `_schema/`
+ * manifest). The one listing entry points share so a file is visible to all.
+ */
+export async function listSlSourceFiles(
+  fileStore: Pick<KtxFileStorePort, 'listFiles' | 'readFile'>,
+  connectionId: string,
+): Promise<SlSourceFile[]> {
+  const dir = `semantic-layer/${assertSafeConnectionId(connectionId)}`;
+  const schemaDir = `${dir}/_schema`;
+  const listed = await fileStore.listFiles(dir);
+  const paths = listed.files.filter((file) => isSlYamlPath(file) && !file.startsWith(`${schemaDir}/`)).sort();
+
+  const files: SlSourceFile[] = [];
+  for (const path of paths) {
+    const raw = await fileStore.readFile(path);
+    files.push({ path, content: raw.content });
+  }
+  return files;
+}
+
+/**
  * Find the standalone/overlay file that defines `sourceName` for a connection.
  * Returns null when no file declares the name (the source may still exist as a
  * manifest entry under `_schema/`). Throws when more than one file declares the
@@ -147,18 +168,9 @@ export async function resolveSlSourceFile(
   connectionId: string,
   sourceName: string,
 ): Promise<SlSourceFile | null> {
-  const dir = `semantic-layer/${assertSafeConnectionId(connectionId)}`;
-  const schemaDir = `${dir}/_schema`;
-  const listed = await fileStore.listFiles(dir);
-  const paths = listed.files.filter((file) => isSlYamlPath(file) && !file.startsWith(`${schemaDir}/`)).sort();
-
-  const matches: SlSourceFile[] = [];
-  for (const path of paths) {
-    const raw = await fileStore.readFile(path);
-    if (slSourceNameForFile(path, raw.content) === sourceName) {
-      matches.push({ path, content: raw.content });
-    }
-  }
+  const matches = (await listSlSourceFiles(fileStore, connectionId)).filter(
+    (file) => slSourceNameForFile(file.path, file.content) === sourceName,
+  );
   if (matches.length > 1) {
     throw new Error(
       `Multiple semantic-layer files declare source "${sourceName}": ${matches.map((match) => match.path).join(', ')}`,

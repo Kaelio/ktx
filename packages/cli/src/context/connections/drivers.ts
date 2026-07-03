@@ -26,6 +26,23 @@ function invalidConnectionConfig(driver: KtxConnectionDriver): Error {
 
 /** @internal */
 export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistration> = {
+  athena: {
+    driver: 'athena',
+    scopeConfigKey: 'databases',
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/athena/connector.js');
+      return {
+        isConnectionConfig: (connection) => m.isKtxAthenaConnectionConfig(connection),
+        createScanConnector: ({ connectionId, connection }) => {
+          if (!m.isKtxAthenaConnectionConfig(connection)) {
+            throw invalidConnectionConfig('athena');
+          }
+          return new m.KtxAthenaScanConnector({ connectionId, connection });
+        },
+      };
+    },
+  },
   bigquery: {
     driver: 'bigquery',
     scopeConfigKey: 'dataset_ids',
@@ -64,6 +81,27 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
             throw invalidConnectionConfig('clickhouse');
           }
           return new m.KtxClickHouseScanConnector({ connectionId, connection: typedConnection });
+        },
+      };
+    },
+  },
+  duckdb: {
+    driver: 'duckdb',
+    scopeConfigKey: null,
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/duckdb/connector.js');
+      return {
+        isConnectionConfig: (connection) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxDuckDbConnectionConfig>[0];
+          return m.isKtxDuckDbConnectionConfig(typedConnection);
+        },
+        createScanConnector: ({ connectionId, connection, projectDir }) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxDuckDbConnectionConfig>[0];
+          if (!m.isKtxDuckDbConnectionConfig(typedConnection)) {
+            throw invalidConnectionConfig('duckdb');
+          }
+          return new m.KtxDuckDbScanConnector({ connectionId, connection: typedConnection, projectDir });
         },
       };
     },

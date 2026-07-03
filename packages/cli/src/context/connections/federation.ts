@@ -4,18 +4,19 @@ import type { KtxProjectConnectionConfig } from '../project/config.js';
 export const FEDERATED_CONNECTION_ID = '_ktx_federated';
 
 /**
- * Drivers DuckDB can ATTACH for federation. The driver name doubles as the
- * DuckDB extension/TYPE name, so this set is the single source of truth for
- * both membership (a driver participates iff it appears here) and attach type.
+ * Drivers DuckDB can ATTACH for federation. Membership is governed by this set;
+ * the attach TYPE is governed by attachTypeForDriver, which returns the driver
+ * name for extension-backed engines and null for a native DuckDB file (attached
+ * with no INSTALL/LOAD and no TYPE).
  */
-const ATTACH_COMPATIBLE_DRIVERS = new Set(['postgres', 'mysql', 'sqlite']);
+const ATTACH_COMPATIBLE_DRIVERS = new Set(['postgres', 'mysql', 'sqlite', 'duckdb']);
 
-export function attachTypeForDriver(driver: string): string {
+export function attachTypeForDriver(driver: string): string | null {
   const normalized = driver.toLowerCase();
   if (!ATTACH_COMPATIBLE_DRIVERS.has(normalized)) {
     throw new Error(`Driver "${driver}" cannot be attached by DuckDB federation.`);
   }
-  return normalized;
+  return normalized === 'duckdb' ? null : normalized;
 }
 
 export interface FederatedMember {

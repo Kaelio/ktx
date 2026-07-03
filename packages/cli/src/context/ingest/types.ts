@@ -6,6 +6,7 @@ import type { KtxTableRefKey } from '../scan/table-ref.js';
 import type { MemoryFlowEventSink } from './memory-flow/types.js';
 import type { StageIndex } from './stages/stage-index.types.js';
 import type { WorkUnitOutcome } from './stages/stage-3-work-units.js';
+import type { FinalGateDroppedSource, FinalGatePrunedReference } from './final-gate-prune.js';
 
 export type IngestTrigger = 'upload' | 'scheduled_pull' | 'manual_resync' | 'manual_override';
 
@@ -210,6 +211,8 @@ export interface IngestBundleResult {
   failedWorkUnits: string[];
   artifactsWritten: number;
   commitSha: string | null;
+  finalGatePrunedReferences?: FinalGatePrunedReference[];
+  finalGateDroppedSources?: FinalGateDroppedSource[];
 }
 
 export interface IngestJobPhase {

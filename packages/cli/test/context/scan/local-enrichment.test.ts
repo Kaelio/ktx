@@ -968,6 +968,76 @@ describe('local scan enrichment', () => {
     }
   });
 
+  it('checkpoints recomputed embeddings before relationships even when descriptions load from disk', async () => {
+    const executor = new InMemorySqliteExecutor();
+    try {
+      executor.db.exec(`
+        CREATE TABLE accounts (id INTEGER NOT NULL);
+        CREATE TABLE orders (id INTEGER NOT NULL, account_id INTEGER NOT NULL);
+        INSERT INTO accounts (id) VALUES (1), (2);
+        INSERT INTO orders (id, account_id) VALUES (10, 1), (11, 1), (12, 2);
+      `);
+      const priorDescriptions: Array<{
+        table: { catalog: null; db: null; name: string };
+        tableDescription: string | null;
+        columnDescriptions: Record<string, string | null>;
+      }> = [
+        {
+          table: { catalog: null, db: null, name: 'orders' },
+          tableDescription: 'Customer purchase orders',
+          columnDescriptions: { id: 'Order identifier', account_id: 'The owning account reference' },
+        },
+        {
+          table: { catalog: null, db: null, name: 'accounts' },
+          tableDescription: 'Account records',
+          columnDescriptions: { id: 'Account identifier' },
+        },
+      ];
+      const scanConnector = {
+        ...connector(),
+        driver: 'sqlite' as const,
+        capabilities: createKtxConnectorCapabilities({ readOnlySql: true, columnStats: true }),
+        introspect: vi.fn(async () => noDeclaredRelationshipSnapshot()),
+        executeReadOnly: executor.executeReadOnly.bind(executor),
+      };
+      const checkpoints: Array<Awaited<ReturnType<typeof runLocalScanEnrichment>>> = [];
+
+      await runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'enriched',
+        detectRelationships: true,
+        connector: scanConnector,
+        context: { runId: 'embeddings-rel-checkpoint' },
+        providers: {
+          ...createDeterministicLocalScanEnrichmentProviders(),
+          embedding: fakeScanEmbedding({ dimensions: 6 }),
+        },
+        stages: ['embeddings', 'relationships'],
+        loadPriorDescriptions: async () => priorDescriptions,
+        onCheckpoint: async (checkpoint) => {
+          checkpoints.push(checkpoint);
+        },
+      });
+
+      expect(checkpoints).toHaveLength(1);
+      const checkpoint = checkpoints[0];
+      if (!checkpoint) {
+        throw new Error('Expected a checkpoint');
+      }
+      // Descriptions were loaded from disk (not re-run), but the recomputed
+      // embeddings are promoted before the kill-prone relationship stage.
+      expect(checkpoint.summary.tableDescriptions).toBe('skipped');
+      expect(checkpoint.summary.embeddings).toBe('completed');
+      expect(checkpoint.embeddingUpdates.length).toBeGreaterThan(0);
+      // The checkpoint must carry the on-disk descriptions, not an empty set, or
+      // the manifest merge would delete them (D3).
+      expect(checkpoint.descriptionUpdates.length).toBeGreaterThan(0);
+      expect(checkpoint.relationshipUpdate).toBeNull();
+    } finally {
+      executor.close();
+    }
+  });
+
   it('does not checkpoint when relationship detection is skipped', async () => {
     const onCheckpoint = vi.fn(async () => {});
     await runLocalScanEnrichment({

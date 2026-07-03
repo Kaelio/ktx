@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import type { GitService } from '../../../context/core/git.service.js';
 import type { RepairVerification } from '../constrained-repair.js';
-import type { FinalGateRepairResult } from '../final-gate-repair.js';
 import type { IngestTraceWriter } from '../ingest-trace.js';
 import { traceTimed } from '../ingest-trace.js';
 import { assertPatchAllowedForWorkUnit, parsePatchTouchedPaths } from './git-patch.js';
@@ -13,21 +12,18 @@ export type PatchIntegrationResult =
       commitSha: string;
       touchedPaths: string[];
       textualResolution?: TextualConflictResolutionResult;
-      gateRepair?: FinalGateRepairResult;
     }
   | {
       status: 'textual_conflict';
       reason: string;
       touchedPaths: string[];
       textualResolution?: TextualConflictResolutionResult;
-      gateRepair?: FinalGateRepairResult;
     }
   | {
       status: 'semantic_conflict';
       reason: string;
       touchedPaths: string[];
       textualResolution?: TextualConflictResolutionResult;
-      gateRepair?: FinalGateRepairResult;
     };
 
 export interface IntegrateWorkUnitPatchInput {
@@ -46,13 +42,6 @@ export interface IntegrateWorkUnitPatchInput {
     reason: string;
     verify(changedPaths: string[]): Promise<RepairVerification>;
   }): Promise<TextualConflictResolutionResult>;
-  repairGateFailure?(input: {
-    unitKey: string;
-    patchPath: string;
-    touchedPaths: string[];
-    reason: string;
-    verify(changedPaths: string[]): Promise<RepairVerification>;
-  }): Promise<FinalGateRepairResult>;
 }
 
 function errorMessage(error: unknown): string {
@@ -224,59 +213,6 @@ export async function integrateWorkUnitPatch(input: IntegrateWorkUnitPatchInput)
       touchedPaths,
       reason,
     });
-
-    if (input.repairGateFailure) {
-      const gateRepair = await input.repairGateFailure({
-        unitKey: input.unitKey,
-        patchPath: input.patchPath,
-        touchedPaths,
-        reason,
-        verify: verifyAppliedTree,
-      });
-
-      if (gateRepair.status === 'failed') {
-        if (preApplyHead) {
-          await input.integrationGit.resetHardTo(preApplyHead);
-        }
-        return {
-          status: 'semantic_conflict',
-          reason: gateRepair.reason,
-          touchedPaths,
-          gateRepair,
-        };
-      }
-
-      const commit = await input.integrationGit.commitFiles(
-        gateRepair.changedPaths,
-        `ingest: repair WorkUnit ${input.unitKey} gates`,
-        input.author.name,
-        input.author.email,
-      );
-      if (!commit.created) {
-        if (preApplyHead) {
-          await input.integrationGit.resetHardTo(preApplyHead);
-        }
-        return {
-          status: 'semantic_conflict',
-          reason: 'gate repair produced no committable changes',
-          touchedPaths: gateRepair.changedPaths,
-          gateRepair,
-        };
-      }
-
-      await input.trace.event('debug', 'integration', 'patch_accepted_after_gate_repair', {
-        unitKey: input.unitKey,
-        commitSha: commit.commitHash,
-        touchedPaths: gateRepair.changedPaths,
-        attempts: gateRepair.attempts,
-      });
-      return {
-        status: 'accepted',
-        commitSha: commit.commitHash,
-        touchedPaths: gateRepair.changedPaths,
-        gateRepair,
-      };
-    }
 
     if (preApplyHead) {
       await input.integrationGit.resetHardTo(preApplyHead);

@@ -3,12 +3,14 @@ import type { KtxProjectConnectionConfig } from './context/project/config.js';
 /** @internal Canonical SQL-warehouse driver ids; the dialect-notes coverage test derives its required coverage from this set. */
 export const KTX_DATABASE_DRIVER_IDS = [
   'sqlite',
+  'duckdb',
   'postgres',
   'mysql',
   'clickhouse',
   'sqlserver',
   'bigquery',
   'snowflake',
+  'athena',
 ] as const;
 
 // mongodb is a database driver but has no SQL dialect, so it sits outside the

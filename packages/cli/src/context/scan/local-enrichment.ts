@@ -809,17 +809,21 @@ export async function runLocalScanEnrichment(
   let relationshipPartial: { reason: KtxRelationshipDetectionStopReason } | null = null;
   let relationships: KtxScanRelationshipSummary = { accepted: 0, review: 0, rejected: 0, skipped: 0 };
 
-  // Promote the paid descriptions + embeddings to the queryable layer at the
-  // cost boundary, before the slow, kill-prone relationship stage — so an
-  // interrupted relationship stage degrades to "no joins," never "no descriptions."
-  if (shouldDetectRelationships && summary.tableDescriptions === 'completed' && input.onCheckpoint) {
+  // Promote any non-relationship stage that ran this invocation (descriptions or
+  // a `--stages embeddings,relationships` re-embed) before the slow, kill-prone
+  // relationship stage, so an interruption degrades to "no joins," never lost
+  // enrichment. descriptionUpdates uses the best-available set (D3): the manifest
+  // merge overwrites scan-managed descriptions, so the empty this-invocation set
+  // would delete prior on-disk ones.
+  const checkpointablePaidWork = summary.tableDescriptions === 'completed' || summary.embeddings === 'completed';
+  if (shouldDetectRelationships && checkpointablePaidWork && input.onCheckpoint) {
     await input.onCheckpoint({
       snapshot,
       summary: { ...summary },
       relationships,
       state: summarizeKtxScanEnrichmentState(state),
       warnings: [...warnings],
-      descriptionUpdates: descriptions,
+      descriptionUpdates: await resolveDownstreamDescriptions(),
       embeddingUpdates,
       relationshipUpdate: null,
       relationshipProfile: null,

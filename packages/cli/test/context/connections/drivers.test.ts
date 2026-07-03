@@ -31,6 +31,7 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     schemas: ['public'],
   }),
   sqlite: () => ({ driver: 'sqlite', path: 'warehouse.db' }),
+  duckdb: (projectDir) => ({ driver: 'duckdb', path: join(projectDir, 'warehouse.duckdb') }),
   mongodb: () => ({
     driver: 'mongodb',
     url: 'mongodb://localhost:27017/app',
@@ -78,6 +79,11 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     database: 'ANALYTICS',
     schema: 'PUBLIC',
   }),
+  athena: () => ({
+    driver: 'athena',
+    region: 'us-east-1',
+    s3_staging_dir: 's3://my-bucket/athena-results/',
+  }),
 };
 
 const allowedScopeKeys = new Set(['dataset_ids', 'databases', 'schemas', 'schema_names']);
@@ -108,8 +114,10 @@ describe('driverRegistrations', () => {
     const registryDrivers = Object.keys(driverRegistrations).sort();
     expect(listSupportedDrivers()).toEqual(registryDrivers);
     expect(listSupportedDrivers()).toEqual([
+      'athena',
       'bigquery',
       'clickhouse',
+      'duckdb',
       'mongodb',
       'mysql',
       'postgres',
@@ -148,7 +156,7 @@ describe('driverRegistrations', () => {
     expect(connector.listTables).toEqual(expect.any(Function));
     await connector.cleanup?.();
 
-    if (registration.driver === 'sqlite') {
+    if (registration.driver === 'sqlite' || registration.driver === 'duckdb') {
       expect(registration.scopeConfigKey).toBeNull();
     } else {
       expect(registration.scopeConfigKey).not.toBeNull();

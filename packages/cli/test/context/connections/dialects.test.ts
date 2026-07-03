@@ -335,7 +335,7 @@ describe('getDialectForDriver', () => {
 
   it('throws with a supported-driver list for unknown drivers', () => {
     expect(() => getDialectForDriver('oracle')).toThrow(
-      'Unsupported driver "oracle". Supported drivers: bigquery, clickhouse, mongodb, mysql, postgres, redshift, snowflake, sqlite, sqlserver',
+      'Unsupported driver "oracle". Supported drivers: athena, bigquery, clickhouse, duckdb, mongodb, mysql, postgres, redshift, snowflake, sqlite, sqlserver',
     );
   });
 

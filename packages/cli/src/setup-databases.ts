@@ -64,12 +64,14 @@ const execFileAsync = promisify(execFileCallback);
 
 export type KtxSetupDatabaseDriver =
   | 'sqlite'
+  | 'duckdb'
   | 'postgres'
   | 'mysql'
   | 'clickhouse'
   | 'sqlserver'
   | 'bigquery'
   | 'snowflake'
+  | 'athena'
   | 'mongodb';
 
 export interface KtxSetupDatabasesArgs {
@@ -157,8 +159,10 @@ const DRIVER_OPTIONS: Array<{ value: KtxSetupDatabaseDriver; label: string }> = 
   { value: 'mysql', label: 'MySQL' },
   { value: 'clickhouse', label: 'ClickHouse' },
   { value: 'sqlserver', label: 'SQL Server' },
+  { value: 'athena', label: 'Amazon Athena' },
   { value: 'mongodb', label: 'MongoDB' },
   { value: 'sqlite', label: 'SQLite' },
+  { value: 'duckdb', label: 'DuckDB' },
 ];
 
 const DRIVER_LABELS = Object.fromEntries(DRIVER_OPTIONS.map((option) => [option.value, option.label])) as Record<
@@ -174,12 +178,14 @@ const HISTORIC_SQL_DIALECT_BY_DRIVER: Partial<Record<KtxSetupDatabaseDriver, His
 
 const DEFAULT_CONNECTION_IDS: Record<KtxSetupDatabaseDriver, string> = {
   sqlite: 'sqlite-local',
+  duckdb: 'duckdb-local',
   postgres: 'postgres-warehouse',
   mysql: 'mysql-warehouse',
   clickhouse: 'clickhouse-warehouse',
   sqlserver: 'sqlserver-warehouse',
   bigquery: 'bigquery-warehouse',
   snowflake: 'snowflake-warehouse',
+  athena: 'athena-warehouse',
   mongodb: 'mongodb-source',
 };
 
@@ -263,6 +269,13 @@ const SCOPE_DISCOVERY_SPECS: Partial<Record<KtxSetupDatabaseDriver, ScopeDiscove
     promptLabel: 'Snowflake schemas',
     configArrayField: 'schema_names',
     configSingleField: 'schema_name',
+    suggest: defaultSuggest,
+  },
+  athena: {
+    noun: 'database',
+    nounPlural: 'databases',
+    promptLabel: 'Glue databases',
+    configArrayField: 'databases',
     suggest: defaultSuggest,
   },
 };
@@ -813,6 +826,18 @@ async function buildConnectionConfig(input: {
     if (path === undefined) return 'back';
     return path ? { driver: 'sqlite', path } : null;
   }
+  if (driver === 'duckdb') {
+    if (args.inputMode === 'disabled' && !args.databaseUrl) return null;
+    const path =
+      args.databaseUrl ??
+      (await promptText(
+        prompts,
+        'DuckDB database file\nEnter a relative or absolute path, for example ./warehouse.duckdb.',
+        stringConfigField(input.existingConnection, 'path'),
+      ));
+    if (path === undefined) return 'back';
+    return path ? { driver: 'duckdb', path } : null;
+  }
   if (driver === 'postgres' || driver === 'mysql' || driver === 'clickhouse' || driver === 'sqlserver') {
     return await buildUrlConnectionConfig({
       driver,
@@ -951,6 +976,47 @@ async function buildConnectionConfig(input: {
       privateKey: resolvedPrivateKey,
       ...(resolvedPassphrase ? { passphrase: resolvedPassphrase } : {}),
       ...(role ? { role } : {}),
+    };
+  }
+  if (driver === 'athena') {
+    if (args.inputMode === 'disabled' && !args.databaseUrl) return null;
+    const region = await promptText(
+      prompts,
+      'AWS region\nFor example us-east-1.',
+      stringConfigField(input.existingConnection, 'region'),
+    );
+    if (region === undefined) return 'back';
+    if (!region) return null;
+
+    const s3StagingDir = await promptText(
+      prompts,
+      'S3 staging directory\nAthena writes query results here. For example s3://my-bucket/athena-results/.',
+      stringConfigField(input.existingConnection, 's3_staging_dir'),
+    );
+    if (s3StagingDir === undefined) return 'back';
+    if (!s3StagingDir) return null;
+
+    const workgroup = await promptText(
+      prompts,
+      'Athena workgroup (optional)\nPress Enter to use the default workgroup "primary".',
+      stringConfigField(input.existingConnection, 'workgroup'),
+    );
+    if (workgroup === undefined) return 'back';
+
+    const catalog = await promptText(
+      prompts,
+      'Glue Data Catalog name (optional)\nPress Enter to use the default "AwsDataCatalog".',
+      stringConfigField(input.existingConnection, 'catalog'),
+    );
+    if (catalog === undefined) return 'back';
+
+    return {
+      driver: 'athena',
+      region,
+      s3_staging_dir: s3StagingDir,
+      ...(workgroup ? { workgroup } : {}),
+      ...(catalog ? { catalog } : {}),
+      ...scriptedScopeConfigForDriver('athena', args.databaseSchemas),
     };
   }
   throw new Error(`Unsupported database driver: ${driver}`);
@@ -1417,9 +1483,11 @@ async function maybeConfigureDatabaseScope(input: {
   const project = await loadKtxProject({ projectDir: input.projectDir });
   const connection = project.config.connections[input.connectionId];
   const driver = normalizeDriver(connection?.driver);
-  if (!driver || driver === 'sqlite') return okValidateResult();
+  const spec = driver ? SCOPE_DISCOVERY_SPECS[driver] : undefined;
+  // Drivers with no scope spec are single-namespace (sqlite, duckdb): there is no
+  // schema to choose, so skip the scope picker and ingest every table.
+  if (!driver || !spec) return okValidateResult();
 
-  const spec = SCOPE_DISCOVERY_SPECS[driver];
   const existingTables = connection?.enabled_tables;
   const hasExistingTables = Array.isArray(existingTables) && existingTables.length > 0;
   const existingScope = spec ? configuredScopeValues(connection, spec) : [];

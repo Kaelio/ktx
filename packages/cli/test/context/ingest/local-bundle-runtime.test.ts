@@ -298,6 +298,7 @@ describe('createLocalBundleIngestRuntime', () => {
 
     expect(settings).not.toHaveProperty(fallbackSettingKey);
     expect(Object.keys(settings).sort()).toEqual([
+      'cliVersion',
       'ingestTraceLevel',
       'memoryIngestionModel',
       'probeRowCount',

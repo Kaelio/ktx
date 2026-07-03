@@ -35,6 +35,21 @@ describe('localConnectionToWarehouseDescriptor', () => {
     });
   });
 
+  it('maps Athena connections to canonical warehouse descriptors', () => {
+    expect(
+      localConnectionToWarehouseDescriptor('athena-warehouse', {
+        driver: 'athena',
+        region: 'us-east-1',
+        s3_staging_dir: 's3://my-bucket/athena-results/',
+        database: 'analytics',
+      }),
+    ).toMatchObject({
+      id: 'athena-warehouse',
+      connection_type: 'ATHENA',
+      database: 'analytics',
+    });
+  });
+
   it('returns null for non-warehouse adapters', () => {
     expect(
       localConnectionToWarehouseDescriptor('looker', {
@@ -51,6 +66,7 @@ describe('local connection info helpers', () => {
     expect(localConnectionTypeForConfig('warehouse', { driver: 'postgres' })).toBe('POSTGRESQL');
     expect(localConnectionTypeForConfig('bq', { driver: 'bigquery', project_id: 'acme' })).toBe('BIGQUERY');
     expect(localConnectionTypeForConfig('snowflake', { driver: 'snowflake' })).toBe('SNOWFLAKE');
+    expect(localConnectionTypeForConfig('athena-warehouse', { driver: 'athena' })).toBe('ATHENA');
   });
 
   it('keeps removed driver aliases as display-only labels', () => {

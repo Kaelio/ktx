@@ -4,6 +4,7 @@ import {
   mysqlConnectionPoolConfigFromConfig,
   type KtxMysqlConnectionConfig,
 } from '../mysql/connector.js';
+import { duckDbDatabasePathFromConfig, type KtxDuckDbConnectionConfig } from '../../connectors/duckdb/connector.js';
 import type { FederatedMember } from '../../context/connections/federation.js';
 
 function kvKeyword(value: string): string {
@@ -74,6 +75,12 @@ function mysqlAttachString(member: FederatedMember, env: NodeJS.ProcessEnv): str
  */
 export function federatedAttachTarget(member: FederatedMember, env: NodeJS.ProcessEnv): string {
   switch (member.driver.toLowerCase()) {
+    case 'duckdb':
+      return duckDbDatabasePathFromConfig({
+        connectionId: member.connectionId,
+        projectDir: member.projectDir,
+        connection: member.connection as KtxDuckDbConnectionConfig,
+      });
     case 'sqlite':
       return sqliteDatabasePathFromConfig({
         connectionId: member.connectionId,

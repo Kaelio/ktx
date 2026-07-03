@@ -16,6 +16,8 @@ import {
 import { gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
 import { cloneOrPull, testRepoConnection } from './context/ingest/repo-fetch.js';
 import { DEFAULT_METABASE_CLIENT_CONFIG, MetabaseClient } from './context/ingest/adapters/metabase/client.js';
+import { DEFAULT_SIGMA_CLIENT_CONFIG, DefaultSigmaClient } from './context/ingest/adapters/sigma/client.js';
+import { sigmaRuntimeConfigFromLocalConnection } from './context/ingest/adapters/sigma/local-sigma.adapter.js';
 import { discoverMetabaseDatabases, type DiscoveredMetabaseDatabase } from './context/ingest/adapters/metabase/mapping.js';
 import { loadDbtSchemaFiles } from './context/ingest/dbt-shared/schema-files.js';
 import { loadProjectInfo } from './context/ingest/dbt-shared/project-vars.js';
@@ -46,7 +48,7 @@ import {
   type KtxSetupPromptOption,
 } from './setup-prompts.js';
 
-export type KtxSetupSourceType = 'dbt' | 'metricflow' | 'metabase' | 'looker' | 'lookml' | 'notion' | 'gdrive';
+export type KtxSetupSourceType = 'dbt' | 'metricflow' | 'metabase' | 'looker' | 'lookml' | 'notion' | 'sigma' | 'gdrive';
 
 const DEFAULT_NOTION_MAX_KNOWLEDGE_CREATES_PER_RUN = 25;
 
@@ -115,6 +117,7 @@ export interface KtxSetupSourcesDeps {
   validateLooker?: (projectDir: string, connectionId: string) => Promise<SourceValidationResult>;
   validateLookml?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   validateNotion?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
+  validateSigma?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   validateGdrive?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   pickNotionRootPages?: typeof pickNotionRootPages;
   discoverMetabaseDatabases?: (args: {
@@ -138,6 +141,7 @@ const SOURCE_OPTIONS: Array<{ value: KtxSetupSourceType; label: string }> = [
   { value: 'metricflow', label: 'MetricFlow' },
   { value: 'looker', label: 'Looker' },
   { value: 'lookml', label: 'LookML' },
+  { value: 'sigma', label: 'Sigma Computing' },
   { value: 'gdrive', label: 'Google Drive' },
 ];
 
@@ -248,6 +252,7 @@ const SOURCE_CREDENTIAL_FLAG: Record<KtxSetupSourceType, SourceCredentialFlag> =
   notion: { field: 'sourceAuthTokenRef', flag: '--source-auth-token-ref' },
   metabase: { field: 'sourceApiKeyRef', flag: '--source-api-key-ref' },
   looker: { field: 'sourceClientSecretRef', flag: '--source-client-secret-ref' },
+  sigma: { field: 'sourceClientSecretRef', flag: '--source-client-secret-ref' },
   gdrive: { field: null, flag: '--gdrive-service-account-key-ref' },
 };
 
@@ -577,6 +582,18 @@ function buildNotionConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionC
   };
 }
 
+function buildSigmaConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionConfig {
+  if (!args.sourceClientId) {
+    throw new Error('Missing Sigma client id: pass --source-client-id.');
+  }
+  return {
+    driver: 'sigma',
+    api_url: args.sourceUrl ?? 'https://api.sigmacomputing.com',
+    client_id: args.sourceClientId,
+    client_secret_ref: credentialRef(args.sourceClientSecretRef, 'Sigma client secret ref'),
+  };
+}
+
 function buildGdriveConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionConfig {
   const folderId = args.gdriveFolderId?.trim();
   if (!folderId) {
@@ -711,6 +728,23 @@ async function defaultValidateNotion(connection: KtxProjectConnectionConfig): Pr
     await client.retrievePage(root);
   }
   return { ok: true, detail: `roots=${roots.length}` };
+}
+
+async function defaultValidateSigma(connection: KtxProjectConnectionConfig): Promise<SourceValidationResult> {
+  try {
+    const runtimeConfig = sigmaRuntimeConfigFromLocalConnection('sigma-main', connection);
+    const client = new DefaultSigmaClient(runtimeConfig, DEFAULT_SIGMA_CLIENT_CONFIG);
+    try {
+      const result = await client.testConnection();
+      return result.success
+        ? { ok: true, detail: 'Sigma API connection verified' }
+        : { ok: false, message: result.error ?? 'Sigma connection test failed' };
+    } finally {
+      await client.cleanup();
+    }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function defaultValidateGdrive(connection: KtxProjectConnectionConfig): Promise<SourceValidationResult> {
@@ -1370,6 +1404,43 @@ async function promptForInteractiveSource(
     ]);
   }
 
+  if (source === 'sigma') {
+    return await runSourcePromptSteps(initialState, () => [
+      ...connectionSteps,
+      async (state) => {
+        const sourceUrl = await promptText(prompts, {
+          message: 'Sigma API URL',
+          initialValue: state.sourceUrl ?? 'https://api.sigmacomputing.com',
+        });
+        if (sourceUrl === undefined) return 'back';
+        state.sourceUrl = sourceUrl;
+        return 'next';
+      },
+      async (state) => {
+        const sourceClientId = await promptText(prompts, {
+          message: 'Sigma client ID',
+          ...(state.sourceClientId ? { initialValue: state.sourceClientId } : {}),
+        });
+        if (sourceClientId === undefined) return 'back';
+        state.sourceClientId = sourceClientId;
+        return 'next';
+      },
+      async (state) => {
+        const ref = await chooseSourceCredentialRef({
+          prompts,
+          projectDir: args.projectDir,
+          label: 'Sigma client secret',
+          envName: 'SIGMA_CLIENT_SECRET',
+          secretFileName: `${state.sourceConnectionId ?? 'sigma-main'}-client-secret`,
+          existingRef: state.sourceClientSecretRef,
+        });
+        if (ref === 'back') return 'back';
+        state.sourceClientSecretRef = ref;
+        return 'next';
+      },
+    ]);
+  }
+
   if (source === 'notion') {
     return await runSourcePromptSteps(initialState, (state) => [
       ...connectionSteps,
@@ -1638,6 +1709,13 @@ function sourceArgsFromExistingConnection(input: {
     return sourceArgs;
   }
 
+  if (input.source === 'sigma') {
+    sourceArgs.sourceUrl = stringField(input.connection.api_url) ?? undefined;
+    sourceArgs.sourceClientId = stringField(input.connection.client_id) ?? undefined;
+    sourceArgs.sourceClientSecretRef = stringField(input.connection.client_secret_ref) ?? undefined;
+    return sourceArgs;
+  }
+
   if (input.source === 'gdrive') {
     sourceArgs.gdriveServiceAccountKeyRef = stringField(input.connection.service_account_key_ref);
     sourceArgs.gdriveFolderId = stringField(input.connection.folder_id);
@@ -1826,6 +1904,9 @@ function buildConnection(source: KtxSetupSourceType, args: KtxSetupSourcesArgs):
   if (source === 'lookml') {
     return buildLookmlConnection(args);
   }
+  if (source === 'sigma') {
+    return buildSigmaConnection(args);
+  }
   if (source === 'notion') {
     return buildNotionConnection(args);
   }
@@ -1853,6 +1934,9 @@ async function validateSource(
   }
   if (source === 'lookml') {
     return await (deps.validateLookml ?? defaultValidateLookml)(args.connection);
+  }
+  if (source === 'sigma') {
+    return await (deps.validateSigma ?? defaultValidateSigma)(args.connection);
   }
   if (source === 'notion') {
     return await (deps.validateNotion ?? defaultValidateNotion)(args.connection);
