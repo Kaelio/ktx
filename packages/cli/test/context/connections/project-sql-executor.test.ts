@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { executeFederatedQuery } from '../../../src/connectors/duckdb/federated-executor.js';
-import { executeProjectReadOnlySql } from '../../../src/context/connections/project-sql-executor.js';
+import { executeProjectRawSql, executeProjectReadOnlySql } from '../../../src/context/connections/project-sql-executor.js';
 import type { KtxLocalProject } from '../../../src/context/project/project.js';
 import type { KtxScanConnector } from '../../../src/context/scan/types.js';
+import type { SqlAnalysisPort } from '../../../src/context/sql-analysis/ports.js';
+import { KtxQueryError } from '../../../src/errors.js';
 
-function fakeProject(connections: Record<string, { driver: string }>): KtxLocalProject {
+function fakeProject(
+  connections: Record<string, { driver: string; query_policy?: 'semantic-layer-only' }>,
+): KtxLocalProject {
   return {
     projectDir: '/tmp/proj',
     configPath: '/tmp/proj/ktx.yaml',
@@ -112,5 +116,99 @@ describe('executeProjectReadOnlySql headerTypes', () => {
     });
 
     expect(result.headerTypes).toEqual(['INTEGER']);
+  });
+});
+
+function fakeSqlAnalysis(validation: { ok: boolean; error: string | null }): SqlAnalysisPort {
+  return {
+    analyzeForFingerprint: vi.fn(),
+    analyzeBatch: vi.fn(),
+    validateReadOnly: vi.fn(async () => validation),
+  } as unknown as SqlAnalysisPort;
+}
+
+describe('executeProjectRawSql', () => {
+  it('validates then executes raw SQL on an unrestricted connection', async () => {
+    const project = fakeProject({ pg: { driver: 'postgres' } });
+    const sqlAnalysis = fakeSqlAnalysis({ ok: true, error: null });
+    const connector = connectorReturning({
+      headers: ['id'],
+      rows: [[1]],
+      totalRows: 1,
+      rowCount: 1,
+    });
+
+    const result = await executeProjectRawSql({
+      project,
+      connectionId: 'pg',
+      sql: 'SELECT id FROM orders',
+      maxRows: 25,
+      sqlAnalysis,
+      createConnector: () => connector,
+      runId: 'test-raw-sql',
+    });
+
+    expect(result.rows).toEqual([[1]]);
+    expect(sqlAnalysis.validateReadOnly).toHaveBeenCalledWith('SELECT id FROM orders', 'postgres');
+  });
+
+  it('rejects a restricted connection before validation or execution', async () => {
+    const project = fakeProject({ pg: { driver: 'postgres', query_policy: 'semantic-layer-only' } });
+    const sqlAnalysis = fakeSqlAnalysis({ ok: true, error: null });
+    const createConnector = vi.fn();
+
+    const execution = executeProjectRawSql({
+      project,
+      connectionId: 'pg',
+      sql: 'SELECT 1',
+      maxRows: 25,
+      sqlAnalysis,
+      createConnector: createConnector as never,
+      runId: 'test-raw-sql',
+    });
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow(/query_policy: semantic-layer-only/);
+    expect(sqlAnalysis.validateReadOnly).not.toHaveBeenCalled();
+    expect(createConnector).not.toHaveBeenCalled();
+  });
+
+  it('rejects federated raw SQL when a member connection is restricted', async () => {
+    const project = fakeProject({
+      pg: { driver: 'postgres', query_policy: 'semantic-layer-only' },
+      lite: { driver: 'sqlite' },
+    });
+    const executeFederated = vi.fn();
+
+    await expect(
+      executeProjectRawSql({
+        project,
+        connectionId: '_ktx_federated',
+        sql: 'SELECT 1',
+        maxRows: 25,
+        sqlAnalysis: fakeSqlAnalysis({ ok: true, error: null }),
+        createConnector: vi.fn() as never,
+        executeFederated: executeFederated as never,
+        runId: 'test-raw-sql',
+      }),
+    ).rejects.toThrow(/"pg"/);
+    expect(executeFederated).not.toHaveBeenCalled();
+  });
+
+  it('classifies a read-only validation failure as an expected query error', async () => {
+    const project = fakeProject({ pg: { driver: 'postgres' } });
+    const createConnector = vi.fn();
+
+    const execution = executeProjectRawSql({
+      project,
+      connectionId: 'pg',
+      sql: 'DROP TABLE orders',
+      maxRows: 25,
+      sqlAnalysis: fakeSqlAnalysis({ ok: false, error: 'SQL is not read-only: DROP.' }),
+      createConnector: createConnector as never,
+      runId: 'test-raw-sql',
+    });
+    await expect(execution).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(execution).rejects.toThrow('SQL is not read-only: DROP.');
+    expect(createConnector).not.toHaveBeenCalled();
   });
 });

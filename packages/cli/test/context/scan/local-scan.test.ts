@@ -2175,6 +2175,40 @@ describe('local scan', () => {
     };
     expect(manifest.tables.orders?.joins?.some((join) => join.to === 'accounts')).toBe(true);
   });
+
+  it('accepts athena as a native standalone scan driver when the host supplies a live-database adapter', async () => {
+    await writeFile(
+      join(project.projectDir, 'ktx.yaml'),
+      [
+        'connections:',
+        '  warehouse:',
+        '    driver: athena',
+        '    region: us-east-1',
+        '    s3_staging_dir: s3://my-bucket/athena-results/',
+        '    databases:',
+        '      - analytics',
+        'ingest:',
+        '  adapters:',
+        '    - live-database',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    project = await loadKtxProject({ projectDir: project.projectDir });
+
+    const result = await runLocalScan({
+      project,
+      adapters: [fetchOnlyAdapter()],
+      connectionId: 'warehouse',
+      jobId: 'scan-run-athena',
+      now: () => new Date('2026-04-29T17:00:00.000Z'),
+    });
+
+    expect(result.report.driver).toBe('athena');
+    expect(result.report.artifactPaths.reportPath).toBe(
+      'raw-sources/warehouse/live-database/2026-04-29-170000-scan-run-athena/scan-report.json',
+    );
+  });
 });
 
 describe('resolveEnabledTables', () => {

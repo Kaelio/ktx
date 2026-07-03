@@ -1,6 +1,6 @@
 import { executeFederatedQuery } from './connectors/duckdb/federated-executor.js';
 import { FEDERATED_CONNECTION_ID } from './context/connections/federation.js';
-import { executeProjectReadOnlySql } from './context/connections/project-sql-executor.js';
+import { executeProjectRawSql } from './context/connections/project-sql-executor.js';
 import type { KtxSqlQueryExecutionResult } from './context/connections/query-executor.js';
 import { assertSqlQueryableConnection } from './context/connections/dialects.js';
 import { resolveConfiguredConnection } from './context/connections/resolve-connection.js';
@@ -137,6 +137,8 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
     const connection = isFederated ? undefined : resolveConfiguredConnection(project.config, args.connectionId);
     driver = isFederated ? 'duckdb' : String(connection?.driver ?? 'unknown').toLowerCase();
     demoConnection = isFederated ? false : isDemoConnection(args.connectionId, connection);
+    // Fail fast before creating the SQL-analysis daemon port; executeProjectRawSql
+    // re-asserts this for every caller.
     if (!isFederated) {
       assertSqlQueryableConnection(args.connectionId, connection?.driver);
     }
@@ -152,26 +154,19 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
         }));
     const analysisPort = createSqlAnalysis();
     const dialect: SqlAnalysisDialect = isFederated ? 'duckdb' : sqlAnalysisDialectForDriver(connection?.driver);
-    const validation = await analysisPort.validateReadOnly(args.sql, dialect);
-    if (!validation.ok) {
-      throw new Error(validation.error ?? 'SQL is not read-only.');
-    }
-    const referencedTableCount = await safeReferencedTableCount(analysisPort, args.sql, dialect);
 
     const createScanConnector = deps.createScanConnector ?? createKtxCliScanConnector;
-    const result = await executeProjectReadOnlySql({
+    const result = await executeProjectRawSql({
       project,
-      input: {
-        connectionId: args.connectionId,
-        projectDir: args.projectDir,
-        connection,
-        sql: args.sql,
-        maxRows: args.maxRows,
-      },
+      connectionId: args.connectionId,
+      sql: args.sql,
+      maxRows: args.maxRows,
+      sqlAnalysis: analysisPort,
       createConnector: (connectionId) => createScanConnector(project!, connectionId),
       executeFederated: deps.executeFederated,
       runId: 'cli-sql',
     });
+    const referencedTableCount = await safeReferencedTableCount(analysisPort, args.sql, dialect);
     const mode = resolveOutputMode({ explicit: args.output, json: args.json, io });
     printSqlResult(resultOutput(args.connectionId, result), mode, io);
     await emitTelemetryEvent({

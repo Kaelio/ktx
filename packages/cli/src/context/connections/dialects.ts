@@ -1,3 +1,4 @@
+import { KtxAthenaDialect } from '../../connectors/athena/dialect.js';
 import { KtxBigQueryDialect } from '../../connectors/bigquery/dialect.js';
 import { KtxClickHouseDialect } from '../../connectors/clickhouse/dialect.js';
 import { KtxDuckDbDialect } from '../../connectors/duckdb/dialect.js';
@@ -54,6 +55,7 @@ export interface KtxSqlDialect extends KtxDialect {
 type KtxSqlDriver = Exclude<KtxConnectionDriver, 'mongodb'>;
 
 const sqlDialectFactories: Record<KtxSqlDriver, () => KtxSqlDialect> = {
+  athena: () => new KtxAthenaDialect(),
   bigquery: () => new KtxBigQueryDialect(),
   clickhouse: () => new KtxClickHouseDialect(),
   duckdb: () => new KtxDuckDbDialect(),

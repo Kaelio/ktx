@@ -141,6 +141,41 @@ describe('runKtxSql', () => {
     expect(io.stderr()).toBe('');
   });
 
+  it('refuses raw SQL when the connection query_policy is semantic-layer-only', async () => {
+    const projectDir = join(tempDir, 'project');
+    await initKtxProject({ projectDir });
+    await writeConnections(projectDir, {
+      warehouse: { driver: 'sqlite', path: 'warehouse.db', query_policy: 'semantic-layer-only' },
+    });
+    const sqlAnalysis = makeSqlAnalysis({ ok: true, error: null });
+    const createScanConnector = vi.fn(async () => makeConnector());
+    const io = makeIo();
+
+    await expect(
+      runKtxSql(
+        {
+          command: 'execute',
+          projectDir,
+          connectionId: 'warehouse',
+          sql: 'select id from orders',
+          maxRows: 1000,
+          output: 'pretty',
+          json: false,
+          cliVersion: '0.0.0-test',
+        },
+        io.io,
+        {
+          createSqlAnalysis: () => sqlAnalysis,
+          createScanConnector,
+        },
+      ),
+    ).resolves.toBe(1);
+
+    expect(io.stderr()).toContain('query_policy: semantic-layer-only');
+    expect(sqlAnalysis.validateReadOnly).not.toHaveBeenCalled();
+    expect(createScanConnector).not.toHaveBeenCalled();
+  });
+
   it('emits debug telemetry for SQL without raw query text', async () => {
     vi.stubEnv('KTX_TELEMETRY_DEBUG', '1');
     vi.stubEnv('CI', '');

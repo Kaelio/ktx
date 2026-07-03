@@ -18,6 +18,7 @@ export const DIALECTS_WITH_NOTES = [
   'duckdb',
   'clickhouse',
   'tsql',
+  'athena',
 ] as const;
 
 type DialectWithNotes = (typeof DIALECTS_WITH_NOTES)[number];

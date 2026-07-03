@@ -243,6 +243,7 @@ const connectionListOutputSchema = z.object({
       connectionType: z.string(),
       members: z.array(z.string()).optional(),
       hint: z.string().optional(),
+      queryPolicy: z.literal('semantic-layer-only').optional(),
     }),
   ),
 });

@@ -18,6 +18,8 @@ SUPPORTED_TABLE_IDENTIFIER_DIALECTS = {
     "sqlite",
     "tsql",
     "clickhouse",
+    "athena",
+    "duckdb",
 }
 
 ParseTableIdentifierReason = Literal[

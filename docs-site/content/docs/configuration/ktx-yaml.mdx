@@ -217,6 +217,41 @@ connections:
   observed in-scope query history. The block uses `mode: exclude` and remains
   hand-editable.
 
+### Query policy
+
+Set `query_policy: semantic-layer-only` on a warehouse connection to stop
+agents from authoring SQL against it. The default, `read-only-sql`, allows
+parser-validated read-only SQL through `ktx sql` and the `sql_execution` MCP
+tool alongside semantic-layer queries.
+
+```yaml
+connections:
+  warehouse:
+    driver: snowflake
+    query_policy: semantic-layer-only
+```
+
+With `semantic-layer-only`:
+
+- `ktx sql` and the `sql_execution` MCP tool reject the connection with a
+  clear error. When every SQL connection in the project is restricted, the
+  `sql_execution` tool is not registered at all.
+- Raw SQL against the federated connection (`_ktx_federated`) is rejected
+  when any member connection is restricted.
+- Semantic-layer queries (`ktx sl query`, the `sl_query` tool) accept only
+  measures predefined in the semantic-layer sources. Composed aggregate
+  expressions such as `sum(orders.amount)` are rejected wherever they appear,
+  including inside `filters` (a `HAVING`-style clause may only compare a
+  predefined measure by name, e.g. `orders.revenue > 100`). Grouping by
+  declared dimensions, filtering on columns, and segments remain available.
+- `connection_list` marks the connection as restricted so agents route to
+  `sl_query` instead of burning a failed call.
+
+The policy governs agent-facing query authorship, not data access: **ktx**'s
+own scan, ingest, and semantic-layer-generated SQL still run, and context
+tools such as `entity_details` and `dictionary_search` still expose schema
+metadata and sampled values.
+
 ### Metabase
 
 ```yaml

@@ -1,3 +1,5 @@
+import { createAthenaLiveDatabaseIntrospection } from './connectors/athena/live-database-introspection.js';
+import { isKtxAthenaConnectionConfig } from './connectors/athena/connector.js';
 import { createBigQueryLiveDatabaseIntrospection } from './connectors/bigquery/live-database-introspection.js';
 import { isKtxBigQueryConnectionConfig, KtxBigQueryScanConnector, type KtxBigQueryConnectionConfig } from './connectors/bigquery/connector.js';
 import { createClickHouseLiveDatabaseIntrospection } from './connectors/clickhouse/live-database-introspection.js';
@@ -125,6 +127,9 @@ function createKtxCliLiveDatabaseIntrospection(
   const bigquery = createBigQueryLiveDatabaseIntrospection({
     connections: project.config.connections,
   });
+  const athena = createAthenaLiveDatabaseIntrospection({
+    connections: project.config.connections,
+  });
   return {
     async extractSchema(connectionId: string, options?: LiveDatabaseIntrospectionOptions) {
       const connection = project.config.connections[connectionId];
@@ -159,6 +164,9 @@ function createKtxCliLiveDatabaseIntrospection(
       }
       if (isKtxBigQueryConnectionConfig(connection)) {
         return bigquery.extractSchema(connectionId, options);
+      }
+      if (isKtxAthenaConnectionConfig(connection)) {
+        return athena.extractSchema(connectionId, options);
       }
       if (hasSnowflakeDriver(connection)) {
         const { createSnowflakeLiveDatabaseIntrospection } = await import('./connectors/snowflake/live-database-introspection.js');

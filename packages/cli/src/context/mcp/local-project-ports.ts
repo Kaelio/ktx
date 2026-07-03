@@ -3,10 +3,9 @@ import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../..
 import { isDatabaseDriver, normalizeConnectionDriver } from '../../connection-drivers.js';
 import { sqlDialectNotes } from '../../context/sql-analysis/dialect-notes.js';
 import type { KtxProjectConnectionConfig } from '../../context/project/config.js';
-import { executeProjectReadOnlySql } from '../../context/connections/project-sql-executor.js';
-import { FEDERATED_CONNECTION_ID, federatedConnectionListing } from '../../context/connections/federation.js';
-import { assertSqlQueryableConnection } from '../../context/connections/dialects.js';
-import { resolveConfiguredConnection } from '../../context/connections/resolve-connection.js';
+import { executeProjectRawSql } from '../../context/connections/project-sql-executor.js';
+import { federatedConnectionListing } from '../../context/connections/federation.js';
+import { projectAllowsRawSql, restrictedFederatedMemberIds } from '../../context/connections/query-policy.js';
 import {
   type LocalConnectionInfo,
   localConnectionInfoFromConfig,
@@ -61,7 +60,6 @@ async function executeValidatedReadOnlySql(
   input: { connectionId: string; sql: string; maxRows: number },
   onProgress?: KtxMcpProgressCallback,
 ): Promise<KtxSqlExecutionResponse> {
-  await onProgress?.({ progress: 0, message: 'Validating SQL' });
   if (!options.sqlAnalysis) {
     throw new Error('sql_execution requires parser-backed SQL validation.');
   }
@@ -70,42 +68,22 @@ async function executeValidatedReadOnlySql(
     throw new Error('sql_execution requires a local scan connector factory.');
   }
 
-  const isFederated = input.connectionId === FEDERATED_CONNECTION_ID;
-  const connectionId = isFederated ? input.connectionId : assertSafeConnectionId(input.connectionId);
-  const connection = isFederated ? undefined : resolveConfiguredConnection(project.config, connectionId);
-  if (!isFederated) {
-    assertSqlQueryableConnection(connectionId, connection!.driver);
-  }
-
-  const dialect = sqlAnalysisDialectForDriver(isFederated ? 'duckdb' : connection!.driver);
-  const validation = await options.sqlAnalysis.validateReadOnly(input.sql, dialect);
-  if (!validation.ok) {
-    // A read-only guard rejecting the agent's SQL is an expected outcome, not a
-    // ktx fault: classify it so reportException keeps it out of Error Tracking.
-    throw new KtxQueryError(validation.error ?? 'SQL is not read-only.');
-  }
-
-  await onProgress?.({ progress: 0.3, message: 'Executing' });
-  const result = await executeProjectReadOnlySql({
+  const result = await executeProjectRawSql({
     project,
-    input: {
-      connectionId,
-      projectDir: project.projectDir,
-      connection,
-      sql: input.sql,
-      maxRows: input.maxRows,
-    },
+    connectionId: input.connectionId,
+    sql: input.sql,
+    maxRows: input.maxRows,
+    sqlAnalysis: options.sqlAnalysis,
     createConnector,
     runId: 'mcp-sql-execution',
-  }).catch(throwClassifiedQueryError);
-  const response = {
+    onProgress,
+  });
+  return {
     headers: result.headers,
     ...(result.headerTypes ? { headerTypes: result.headerTypes } : {}),
     rows: result.rows,
     rowCount: result.rowCount ?? result.rows.length,
   };
-  await onProgress?.({ progress: 1, message: `Fetched ${response.rowCount} rows` });
-  return response;
 }
 
 /** @internal Resolves a connection's dialect SQL notes; throws KtxExpectedError for an unknown or non-SQL-warehouse connection. */
@@ -140,12 +118,17 @@ export function createLocalProjectMcpContextPorts(
           .sort((a, b) => a.id.localeCompare(b.id));
         const federated = federatedConnectionListing(project.config.connections, project.projectDir);
         if (federated) {
+          const restricted = restrictedFederatedMemberIds(project.config, project.projectDir);
           configured.push({
             id: federated.id,
             name: federated.id,
             connectionType: 'DUCKDB',
             members: federated.members,
-            hint: federated.hint,
+            hint:
+              restricted.length > 0
+                ? `Federated SQL is disabled: member connection(s) ${restricted.join(', ')} have query_policy: semantic-layer-only.`
+                : federated.hint,
+            ...(restricted.length > 0 ? { queryPolicy: 'semantic-layer-only' as const } : {}),
           });
         }
         return configured;
@@ -245,7 +228,10 @@ export function createLocalProjectMcpContextPorts(
     },
   };
 
-  if (options.sqlAnalysis && options.localScan?.createConnector) {
+  // Register sql_execution only when some connection can accept raw SQL; in
+  // mixed projects the tool stays and executeProjectRawSql rejects restricted
+  // connection ids at request time.
+  if (options.sqlAnalysis && options.localScan?.createConnector && projectAllowsRawSql(project.config)) {
     ports.sqlExecution = {
       async execute(input, executionOptions) {
         return executeValidatedReadOnlySql(project, options, input, executionOptions?.onProgress);

@@ -51,6 +51,34 @@ def test_query_semantic_layer_generates_sql_and_plan() -> None:
     assert response.plan["sources_used"] == ["orders"]
 
 
+def test_query_semantic_layer_enforces_predefined_measures_only() -> None:
+    with pytest.raises(ValueError, match="composed measure"):
+        query_semantic_layer(
+            SemanticLayerQueryRequest(
+                sources=[ORDERS_SOURCE],
+                dialect="postgres",
+                query={
+                    "measures": ["sum(orders.amount)"],
+                    "predefined_measures_only": True,
+                },
+            )
+        )
+
+
+def test_query_semantic_layer_allows_predefined_measures_under_policy() -> None:
+    response = query_semantic_layer(
+        SemanticLayerQueryRequest(
+            sources=[ORDERS_SOURCE],
+            dialect="postgres",
+            query={
+                "measures": ["orders.revenue"],
+                "predefined_measures_only": True,
+            },
+        )
+    )
+    assert "public.orders" in response.sql
+
+
 def test_query_semantic_layer_emits_plan_and_sql_debug_events(
     tmp_path: Path,
     monkeypatch,
