@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.dialects.dialect import Dialect
 
 # DIALECT CONVENTION:
 #   `ExpressionParser` wraps read-only AST walks over user-authored
@@ -154,12 +155,29 @@ def _strip_quotes(name: str) -> str:
     return name
 
 
-def quote_reserved_identifiers(expr: str) -> str:
+@functools.lru_cache(maxsize=32)
+def _identifier_quote(dialect: str) -> str:
+    """The character `dialect` quotes identifiers with (backtick for BigQuery/MySQL,
+    double-quote for ANSI dialects). A reserved-word column must be quoted with this so a
+    backtick dialect does not read a double-quoted identifier as a string literal."""
+    try:
+        start = Dialect.get_or_raise(dialect).IDENTIFIER_START
+    except Exception:
+        start = '"'
+    return start or '"'
+
+
+def quote_reserved_identifiers(expr: str, dialect: str = "postgres") -> str:
     """Quote source.column references where either part is a SQL reserved word.
 
-    String literals are masked before processing to prevent matching
-    dotted identifiers inside quoted strings like 'group.value'.
+    Quoted with `dialect`'s identifier character, because the caller parses the
+    result in that dialect: a double-quoted identifier on BigQuery/MySQL is a
+    string literal, not an identifier. String literals are masked before
+    processing to prevent matching dotted identifiers inside quoted strings like
+    'group.value'.
     """
+    quote = _identifier_quote(dialect)
+
     # Mask string literals to avoid matching inside them
     literals: list[str] = []
 
@@ -172,16 +190,16 @@ def quote_reserved_identifiers(expr: str) -> str:
     def _quote_match(m: re.Match) -> str:
         source, col = m.group(1), m.group(2)
         start = m.start()
-        if start > 0 and masked[start - 1] == '"':
+        if start > 0 and masked[start - 1] == quote:
             return m.group(0)
         needs_quote = False
         source_q = source
         col_q = col
         if source.lower() in _SQL_RESERVED:
-            source_q = f'"{source}"'
+            source_q = f"{quote}{source}{quote}"
             needs_quote = True
         if col.lower() in _SQL_RESERVED:
-            col_q = f'"{col}"'
+            col_q = f"{quote}{col}{quote}"
             needs_quote = True
         if needs_quote:
             return f"{source_q}.{col_q}"
@@ -196,13 +214,13 @@ def quote_reserved_identifiers(expr: str) -> str:
     return result
 
 
-def _predicate_select(expr: str) -> str:
+def _predicate_select(expr: str, dialect: str = "postgres") -> str:
     """Wrap a user expression as `SELECT * WHERE …`, quoting reserved identifiers.
 
     Predicate, not projection: T-SQL reads a top-level `col = 'value'` projection
     as the `alias = expression` form and would compile the filter to `'value' AS col`.
     """
-    return f"SELECT * WHERE {quote_reserved_identifiers(expr)}"
+    return f"SELECT * WHERE {quote_reserved_identifiers(expr, dialect)}"
 
 
 @functools.lru_cache(maxsize=256)
@@ -220,7 +238,11 @@ def parse_predicate(expr: str, dialect: str) -> exp.Expression:
 
     Uncached, so the result is safe to `.transform()`; raises on unparseable input.
     """
-    return sqlglot.parse_one(_predicate_select(expr), read=dialect).find(exp.Where).this
+    return (
+        sqlglot.parse_one(_predicate_select(expr, dialect), read=dialect)
+        .find(exp.Where)
+        .this
+    )
 
 
 class ExpressionParser:
@@ -237,7 +259,7 @@ class ExpressionParser:
 
     def _parse_as_select(self, expr: str) -> exp.Expression:
         """Parse a user fragment for read-only AST walks, via the parse cache."""
-        return _cached_parse_select(_predicate_select(expr), self.dialect)
+        return _cached_parse_select(_predicate_select(expr, self.dialect), self.dialect)
 
     def parse(
         self,

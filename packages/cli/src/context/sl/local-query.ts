@@ -1,4 +1,5 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
+import { KtxExpectedError, markExpected } from '../../errors.js';
 import type { KtxSemanticLayerComputePort } from '../../context/daemon/semantic-layer-compute.js';
 import type { KtxMcpProgressCallback } from '../mcp/types.js';
 import type { KtxLocalProject } from '../../context/project/project.js';
@@ -79,13 +80,13 @@ export async function compileLocalSlQuery(
   options: CompileLocalSlQueryOptions,
 ): Promise<CompileLocalSlQueryResult> {
   if (options.connectionId === FEDERATED_CONNECTION_ID) {
-    throw new Error(FEDERATED_SL_QUERY_UNSUPPORTED);
+    throw new KtxExpectedError(FEDERATED_SL_QUERY_UNSUPPORTED);
   }
   await options.onProgress?.({ progress: 0, message: 'Compiling query' });
   const connectionId = resolveLocalConnectionId(project, options.connectionId);
   const driver = project.config.connections[connectionId]?.driver;
   if (!isSqlQueryableDriver(driver)) {
-    throw new Error(
+    throw new KtxExpectedError(
       `Semantic-layer queries require a SQL warehouse connection; '${connectionId}' uses the non-SQL driver ` +
         `'${driver ?? 'unknown'}'. MongoDB and other context-only sources are searchable and ingestable, not SL-queryable.`,
     );
@@ -125,13 +126,18 @@ export async function compileLocalSlQuery(
 
   const maxRows = options.maxRows ?? options.query.limit;
   await options.onProgress?.({ progress: 0.6, message: 'Executing' });
-  const execution = await options.queryExecutor.execute({
-    connectionId,
-    projectDir: project.projectDir,
-    connection: project.config.connections[connectionId],
-    sql: response.sql,
-    maxRows,
-  });
+  // A warehouse rejecting the compiled SQL (type mismatch, permission denied) is a
+  // surfaced query outcome, not a ktx fault: classify it so it stays out of Error
+  // Tracking, mirroring the sql_execution path.
+  const execution = await options.queryExecutor
+    .execute({
+      connectionId,
+      projectDir: project.projectDir,
+      connection: project.config.connections[connectionId],
+      sql: response.sql,
+      maxRows,
+    })
+    .catch((error: unknown) => markExpected(error));
   await options.onProgress?.({ progress: 1, message: `Fetched ${execution.totalRows} rows` });
 
   return {

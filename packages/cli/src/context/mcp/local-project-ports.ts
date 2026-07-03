@@ -1,5 +1,5 @@
 import type { KtxSqlQueryExecutorPort } from '../../context/connections/query-executor.js';
-import { KtxExpectedError, KtxQueryError, isNativeProgrammingFault } from '../../errors.js';
+import { KtxExpectedError, KtxQueryError, markExpected } from '../../errors.js';
 import { isDatabaseDriver, normalizeConnectionDriver } from '../../connection-drivers.js';
 import { sqlDialectNotes } from '../../context/sql-analysis/dialect-notes.js';
 import type { KtxProjectConnectionConfig } from '../../context/project/config.js';
@@ -77,17 +77,7 @@ async function executeValidatedReadOnlySql(
     },
     createConnector,
     runId: 'mcp-sql-execution',
-  }).catch((error: unknown) => {
-    // A warehouse/driver rejection (e.g. the agent's SQL failed to compile) is a
-    // surfaced operational outcome, not a ktx fault: mark it expected while
-    // preserving the warehouse's own diagnostics. A native JS error (TypeError,
-    // etc.) signals a bug in connector code — let it propagate unchanged so Error
-    // Tracking still sees it.
-    if (isNativeProgrammingFault(error) || error instanceof KtxExpectedError) {
-      throw error;
-    }
-    throw new KtxQueryError(error instanceof Error ? error.message : String(error), { cause: error });
-  });
+  }).catch((error: unknown) => markExpected(error));
   const response = {
     headers: result.headers,
     ...(result.headerTypes ? { headerTypes: result.headerTypes } : {}),

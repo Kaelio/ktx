@@ -654,7 +654,8 @@ class QueryPlanner:
                 all_dep_names.add(dep_name)
                 named.add(dep_name)
             tree = sqlglot.parse_one(
-                f"SELECT {quote_reserved_identifiers(expr)}", dialect=self.dialect
+                f"SELECT {quote_reserved_identifiers(expr, self.dialect)}",
+                dialect=self.dialect,
             )
 
             def _replace(node):
@@ -698,7 +699,8 @@ class QueryPlanner:
         """Reject expressions with nested aggregate functions (e.g., avg(sum(x)))."""
         try:
             tree = sqlglot.parse_one(
-                f"SELECT {quote_reserved_identifiers(expr)}", dialect=self.dialect
+                f"SELECT {quote_reserved_identifiers(expr, self.dialect)}",
+                dialect=self.dialect,
             )
             for agg_node in tree.find_all(exp.AggFunc):
                 # Check if this aggregate contains another aggregate inside

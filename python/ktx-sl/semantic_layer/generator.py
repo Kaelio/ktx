@@ -671,7 +671,8 @@ class SqlGenerator:
         """Apply a measure-level filter by injecting CASE WHEN into each aggregate."""
         try:
             tree = sqlglot.parse_one(
-                f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
+                f"SELECT {quote_reserved_identifiers(expr, self.dialect)}",
+                read=self.dialect,
             )
             select_expr = tree.expressions[0]
             if isinstance(select_expr, exp.Alias):
@@ -723,7 +724,8 @@ class SqlGenerator:
     def _translate_custom_funcs(self, expr: str) -> str:
         """Translate custom functions: median(), percentile(), count_distinct()."""
         tree = sqlglot.parse_one(
-            f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
+            f"SELECT {quote_reserved_identifiers(expr, self.dialect)}",
+            read=self.dialect,
         )
 
         has_custom = False
@@ -767,7 +769,8 @@ class SqlGenerator:
     def _extract_outer_aggregate(self, expr: str) -> tuple[str | None, str | None]:
         """Use AST to extract the outer aggregate function name and inner expression."""
         tree = sqlglot.parse_one(
-            f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
+            f"SELECT {quote_reserved_identifiers(expr, self.dialect)}",
+            read=self.dialect,
         )
         select_expr = tree.expressions[0]
         if isinstance(select_expr, exp.Alias):
@@ -788,7 +791,8 @@ class SqlGenerator:
         if not replacements:
             return expr
         tree = sqlglot.parse_one(
-            f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
+            f"SELECT {quote_reserved_identifiers(expr, self.dialect)}",
+            read=self.dialect,
         )
 
         def _replace(node):
@@ -857,13 +861,26 @@ class SqlGenerator:
             return self._time_trunc(dim.granularity, field)
         return field
 
+    _WEEKDAYS = frozenset(
+        {"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
+    )
+
+    def _bigquery_date_part(self, granularity: str) -> str:
+        # BigQuery spells a week starting on a given weekday as WEEK(MONDAY),
+        # not the bare WEEK_MONDAY that other systems accept.
+        if granularity.startswith("week_"):
+            weekday = granularity[len("week_") :]
+            if weekday in self._WEEKDAYS:
+                return f"WEEK({weekday.upper()})"
+        return granularity.upper()
+
     def _time_trunc(self, granularity: str, field: str) -> str:
         """Generate dialect-appropriate time truncation expression."""
         g = granularity.lower()
         if self.dialect == "sqlite":
             return self._sqlite_time_trunc(g, field)
         if self.dialect == "bigquery":
-            return f"DATE_TRUNC({field}, {g.upper()})"
+            return f"DATE_TRUNC({field}, {self._bigquery_date_part(g)})"
         if self.dialect == "mysql":
             return self._mysql_time_trunc(g, field)
         return f"DATE_TRUNC('{g}', {field})"
@@ -1257,7 +1274,8 @@ class SqlGenerator:
         """Qualify bare column references in a computed column expression with the source name."""
         try:
             tree = sqlglot.parse_one(
-                f"SELECT {quote_reserved_identifiers(expr)}", read=self.dialect
+                f"SELECT {quote_reserved_identifiers(expr, self.dialect)}",
+                read=self.dialect,
             )
 
             def _qualify(node: exp.Expression) -> exp.Expression:
@@ -1403,7 +1421,7 @@ class SqlGenerator:
         try:
             # Quote reserved-word identifiers so target dialect parsers do not
             # confuse them with keywords (e.g. Snowflake's SAMPLE, QUALIFY).
-            quoted_outer = quote_reserved_identifiers(outer_sql)
+            quoted_outer = quote_reserved_identifiers(outer_sql, self.dialect)
             results = sqlglot.transpile(
                 quoted_outer, read=self.dialect, write=self.dialect
             )

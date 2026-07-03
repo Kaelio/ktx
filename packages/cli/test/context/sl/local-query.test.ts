@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KtxSemanticLayerComputePort } from '../../../src/context/daemon/semantic-layer-compute.js';
 import { initKtxProject, type KtxLocalProject } from '../../../src/context/project/project.js';
+import { KtxExpectedError, KtxQueryError } from '../../../src/errors.js';
 import { compileLocalSlQuery } from '../../../src/context/sl/local-query.js';
 
 describe('compileLocalSlQuery', () => {
@@ -355,5 +356,55 @@ grain: []
         compute,
       }),
     ).rejects.toThrow('Connection "DIG_SMART_REP" is not configured in ktx.yaml. Configured connections: warehouse.');
+  });
+
+  it('classifies a warehouse execution rejection as an expected query error', async () => {
+    const queryExecutor = {
+      execute: vi.fn(async () => {
+        throw new Error('No matching signature for operator >= for argument types: TIMESTAMP, INT64');
+      }),
+    };
+
+    const promise = compileLocalSlQuery(project, {
+      connectionId: 'warehouse',
+      query: { measures: ['orders.order_count'], dimensions: [] },
+      compute,
+      execute: true,
+      queryExecutor,
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(KtxQueryError);
+    await expect(promise).rejects.toThrow(/No matching signature/);
+  });
+
+  it('lets a native programming fault from the executor propagate unclassified', async () => {
+    const queryExecutor = {
+      execute: vi.fn(async () => {
+        throw new TypeError('cannot read properties of undefined');
+      }),
+    };
+
+    const promise = compileLocalSlQuery(project, {
+      connectionId: 'warehouse',
+      query: { measures: ['orders.order_count'], dimensions: [] },
+      compute,
+      execute: true,
+      queryExecutor,
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(TypeError);
+    await expect(promise).rejects.not.toBeInstanceOf(KtxExpectedError);
+  });
+
+  it('classifies the non-SQL-connection refusal as an expected error', async () => {
+    project.config.connections['mongo-prod'] = { driver: 'mongodb', url: 'mongodb://localhost:27017/app' };
+
+    await expect(
+      compileLocalSlQuery(project, {
+        connectionId: 'mongo-prod',
+        query: { measures: ['orders.order_count'], dimensions: [] },
+        compute,
+      }),
+    ).rejects.toBeInstanceOf(KtxExpectedError);
   });
 });
