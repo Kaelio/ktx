@@ -35,6 +35,12 @@ from ktx_daemon.source_generation import (
     generate_sources_response,
 )
 
+# The caller (the Node client) sent a well-formed request the compute layer
+# refused as invalid — e.g. the planner rejecting an agent's query. A distinct
+# exit code lets the client classify it as an expected outcome rather than a
+# ktx fault. Kept in sync with DAEMON_INPUT_REJECTED_EXIT_CODE on the Node side.
+INPUT_REJECTED_EXIT_CODE = 3
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ktx-daemon")
@@ -210,9 +216,17 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         sys.stdout.write(response.model_dump_json() + "\n")
         return 0
-    except (json.JSONDecodeError, ValidationError, ValueError) as error:
+    except (json.JSONDecodeError, ValidationError) as error:
+        # Malformed request envelope — ktx sent bad JSON or a mis-shaped payload.
+        # That is a ktx fault, so keep the generic non-zero code (JSONDecodeError
+        # subclasses ValueError, so this clause must precede the ValueError one).
         sys.stderr.write(f"{error}\n")
         return 1
+    except ValueError as error:
+        # The compute layer refused a well-formed request as invalid (e.g. the
+        # planner rejecting the agent's measures). Expected, not a fault.
+        sys.stderr.write(f"{error}\n")
+        return INPUT_REJECTED_EXIT_CODE
     except Exception as error:
         from ktx_daemon.telemetry import report_exception
 

@@ -91,6 +91,22 @@ def test_command_returns_nonzero_for_invalid_json() -> None:
     assert "Expecting property name enclosed in double quotes" in result.stderr
 
 
+def test_semantic_query_rejects_invalid_query_with_input_rejected_code() -> None:
+    # A planner ValueError (agent's measure references no source) is an expected
+    # input rejection, distinguished from a fault by INPUT_REJECTED_EXIT_CODE (3).
+    result = run_daemon_command(
+        "semantic-query",
+        {
+            "sources": [ORDERS_SOURCE],
+            "dialect": "postgres",
+            "query": {"measures": ["count(*)"], "dimensions": []},
+        },
+    )
+
+    assert result.returncode == 3, result.stderr
+    assert "does not reference any source" in result.stderr
+
+
 def test_serve_http_command_starts_uvicorn_without_reading_stdin(
     monkeypatch,
 ) -> None:

@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from ktx_daemon.telemetry import error_class, report_exception, track_telemetry_event
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from semantic_layer.duplicate_check import validate_measure_duplicates
 from semantic_layer.engine import SemanticEngine
 from semantic_layer.models import QueryResult, SourceDefinition
@@ -150,13 +150,18 @@ def query_semantic_layer(
             track_telemetry_event(
                 "sql_gen_completed", sql_fields, project_id=request.project_id
             )
-        report_exception(
-            error,
-            source="semantic-query",
-            handled=True,
-            fatal=False,
-            project_id=request.project_id,
-        )
+        # A ValueError is the engine refusing the caller's query — an expected
+        # rejection surfaced to the agent, not a ktx fault. Keep it out of Error
+        # Tracking (a pydantic ValidationError subclasses ValueError but means a
+        # malformed request envelope, so it stays a reported fault).
+        if not isinstance(error, ValueError) or isinstance(error, ValidationError):
+            report_exception(
+                error,
+                source="semantic-query",
+                handled=True,
+                fatal=False,
+                project_id=request.project_id,
+            )
         raise
 
 
