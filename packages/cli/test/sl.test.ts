@@ -717,7 +717,17 @@ joins: []
 
     expect(query).toHaveBeenCalledWith(
       expect.objectContaining({
-        query: { measures: ['orders.order_count'], dimensions: [] },
+        dialect: 'postgres',
+        sources: expect.arrayContaining([
+          expect.objectContaining({
+            name: 'orders',
+            table: 'public.orders',
+          }),
+        ]),
+        query: expect.objectContaining({
+          measures: ['orders.order_count'],
+          dimensions: [],
+        }),
       }),
     );
     expect(JSON.parse(String(stdout.write.mock.calls[0][0]))).toMatchObject({
