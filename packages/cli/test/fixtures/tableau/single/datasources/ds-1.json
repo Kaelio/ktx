@@ -1,0 +1,22 @@
+{
+  "luid": "ds-1",
+  "name": "Revenue Model",
+  "projectName": "Finance",
+  "updatedAt": "2026-04-01T00:00:00Z",
+  "hasExtracts": true,
+  "description": "Published revenue data source",
+  "fields": [
+    { "name": "Order Amount", "role": "MEASURE", "dataType": "INTEGER", "isCalculated": false },
+    {
+      "name": "Net Revenue",
+      "role": "MEASURE",
+      "dataType": "REAL",
+      "formula": "SUM([Gross Revenue]) - SUM([Refunds])",
+      "description": "Gross revenue minus refunds",
+      "isCalculated": true
+    }
+  ],
+  "upstreamTables": [
+    { "luid": "t-1", "name": "ORDERS", "schema": "PUBLIC", "fullName": "DEMO.PUBLIC.ORDERS" }
+  ]
+}

@@ -42,6 +42,8 @@ import type { MetabaseClientLogger } from './adapters/metabase/client.js';
 import type { MetabaseFetchLogger } from './adapters/metabase/fetch.js';
 import { createLocalSigmaSourceAdapter } from './adapters/sigma/local-sigma.adapter.js';
 import type { SigmaFetchLogger } from './adapters/sigma/fetch.js';
+import { createLocalTableauSourceAdapter } from './adapters/tableau/local-tableau.adapter.js';
+import type { TableauFetchLogger } from './adapters/tableau/fetch.js';
 import { MetricflowSourceAdapter } from './adapters/metricflow/metricflow.adapter.js';
 import { pullConfigFromMetricflowIntegration } from './adapters/metricflow/pull-config.js';
 import { LocalNotionRuntimeStore } from './adapters/notion/local-state-store.js';
@@ -75,7 +77,8 @@ type LocalIngestOperationalLogger = MetabaseClientLogger &
   MetabaseFetchLogger &
   LookerClientLogger &
   NotionFetchLogger &
-  SigmaFetchLogger;
+  SigmaFetchLogger &
+  TableauFetchLogger;
 
 export function createDefaultLocalIngestAdapters(
   project: KtxLocalProject,
@@ -109,6 +112,9 @@ export function createDefaultLocalIngestAdapters(
       ...(options.logger ? { logger: options.logger } : {}),
     }),
     createLocalSigmaSourceAdapter(project, {
+      ...(options.logger ? { logger: options.logger } : {}),
+    }),
+    createLocalTableauSourceAdapter(project, {
       ...(options.logger ? { logger: options.logger } : {}),
     }),
     new GdriveSourceAdapter(),
@@ -296,6 +302,22 @@ export async function localPullConfigForAdapter(
       ...(connectionMappings ? { connectionMappings } : {}),
       ...(workbookFilter ? { workbookFilter } : {}),
       ...(dataModelFilter ? { dataModelFilter } : {}),
+    };
+  }
+  if (adapter.source === 'tableau') {
+    const tableauConn = project.config.connections[connectionId];
+    const datasourceFilter =
+      tableauConn && 'datasourceFilter' in tableauConn && tableauConn.datasourceFilter != null
+        ? (tableauConn.datasourceFilter as { updatedSince?: string })
+        : undefined;
+    const workbookFilter =
+      tableauConn && 'workbookFilter' in tableauConn && tableauConn.workbookFilter != null
+        ? (tableauConn.workbookFilter as { updatedSince?: string })
+        : undefined;
+    return {
+      tableauConnectionId: connectionId,
+      ...(datasourceFilter ? { datasourceFilter } : {}),
+      ...(workbookFilter ? { workbookFilter } : {}),
     };
   }
   const connection = project.config.connections[connectionId];
