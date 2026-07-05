@@ -25,6 +25,7 @@ const expectedAdapterSkillHeadings: Record<string, string> = {
   metabase_ingest: '# Metabase to ktx Semantic Layer',
   metricflow_ingest: '# MetricFlow to ktx Semantic Layer',
   sigma_ingest: '# Sigma Ingest',
+  tableau_ingest: '# Tableau Ingest',
 };
 const verificationWriterSkills = [
   'gdrive_synthesize',
@@ -35,6 +36,7 @@ const verificationWriterSkills = [
   'metabase_ingest',
   'metricflow_ingest',
   'sigma_ingest',
+  'tableau_ingest',
   'live_database_ingest',
   'historic_sql_table_digest',
   'historic_sql_patterns',
