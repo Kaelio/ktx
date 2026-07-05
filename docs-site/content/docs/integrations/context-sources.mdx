@@ -1,6 +1,6 @@
 ---
 title: Context Sources
-description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, Sigma, and Google Drive.
+description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, Sigma, Tableau, and Google Drive.
 ---
 
 Context sources feed your existing analytics tooling into **ktx**. During ingestion, **ktx** extracts metadata from each source and uses a reconciliation agent to reconcile it with your existing semantic layer and knowledge base - preserving accepted edits rather than overwriting.
@@ -27,7 +27,7 @@ LookML uses top-level `repoUrl`, and MetricFlow uses nested
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, `sigma`, or `gdrive` |
+| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, `sigma`, `tableau`, or `gdrive` |
 | `source_dir` | For local file sources | Absolute or project-relative source directory |
 | `repo_url` | For Git-hosted dbt sources | Git repository URL |
 | `repoUrl` | For Git-hosted LookML sources | Git repository URL |
@@ -470,6 +470,82 @@ connections:
 - Ingest is incremental: items whose `updatedAt` timestamp is unchanged since the last run are skipped
 - Models backed by CSV uploads or unsupported connector subtypes cannot have their spec exported; these are skipped with a warning (a Sigma API limitation)
 - Joins are not projected from Sigma data models in this release; `joins: []` is always written by the projection step. Lookup relationships visible in data model specs are captured as wiki knowledge instead.
+
+---
+
+## Tableau
+
+Ingests published data sources, calculated fields, and workbook metadata from **Tableau Cloud** or **Tableau Server** as semantic context. Uses the Tableau REST API for authentication (Personal Access Token) and the Tableau **Metadata API** (GraphQL) to fetch data source definitions and lineage.
+
+### What it provides
+
+- Published data source names, projects, and descriptions
+- Field definitions — dimensions and measures, with data types
+- **Calculated fields** with their formulas (captured as candidate metric definitions)
+- Upstream (physical) warehouse tables each data source draws from
+- Workbook names, projects, and descriptions
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  tableau-main:
+    driver: tableau
+    host: https://us-west-2b.online.tableau.com   # Tableau Cloud pod, or your Server host
+    site_content_url: "your-site"                  # site subpath; "" for the Default site on Server
+    personal_access_token_name: "ktx-ingest"
+    personal_access_token_secret_ref: env:TABLEAU_PAT_SECRET
+```
+
+**Tableau Cloud** uses your pod hostname (e.g. `https://10ax.online.tableau.com`); **Tableau Server** uses your own host (e.g. `https://tableau.mycompany.com`). On Cloud a non-default `site_content_url` is almost always required. Override the REST API version with `api_version` if needed (defaults to `3.29`).
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| Personal Access Token | `personal_access_token_name` + `personal_access_token_secret_ref: env:TABLEAU_PAT_SECRET` |
+
+Create a PAT in Tableau: **My Account Settings → Personal Access Tokens → Create Token**. The secret is shown only once at creation. Provide it to ktx via an `env:` or `file:` reference — never inline the literal secret in `ktx.yaml`:
+
+```yaml title="ktx.yaml"
+    personal_access_token_secret_ref: file:secrets/tableau-pat   # or env:TABLEAU_PAT_SECRET
+```
+
+Don't have an instance to test with? Join the free [Tableau Developer Program](https://www.tableau.com/developer) for a personal Tableau Cloud sandbox (the Metadata API is enabled by default) and create a PAT there.
+
+### What gets ingested
+
+- Published data sources, organized into work units, each with its fields (including calculated-field formulas) and upstream tables
+- Workbook metadata (name, project, description)
+- Ingest is incremental: items whose `updatedAt` timestamp is unchanged since the last run are skipped
+
+### Data source and workbook filters
+
+At large scale, limit which items are fetched during ingest with `datasourceFilter` / `workbookFilter`:
+
+```yaml title="ktx.yaml"
+connections:
+  tableau-main:
+    driver: tableau
+    host: https://us-west-2b.online.tableau.com
+    site_content_url: "your-site"
+    personal_access_token_name: "ktx-ingest"
+    personal_access_token_secret_ref: env:TABLEAU_PAT_SECRET
+    datasourceFilter:
+      updatedSince: "2026-01-01T00:00:00Z"   # only recently updated data sources
+    workbookFilter:
+      updatedSince: "2026-01-01T00:00:00Z"   # only recently updated workbooks
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `updatedSince` | — | ISO 8601 date; only items updated on or after this date are fetched |
+
+### Notes
+
+- This release is **wiki-only**: Tableau ingest produces ktx wiki knowledge (metric definitions from calculated fields, business concepts from data source and workbook names). Deterministic semantic-layer sources under `semantic-layer/<connection-id>/` are not written yet — warehouse-table projection is planned for a follow-up release.
+- Context ingest (`ktx ingest tableau-main`) fetches from the Tableau APIs directly.
+- The PAT secret must be provided via an `env:` or `file:` reference; the token authenticates both the REST sign-in and the Metadata API calls.
 
 ---
 
