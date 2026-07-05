@@ -1,0 +1,221 @@
+{
+  "luid": "18ad5ef7-9b61-4c3a-9ecd-01fcd2fd079f",
+  "name": "Superstore Datasource",
+  "projectName": "Samples",
+  "updatedAt": "2026-07-05T19:19:30Z",
+  "hasExtracts": false,
+  "fields": [
+    {
+      "name": "Top Customers by Profit",
+      "isCalculated": false
+    },
+    {
+      "name": "Ship Mode",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "State/Province",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Category",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Profit",
+      "role": "MEASURE",
+      "dataType": "REAL",
+      "isCalculated": false
+    },
+    {
+      "name": "Sales",
+      "role": "MEASURE",
+      "dataType": "REAL",
+      "isCalculated": false
+    },
+    {
+      "name": "Order Date",
+      "role": "DIMENSION",
+      "dataType": "DATE",
+      "isCalculated": false
+    },
+    {
+      "name": "Product ID",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Order ID",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Ship Date",
+      "role": "DIMENSION",
+      "dataType": "DATE",
+      "isCalculated": false
+    },
+    {
+      "name": "Profit (bin)",
+      "isCalculated": false
+    },
+    {
+      "name": "Region",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "People",
+      "role": "MEASURE",
+      "dataType": "TABLE",
+      "isCalculated": false
+    },
+    {
+      "name": "Returned",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Postal Code",
+      "role": "DIMENSION",
+      "dataType": "INTEGER",
+      "isCalculated": false
+    },
+    {
+      "name": "Order ID (Returns)",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Sub-Category",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Person",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Segment",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Customer Name",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Quantity",
+      "role": "MEASURE",
+      "dataType": "INTEGER",
+      "isCalculated": false
+    },
+    {
+      "name": "Profit Ratio",
+      "role": "MEASURE",
+      "dataType": "REAL",
+      "formula": "SUM([Profit])/SUM([Sales])",
+      "isCalculated": true
+    },
+    {
+      "name": "Discount",
+      "role": "MEASURE",
+      "dataType": "REAL",
+      "isCalculated": false
+    },
+    {
+      "name": "Product Name",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Returns",
+      "role": "MEASURE",
+      "dataType": "TABLE",
+      "isCalculated": false
+    },
+    {
+      "name": "Orders",
+      "role": "MEASURE",
+      "dataType": "TABLE",
+      "isCalculated": false
+    },
+    {
+      "name": "Country/Region",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Customer ID",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Row ID",
+      "role": "DIMENSION",
+      "dataType": "INTEGER",
+      "isCalculated": false
+    },
+    {
+      "name": "Product",
+      "isCalculated": false
+    },
+    {
+      "name": "City",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Manufacturer",
+      "isCalculated": false
+    },
+    {
+      "name": "Region (People)",
+      "role": "DIMENSION",
+      "dataType": "STRING",
+      "isCalculated": false
+    },
+    {
+      "name": "Location",
+      "isCalculated": false
+    }
+  ],
+  "upstreamTables": [
+    {
+      "name": "Orders",
+      "luid": "e6504e84-4d76-487a-8900-b9a8c004c7d5",
+      "fullName": "[Orders$]"
+    },
+    {
+      "name": "Returns",
+      "luid": "ceabf8a4-27dd-40d8-9532-8b7bc151efa1",
+      "fullName": "[Returns$]"
+    },
+    {
+      "name": "People",
+      "luid": "d559f216-8673-47d1-96c2-ff90db965e49",
+      "fullName": "[People$]"
+    }
+  ]
+}
