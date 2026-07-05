@@ -302,6 +302,56 @@ const sigmaConnectionSchema = z
   })
   .describe('Sigma Computing API connection for ingesting data models.');
 
+const tableauConnectionSchema = z
+  .looseObject({
+    driver: z.literal('tableau'),
+    host: z
+      .string()
+      .url()
+      .describe(
+        'Base host URL of the Tableau Cloud pod or Tableau Server, ' +
+          'e.g. https://us-west-2b.online.tableau.com or https://tableau.mycompany.com.',
+      ),
+    site_content_url: z
+      .string()
+      .default('')
+      .describe('Tableau site content URL (the site subpath). Empty string targets the Default site on Tableau Server.'),
+    api_version: z
+      .string()
+      .optional()
+      .describe('Tableau REST API version used for sign-in, e.g. "3.29". Defaults to 3.29 when omitted.'),
+    personal_access_token_name: z.string().min(1).describe('Tableau Personal Access Token name.'),
+    personal_access_token_secret: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Literal Tableau PAT secret. Prefer personal_access_token_secret_ref.'),
+    personal_access_token_secret_ref: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Reference to the Tableau PAT secret (e.g. env:TABLEAU_PAT_SECRET or file:secrets/tableau-pat).'),
+    datasourceFilter: z
+      .object({
+        updatedSince: z
+          .string()
+          .optional()
+          .describe('ISO 8601 date string. Only data sources updated on or after this date are ingested.'),
+      })
+      .optional()
+      .describe('Filters applied when listing published data sources during ingest.'),
+    workbookFilter: z
+      .object({
+        updatedSince: z
+          .string()
+          .optional()
+          .describe('ISO 8601 date string. Only workbooks updated on or after this date are ingested.'),
+      })
+      .optional()
+      .describe('Filters applied when listing workbooks during ingest.'),
+  })
+  .describe('Tableau Cloud / Server connection for ingesting published data sources and workbooks.');
+
 export const connectionConfigSchema = z.discriminatedUnion('driver', [
   ...warehouseConnectionSchemas,
   mongodbConnectionSchema,
@@ -313,4 +363,5 @@ export const connectionConfigSchema = z.discriminatedUnion('driver', [
   dbtConnectionSchema,
   metricflowConnectionSchema,
   sigmaConnectionSchema,
+  tableauConnectionSchema,
 ]);

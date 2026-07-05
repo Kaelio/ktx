@@ -18,6 +18,8 @@ import { cloneOrPull, testRepoConnection } from './context/ingest/repo-fetch.js'
 import { DEFAULT_METABASE_CLIENT_CONFIG, MetabaseClient } from './context/ingest/adapters/metabase/client.js';
 import { DEFAULT_SIGMA_CLIENT_CONFIG, DefaultSigmaClient } from './context/ingest/adapters/sigma/client.js';
 import { sigmaRuntimeConfigFromLocalConnection } from './context/ingest/adapters/sigma/local-sigma.adapter.js';
+import { DEFAULT_TABLEAU_CLIENT_CONFIG, DefaultTableauClient } from './context/ingest/adapters/tableau/client.js';
+import { tableauRuntimeConfigFromLocalConnection } from './context/ingest/adapters/tableau/local-tableau.adapter.js';
 import { discoverMetabaseDatabases, type DiscoveredMetabaseDatabase } from './context/ingest/adapters/metabase/mapping.js';
 import { loadDbtSchemaFiles } from './context/ingest/dbt-shared/schema-files.js';
 import { loadProjectInfo } from './context/ingest/dbt-shared/project-vars.js';
@@ -48,7 +50,16 @@ import {
   type KtxSetupPromptOption,
 } from './setup-prompts.js';
 
-export type KtxSetupSourceType = 'dbt' | 'metricflow' | 'metabase' | 'looker' | 'lookml' | 'notion' | 'sigma' | 'gdrive';
+export type KtxSetupSourceType =
+  | 'dbt'
+  | 'metricflow'
+  | 'metabase'
+  | 'looker'
+  | 'lookml'
+  | 'notion'
+  | 'sigma'
+  | 'tableau'
+  | 'gdrive';
 
 const DEFAULT_NOTION_MAX_KNOWLEDGE_CREATES_PER_RUN = 25;
 
@@ -66,6 +77,10 @@ export interface KtxSetupSourcesArgs {
   sourceApiKeyRef?: string;
   sourceClientId?: string;
   sourceClientSecretRef?: string;
+  /** Tableau Personal Access Token name. */
+  sourcePatName?: string;
+  /** Tableau site content URL (the site subpath); empty string targets the Default site. */
+  sourceSiteContentUrl?: string;
   sourceWarehouseConnectionId?: string;
   sourceProjectName?: string;
   sourceProfilesPath?: string;
@@ -118,6 +133,7 @@ export interface KtxSetupSourcesDeps {
   validateLookml?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   validateNotion?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   validateSigma?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
+  validateTableau?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   validateGdrive?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   pickNotionRootPages?: typeof pickNotionRootPages;
   discoverMetabaseDatabases?: (args: {
@@ -142,6 +158,7 @@ const SOURCE_OPTIONS: Array<{ value: KtxSetupSourceType; label: string }> = [
   { value: 'looker', label: 'Looker' },
   { value: 'lookml', label: 'LookML' },
   { value: 'sigma', label: 'Sigma Computing' },
+  { value: 'tableau', label: 'Tableau' },
   { value: 'gdrive', label: 'Google Drive' },
 ];
 
@@ -253,6 +270,7 @@ const SOURCE_CREDENTIAL_FLAG: Record<KtxSetupSourceType, SourceCredentialFlag> =
   metabase: { field: 'sourceApiKeyRef', flag: '--source-api-key-ref' },
   looker: { field: 'sourceClientSecretRef', flag: '--source-client-secret-ref' },
   sigma: { field: 'sourceClientSecretRef', flag: '--source-client-secret-ref' },
+  tableau: { field: 'sourceClientSecretRef', flag: '--source-client-secret-ref' },
   gdrive: { field: null, flag: '--gdrive-service-account-key-ref' },
 };
 
@@ -594,6 +612,22 @@ function buildSigmaConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionCo
   };
 }
 
+function buildTableauConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionConfig {
+  if (!args.sourceUrl) {
+    throw new Error('Missing Tableau host: pass --source-url (e.g. https://us-west-2b.online.tableau.com).');
+  }
+  if (!args.sourcePatName) {
+    throw new Error('Missing Tableau personal access token name: pass --source-pat-name.');
+  }
+  return {
+    driver: 'tableau',
+    host: args.sourceUrl,
+    site_content_url: args.sourceSiteContentUrl ?? '',
+    personal_access_token_name: args.sourcePatName,
+    personal_access_token_secret_ref: credentialRef(args.sourceClientSecretRef, 'Tableau PAT secret ref'),
+  };
+}
+
 function buildGdriveConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionConfig {
   const folderId = args.gdriveFolderId?.trim();
   if (!folderId) {
@@ -739,6 +773,23 @@ async function defaultValidateSigma(connection: KtxProjectConnectionConfig): Pro
       return result.success
         ? { ok: true, detail: 'Sigma API connection verified' }
         : { ok: false, message: result.error ?? 'Sigma connection test failed' };
+    } finally {
+      await client.cleanup();
+    }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function defaultValidateTableau(connection: KtxProjectConnectionConfig): Promise<SourceValidationResult> {
+  try {
+    const runtimeConfig = tableauRuntimeConfigFromLocalConnection('tableau-main', connection);
+    const client = new DefaultTableauClient(runtimeConfig, DEFAULT_TABLEAU_CLIENT_CONFIG);
+    try {
+      const result = await client.testConnection();
+      return result.success
+        ? { ok: true, detail: 'Tableau API connection verified' }
+        : { ok: false, message: result.error ?? 'Tableau connection test failed' };
     } finally {
       await client.cleanup();
     }
@@ -1441,6 +1492,52 @@ async function promptForInteractiveSource(
     ]);
   }
 
+  if (source === 'tableau') {
+    return await runSourcePromptSteps(initialState, () => [
+      ...connectionSteps,
+      async (state) => {
+        const sourceUrl = await promptText(prompts, {
+          message: 'Tableau host URL (Cloud pod or Server), e.g. https://us-west-2b.online.tableau.com',
+          ...(state.sourceUrl ? { initialValue: state.sourceUrl } : {}),
+        });
+        if (sourceUrl === undefined) return 'back';
+        state.sourceUrl = sourceUrl;
+        return 'next';
+      },
+      async (state) => {
+        const siteContentUrl = await promptText(prompts, {
+          message: 'Tableau site content URL (leave empty for the Default site)',
+          initialValue: state.sourceSiteContentUrl ?? '',
+        });
+        if (siteContentUrl === undefined) return 'back';
+        state.sourceSiteContentUrl = siteContentUrl;
+        return 'next';
+      },
+      async (state) => {
+        const patName = await promptText(prompts, {
+          message: 'Tableau personal access token name',
+          ...(state.sourcePatName ? { initialValue: state.sourcePatName } : {}),
+        });
+        if (patName === undefined) return 'back';
+        state.sourcePatName = patName;
+        return 'next';
+      },
+      async (state) => {
+        const ref = await chooseSourceCredentialRef({
+          prompts,
+          projectDir: args.projectDir,
+          label: 'Tableau personal access token secret',
+          envName: 'TABLEAU_PAT_SECRET',
+          secretFileName: `${state.sourceConnectionId ?? 'tableau-main'}-pat-secret`,
+          existingRef: state.sourceClientSecretRef,
+        });
+        if (ref === 'back') return 'back';
+        state.sourceClientSecretRef = ref;
+        return 'next';
+      },
+    ]);
+  }
+
   if (source === 'notion') {
     return await runSourcePromptSteps(initialState, (state) => [
       ...connectionSteps,
@@ -1716,6 +1813,15 @@ function sourceArgsFromExistingConnection(input: {
     return sourceArgs;
   }
 
+  if (input.source === 'tableau') {
+    sourceArgs.sourceUrl = stringField(input.connection.host) ?? undefined;
+    sourceArgs.sourceSiteContentUrl = stringField(input.connection.site_content_url) ?? undefined;
+    sourceArgs.sourcePatName = stringField(input.connection.personal_access_token_name) ?? undefined;
+    sourceArgs.sourceClientSecretRef =
+      stringField(input.connection.personal_access_token_secret_ref) ?? undefined;
+    return sourceArgs;
+  }
+
   if (input.source === 'gdrive') {
     sourceArgs.gdriveServiceAccountKeyRef = stringField(input.connection.service_account_key_ref);
     sourceArgs.gdriveFolderId = stringField(input.connection.folder_id);
@@ -1907,6 +2013,9 @@ function buildConnection(source: KtxSetupSourceType, args: KtxSetupSourcesArgs):
   if (source === 'sigma') {
     return buildSigmaConnection(args);
   }
+  if (source === 'tableau') {
+    return buildTableauConnection(args);
+  }
   if (source === 'notion') {
     return buildNotionConnection(args);
   }
@@ -1937,6 +2046,9 @@ async function validateSource(
   }
   if (source === 'sigma') {
     return await (deps.validateSigma ?? defaultValidateSigma)(args.connection);
+  }
+  if (source === 'tableau') {
+    return await (deps.validateTableau ?? defaultValidateTableau)(args.connection);
   }
   if (source === 'notion') {
     return await (deps.validateNotion ?? defaultValidateNotion)(args.connection);
