@@ -105,7 +105,7 @@ upkeep and don't absorb the rest of your company's knowledge.
 
 Works with PostgreSQL, Snowflake, BigQuery, ClickHouse, MySQL, SQL Server,
 SQLite, DuckDB, Amazon Athena, and MongoDB. Integrates with dbt, MetricFlow,
-LookML, Looker, Metabase, Sigma, Notion, and Google Drive.
+LookML, Looker, Metabase, Sigma, Tableau, Notion, and Google Drive.
 
 ## Quick Start
 
