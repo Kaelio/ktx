@@ -21,6 +21,8 @@ import type {
   KtxKnowledgeMcpPort,
   KtxMcpContextPorts,
   KtxMcpToolHandlerContext,
+  KtxMongoQueryMcpPort,
+  KtxMongoQueryResponse,
   KtxSemanticLayerMcpPort,
   KtxSqlExecutionMcpPort,
   KtxSqlExecutionResponse,
@@ -490,6 +492,56 @@ describe('createKtxMcpServer', () => {
         connectionId: 'warehouse',
         sql: 'select status, count(*) from public.orders group by status',
         maxRows: 50,
+      },
+      undefined,
+    );
+  });
+
+  it('registers mongo_query when the host provides a MongoDB query port', async () => {
+    const fake = makeFakeServer();
+    const response: KtxMongoQueryResponse = {
+      headers: ['_id', 'city'],
+      rows: [
+        ['a1', 'Indianapolis'],
+        ['a2', 'Indianapolis'],
+      ],
+      rowCount: 2,
+    };
+    const mongoQuery: KtxMongoQueryMcpPort = {
+      execute: vi.fn<KtxMongoQueryMcpPort['execute']>().mockResolvedValue(response),
+    };
+
+    createKtxMcpServer({
+      server: fake.server,
+      userContext: { userId: 'local-user' },
+      contextTools: {
+        mongoQuery,
+      },
+    });
+
+    expect(fake.tools.map((tool) => tool.name)).toEqual(['mongo_query']);
+    await expect(
+      getTool(fake.tools, 'mongo_query').handler({
+        connectionId: 'mongo',
+        collection: 'business',
+        pipeline: [{ $match: { city: 'Indianapolis' } }],
+        limit: 100,
+      }),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(response),
+        },
+      ],
+      structuredContent: response,
+    });
+    expect(mongoQuery.execute).toHaveBeenCalledWith(
+      {
+        connectionId: 'mongo',
+        collection: 'business',
+        pipeline: [{ $match: { city: 'Indianapolis' } }],
+        limit: 100,
       },
       undefined,
     );
