@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { KtxQueryError } from '../../src/errors.js';
+import { KtxExpectedError } from '../../src/errors.js';
 import { KtxMongoDbScanConnector } from '../../src/connectors/mongodb/connector.js';
 import { createLocalProjectMcpContextPorts } from '../../src/context/mcp/local-project-ports.js';
 import type { KtxLocalProject } from '../../src/context/project/project.js';
+import type { KtxScanConnector } from '../../src/context/scan/types.js';
 
 const MONGO_DOCS = [
   { _id: 'a1', city: 'Indianapolis' },
@@ -38,7 +39,18 @@ function project(): KtxLocalProject {
   } as unknown as KtxLocalProject;
 }
 
-function portsFor(createConnector: (id: string) => KtxMongoDbScanConnector) {
+function warehouseConnector(): KtxScanConnector {
+  return {
+    id: 'postgres:warehouse',
+    driver: 'postgres',
+    capabilities: { structuralIntrospection: true } as KtxScanConnector['capabilities'],
+    introspect: vi.fn(),
+    listSchemas: vi.fn(async () => []),
+    listTables: vi.fn(async () => []),
+  } as unknown as KtxScanConnector;
+}
+
+function portsFor(createConnector: (id: string) => KtxScanConnector) {
   return createLocalProjectMcpContextPorts(project(), {
     embeddingService: null,
     localScan: { createConnector } as never,
@@ -58,10 +70,13 @@ describe('mongoQuery MCP port', () => {
     expect(result.rowCount).toBe(2);
   });
 
-  it('rejects a non-mongodb connection id as an expected query error', async () => {
-    const ports = portsFor(() => mongoConnector());
+  it('rejects a non-mongodb connection id with an expected error naming the wrong driver', async () => {
+    const ports = portsFor((id) => (id === 'mongo' ? mongoConnector() : warehouseConnector()));
     await expect(
       ports.mongoQuery!.execute({ connectionId: 'warehouse', collection: 'x', pipeline: [], limit: 10 }),
-    ).rejects.toBeInstanceOf(KtxQueryError);
+    ).rejects.toThrow(/is not a MongoDB connection/);
+    await expect(
+      ports.mongoQuery!.execute({ connectionId: 'warehouse', collection: 'x', pipeline: [], limit: 10 }),
+    ).rejects.toBeInstanceOf(KtxExpectedError);
   });
 });
