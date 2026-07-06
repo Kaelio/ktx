@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { KtxExpectedError } from '../../src/errors.js';
 import { KtxMongoDbScanConnector } from '../../src/connectors/mongodb/connector.js';
 import { createLocalProjectMcpContextPorts } from '../../src/context/mcp/local-project-ports.js';
+import { runMongoQuery } from '../../src/context/mcp/mongo-query-runner.js';
 import type { KtxLocalProject } from '../../src/context/project/project.js';
 import type { KtxScanConnector } from '../../src/context/scan/types.js';
 
@@ -78,5 +79,27 @@ describe('mongoQuery MCP port', () => {
     await expect(
       ports.mongoQuery!.execute({ connectionId: 'warehouse', collection: 'x', pipeline: [], limit: 10 }),
     ).rejects.toBeInstanceOf(KtxExpectedError);
+  });
+});
+
+describe('runMongoQuery shared helper', () => {
+  it('fetches rows from a mongodb connector', async () => {
+    const result = await runMongoQuery(
+      (id) => (id === 'mongo' ? mongoConnector() : warehouseConnector()),
+      { connectionId: 'mongo', collection: 'business', pipeline: [], limit: 100 },
+    );
+    expect(result.rowCount).toBe(2);
+    expect(result.headers).toEqual(['_id', 'city']);
+  });
+
+  it('throws an expected error naming the wrong driver for a non-mongodb connector', async () => {
+    await expect(
+      runMongoQuery((id) => (id === 'mongo' ? mongoConnector() : warehouseConnector()), {
+        connectionId: 'warehouse',
+        collection: 'x',
+        pipeline: [],
+        limit: 10,
+      }),
+    ).rejects.toThrow(/is not a MongoDB connection/);
   });
 });

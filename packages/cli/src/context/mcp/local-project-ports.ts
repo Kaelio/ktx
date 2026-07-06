@@ -25,7 +25,7 @@ import { readLocalSlSource } from '../../context/sl/local-sl.js';
 import { assertSafeConnectionId } from '../../context/sl/source-files.js';
 import { assertConfiguredConnectionId } from '../../context/connections/configured-connections.js';
 import { readLocalKnowledgePage, searchLocalKnowledgePages } from '../wiki/local-knowledge.js';
-import type { KtxMongoDbScanConnector } from '../../connectors/mongodb/connector.js';
+import { runMongoQuery } from './mongo-query-runner.js';
 import type { KtxMcpContextPorts, KtxMcpProgressCallback, KtxMongoQueryResponse, KtxSqlExecutionResponse } from './types.js';
 
 interface CreateLocalProjectMcpContextPortsOptions {
@@ -66,22 +66,7 @@ async function executeMongoQuery(
   createConnector: (connectionId: string) => Promise<KtxScanConnector> | KtxScanConnector,
   input: { connectionId: string; collection: string; database?: string; pipeline: Record<string, unknown>[]; limit: number },
 ): Promise<KtxMongoQueryResponse> {
-  const connectionId = assertSafeConnectionId(input.connectionId);
-  let connector: KtxScanConnector | null = null;
-  try {
-    connector = await createConnector(connectionId);
-    if (connector.driver !== 'mongodb') {
-      throw new KtxExpectedError(
-        `Connection "${connectionId}" driver "${connector.driver}" is not a MongoDB connection; mongo_query serves mongodb connections only.`,
-      );
-    }
-    return (connector as unknown as KtxMongoDbScanConnector).executeQuery(
-      { connectionId, collection: input.collection, database: input.database, pipeline: input.pipeline, limit: input.limit },
-      { runId: 'mcp-mongo-query' },
-    );
-  } finally {
-    await connector?.cleanup?.();
-  }
+  return runMongoQuery(createConnector, input);
 }
 
 async function executeValidatedReadOnlySql(
