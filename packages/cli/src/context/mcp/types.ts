@@ -180,6 +180,20 @@ export interface KtxSqlExecutionMcpPort {
   ): Promise<KtxSqlExecutionResponse>;
 }
 
+export interface KtxMongoQueryResponse {
+  headers: string[];
+  rows: unknown[][];
+  rowCount: number;
+}
+
+/** @internal */
+export interface KtxMongoQueryMcpPort {
+  execute(
+    input: { connectionId: string; collection: string; database?: string; pipeline: Record<string, unknown>[]; limit: number },
+    options?: { onProgress?: KtxMcpProgressCallback },
+  ): Promise<KtxMongoQueryResponse>;
+}
+
 /** @internal */
 export interface KtxDialectNotesMcpPort {
   read(input: { connectionId: string }): Promise<{ connectionId: string; dialect: string; notes: string }>;
@@ -193,6 +207,7 @@ export interface KtxMcpContextPorts {
   dictionarySearch?: KtxDictionarySearchMcpPort;
   discover?: KtxDiscoverDataMcpPort;
   sqlExecution?: KtxSqlExecutionMcpPort;
+  mongoQuery?: KtxMongoQueryMcpPort;
   dialectNotes?: KtxDialectNotesMcpPort;
   memoryIngest?: MemoryIngestPort;
 }
