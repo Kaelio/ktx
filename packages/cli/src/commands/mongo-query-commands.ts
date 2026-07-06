@@ -69,7 +69,7 @@ export function registerMongoQueryCommands(program: Command, context: KtxCliComm
               projectDir: resolveCommandProjectDir(command),
               connectionId: options.connection,
               collection: options.collection,
-              ...(options.database ? { database: options.database } : {}),
+              database: options.database,
               pipeline,
               limit: options.limit,
               output: options.output,
