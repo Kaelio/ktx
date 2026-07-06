@@ -39,6 +39,20 @@ export interface KtxMongoListedCollection {
   type?: string;
 }
 
+export interface KtxMongoQueryInput {
+  connectionId: string;
+  collection: string;
+  database?: string;
+  pipeline: Record<string, unknown>[];
+  limit: number;
+}
+
+export interface KtxMongoQueryResult {
+  headers: string[];
+  rows: unknown[][];
+  rowCount: number;
+}
+
 interface KtxMongoFindOptions {
   sort: Record<string, 1 | -1>;
   limit: number;
@@ -50,6 +64,12 @@ export interface KtxMongoClient {
   listCollections(databaseName: string): Promise<KtxMongoListedCollection[]>;
   estimatedDocumentCount(databaseName: string, collectionName: string): Promise<number>;
   find(databaseName: string, collectionName: string, options: KtxMongoFindOptions): Promise<KtxMongoDocument[]>;
+  aggregate(
+    databaseName: string,
+    collectionName: string,
+    pipeline: Record<string, unknown>[],
+    options: { limit: number },
+  ): Promise<KtxMongoDocument[]>;
   ping(databaseName: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -103,6 +123,20 @@ class DefaultMongoClient implements KtxMongoClient {
       .db(databaseName)
       .collection(collectionName)
       .find({}, { sort: options.sort, limit: options.limit, maxTimeMS: SAMPLE_MAX_TIME_MS, ...(options.projection ? { projection: options.projection } : {}) })
+      .toArray() as Promise<KtxMongoDocument[]>;
+  }
+
+  async aggregate(
+    databaseName: string,
+    collectionName: string,
+    pipeline: Record<string, unknown>[],
+    options: { limit: number },
+  ): Promise<KtxMongoDocument[]> {
+    const client = await this.connectedClient();
+    return client
+      .db(databaseName)
+      .collection(collectionName)
+      .aggregate([...pipeline, { $limit: options.limit }], { maxTimeMS: SAMPLE_MAX_TIME_MS })
       .toArray() as Promise<KtxMongoDocument[]>;
   }
 
@@ -360,6 +394,17 @@ export class KtxMongoDbScanConnector implements KtxScanConnector {
       values.push(normalizeSampleValue(value));
     }
     return { values, nullCount, distinctCount: null };
+  }
+
+  async executeQuery(input: KtxMongoQueryInput, _ctx: KtxScanContext): Promise<KtxMongoQueryResult> {
+    this.assertConnection(input.connectionId);
+    const database = input.database ?? this.databases[0]!;
+    const documents = await this.clientForQuery().aggregate(database, input.collection, input.pipeline, {
+      limit: input.limit,
+    });
+    const headers = unionDocumentKeys(documents);
+    const rows = documents.map((document) => headers.map((header) => normalizeSampleValue(document[header])));
+    return { headers, rows, rowCount: rows.length };
   }
 
   async listSchemas(): Promise<string[]> {
