@@ -8,6 +8,7 @@
     "ktx-ingest",
     "ktx-sl",
     "ktx-sql",
+    "ktx-mongo-query",
     "ktx-wiki",
     "ktx-status",
     "ktx-mcp",
