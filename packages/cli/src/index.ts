@@ -34,6 +34,7 @@ export type {
 export { runKtxSetupSourcesStep } from './setup-sources.js';
 export { runKtxRuntime, type KtxRuntimeArgs, type KtxRuntimeDeps } from './runtime.js';
 export { runKtxSql, type KtxSqlArgs, type KtxSqlDeps } from './sql.js';
+export { runKtxMongoQuery, type KtxMongoQueryArgs, type KtxMongoQueryCliDeps } from './mongo-query.js';
 export {
   allocateDaemonPort,
   readManagedPythonDaemonStatus,
