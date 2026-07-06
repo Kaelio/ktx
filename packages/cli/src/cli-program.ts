@@ -8,6 +8,7 @@ import { registerConnectionCommands } from './commands/connection-commands.js';
 import { registerIngestCommands } from './commands/ingest-commands.js';
 import { registerWikiCommands } from './commands/knowledge-commands.js';
 import { registerMcpCommands } from './commands/mcp-commands.js';
+import { registerMongoQueryCommands } from './commands/mongo-query-commands.js';
 import { registerSetupCommands } from './commands/setup-commands.js';
 import { registerSlCommands } from './commands/sl-commands.js';
 import { registerSqlCommands } from './commands/sql-commands.js';
@@ -505,6 +506,7 @@ export function buildKtxProgram(options: BuildKtxProgramOptions): Command {
   registerWikiCommands(program, context);
   registerSlCommands(program, context);
   registerSqlCommands(program, context);
+  registerMongoQueryCommands(program, context);
   registerStatusCommands(program, context);
   registerMcpCommands(program, context);
   registerAdminCommands(program, context);
