@@ -9,6 +9,7 @@ import { sqlAnalysisDialectForDriver } from './context/sql-analysis/dialect.js';
 import type { SqlAnalysisDialect, SqlAnalysisPort } from './context/sql-analysis/ports.js';
 import type { KtxCliIo } from './cli-runtime.js';
 import { type KtxOutputMode, resolveOutputMode } from './io/mode.js';
+import { type KtxResultTable, printResultTable } from './io/result-table.js';
 import { createKtxCliScanConnector } from './local-scan-connectors.js';
 import { createManagedDaemonSqlAnalysisPort } from './managed-python-http.js';
 import { profileMark } from './startup-profile.js';
@@ -39,14 +40,6 @@ export interface KtxSqlDeps {
   executeFederated?: typeof executeFederatedQuery;
 }
 
-interface SqlExecutionOutput {
-  connectionId: string;
-  headers: string[];
-  headerTypes?: string[];
-  rows: unknown[][];
-  rowCount: number;
-}
-
 function queryVerb(sql: string): 'select' | 'explain' | 'show' | 'with' | 'other' {
   const first = sql.trim().split(/\s+/, 1)[0]?.toLowerCase();
   if (first === 'select' || first === 'explain' || first === 'show' || first === 'with') {
@@ -68,55 +61,7 @@ async function safeReferencedTableCount(
   }
 }
 
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
-  return JSON.stringify(value);
-}
-
-function printJson(output: SqlExecutionOutput, io: KtxCliIo): void {
-  io.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-}
-
-function printPlain(output: SqlExecutionOutput, io: KtxCliIo): void {
-  io.stdout.write(`${output.headers.join('\t')}\n`);
-  for (const row of output.rows) {
-    io.stdout.write(`${row.map(formatValue).join('\t')}\n`);
-  }
-}
-
-function printPretty(output: SqlExecutionOutput, io: KtxCliIo): void {
-  const rows = output.rows.map((row) => row.map(formatValue));
-  const widths = output.headers.map((header, index) =>
-    Math.max(header.length, ...rows.map((row) => row[index]?.length ?? 0)),
-  );
-  const renderRow = (cells: string[]): string =>
-    cells.map((cell, index) => cell.padEnd(widths[index] ?? cell.length)).join('  ').trimEnd();
-
-  if (output.headers.length > 0) {
-    io.stdout.write(`${renderRow(output.headers)}\n`);
-    io.stdout.write(`${renderRow(widths.map((width) => '-'.repeat(width)))}\n`);
-  }
-  for (const row of rows) {
-    io.stdout.write(`${renderRow(row)}\n`);
-  }
-  io.stdout.write(`\n${output.rowCount} ${output.rowCount === 1 ? 'row' : 'rows'}\n`);
-}
-
-function printSqlResult(output: SqlExecutionOutput, mode: KtxSqlOutputMode, io: KtxCliIo): void {
-  if (mode === 'json') {
-    printJson(output, io);
-    return;
-  }
-  if (mode === 'plain') {
-    printPlain(output, io);
-    return;
-  }
-  printPretty(output, io);
-}
-
-function resultOutput(connectionId: string, result: KtxSqlQueryExecutionResult): SqlExecutionOutput {
+function resultOutput(connectionId: string, result: KtxSqlQueryExecutionResult): KtxResultTable {
   return {
     connectionId,
     headers: result.headers,
@@ -168,7 +113,7 @@ export async function runKtxSql(args: KtxSqlArgs, io: KtxCliIo = process, deps: 
     });
     const referencedTableCount = await safeReferencedTableCount(analysisPort, args.sql, dialect);
     const mode = resolveOutputMode({ explicit: args.output, json: args.json, io });
-    printSqlResult(resultOutput(args.connectionId, result), mode, io);
+    printResultTable(resultOutput(args.connectionId, result), mode, io);
     await emitTelemetryEvent({
       name: 'sql_completed',
       projectDir: args.projectDir,
