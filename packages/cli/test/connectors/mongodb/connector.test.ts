@@ -275,4 +275,24 @@ describe('KtxMongoDbScanConnector.executeQuery', () => {
       ),
     ).rejects.toThrow(/cannot serve connection other/);
   });
+
+  it('rejects a pipeline containing a $out write stage', async () => {
+    const { factory } = fakeClientFactory();
+    await expect(
+      connector(baseConnection, factory).executeQuery(
+        { connectionId: 'mongo-prod', collection: 'users', pipeline: [{ $out: 'exfiltrated' }], limit: 10 },
+        { runId: 't' },
+      ),
+    ).rejects.toThrow(/must be read-only/);
+  });
+
+  it('rejects a pipeline containing a $merge write stage', async () => {
+    const { factory } = fakeClientFactory();
+    await expect(
+      connector(baseConnection, factory).executeQuery(
+        { connectionId: 'mongo-prod', collection: 'users', pipeline: [{ $merge: { into: 'x' } }], limit: 10 },
+        { runId: 't' },
+      ),
+    ).rejects.toThrow(/must be read-only/);
+  });
 });

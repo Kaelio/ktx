@@ -222,6 +222,15 @@ function unionDocumentKeys(documents: readonly KtxMongoDocument[]): string[] {
   return keys;
 }
 
+// MongoDB aggregation write stages ($out/$merge) persist results; mongo_query is read-only.
+function assertReadOnlyPipeline(pipeline: Record<string, unknown>[]): void {
+  for (const stage of pipeline) {
+    if ('$out' in stage || '$merge' in stage) {
+      throw new Error('mongo_query pipelines must be read-only; $out and $merge stages are not allowed.');
+    }
+  }
+}
+
 export class KtxMongoDbScanConnector implements KtxScanConnector {
   readonly id: string;
   readonly driver = 'mongodb' as const;
@@ -398,6 +407,7 @@ export class KtxMongoDbScanConnector implements KtxScanConnector {
 
   async executeQuery(input: KtxMongoQueryInput, _ctx: KtxScanContext): Promise<KtxMongoQueryResult> {
     this.assertConnection(input.connectionId);
+    assertReadOnlyPipeline(input.pipeline);
     const database = input.database ?? this.databases[0]!;
     const documents = await this.clientForQuery().aggregate(database, input.collection, input.pipeline, {
       limit: input.limit,

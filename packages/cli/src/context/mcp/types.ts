@@ -5,6 +5,7 @@ import type { KtxEntityDetailsInput, KtxEntityDetailsResponse } from '../scan/en
 import type { KtxDiscoverDataInput, KtxDiscoverDataResponse } from '../../context/search/discover.js';
 import type { KtxDictionarySearchInput, KtxDictionarySearchResponse } from '../../context/sl/dictionary-search.js';
 import type { SemanticLayerQueryInput } from '../../context/sl/types.js';
+import type { KtxMongoQueryResult } from '../../connectors/mongodb/connector.js';
 import type { WikiSearchLaneSummary, WikiSearchMatchReason } from '../../context/wiki/types.js';
 
 interface KtxMcpTextContent {
@@ -180,11 +181,7 @@ export interface KtxSqlExecutionMcpPort {
   ): Promise<KtxSqlExecutionResponse>;
 }
 
-export interface KtxMongoQueryResponse {
-  headers: string[];
-  rows: unknown[][];
-  rowCount: number;
-}
+export type KtxMongoQueryResponse = KtxMongoQueryResult;
 
 /** @internal */
 export interface KtxMongoQueryMcpPort {

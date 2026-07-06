@@ -75,11 +75,10 @@ async function executeMongoQuery(
         `Connection "${connectionId}" driver "${connector.driver}" is not a MongoDB connection; mongo_query serves mongodb connections only.`,
       );
     }
-    const result = await (connector as unknown as KtxMongoDbScanConnector).executeQuery(
+    return (connector as unknown as KtxMongoDbScanConnector).executeQuery(
       { connectionId, collection: input.collection, database: input.database, pipeline: input.pipeline, limit: input.limit },
       { runId: 'mcp-mongo-query' },
     );
-    return { headers: result.headers, rows: result.rows, rowCount: result.rowCount };
   } finally {
     await connector?.cleanup?.();
   }
