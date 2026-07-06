@@ -52,6 +52,7 @@ const toolAnnotations = {
   sl_read_source: { title: 'Semantic Layer Read Source', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   sl_query: { title: 'Semantic Layer Query', readOnlyHint: true, openWorldHint: false },
   sql_execution: { title: 'SQL Execution', readOnlyHint: true, openWorldHint: false },
+  mongo_query: { title: 'MongoDB Query', readOnlyHint: true, openWorldHint: false },
   sql_dialect_notes: { title: 'SQL Dialect Notes', readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   memory_ingest: { title: 'Memory Ingest', destructiveHint: true, openWorldHint: false },
   memory_ingest_status: { title: 'Memory Ingest Status', readOnlyHint: true, openWorldHint: false },
@@ -75,6 +76,8 @@ const toolDescriptions = {
     'Execute a semantic-layer query and return headers, rows, and total row count, plus correctness notes (e.g. compile-only or fan-out) when relevant. The generated SQL and full query plan are omitted by default; request them with include: ["sql"] and/or include: ["plan"]. Example: sl_query({ connectionId: "warehouse", measures: ["orders.order_count"], dimensions: [{ field: "orders.created_at", granularity: "month" }], include: ["sql"] }).',
   sql_execution:
     'Execute one parser-validated read-only SQL query against a configured ktx connection. Example: sql_execution({ connectionId: "warehouse", sql: "select count(*) from public.orders", maxRows: 100 }).',
+  mongo_query:
+    'Fetch real rows from a live MongoDB connection by running an aggregation pipeline against one collection. MongoDB is not SQL-queryable, so use this — not sql_execution — to filter, project, group, or count Mongo documents. Example: mongo_query({ connectionId: "mongo", collection: "business", pipeline: [{ "$match": { "city": "Indianapolis" } }, { "$project": { "business_id": 1, "city": 1 } }], limit: 500 }).',
   sql_dialect_notes:
     'Return the SQL syntax conventions for the dialect of a ktx connection: fully-qualified table-name form, identifier quoting and case-folding, date/time functions, top-N / window-filtering idiom, and JSON access. Call this before writing raw sql_execution SQL against a connection so the SQL matches that engine. Example: sql_dialect_notes({ connectionId: "warehouse" }).',
   memory_ingest:
@@ -215,6 +218,27 @@ const sqlExecutionSchema = z.object({
 
 const sqlDialectNotesSchema = z.object({
   connectionId: connectionIdSchema.describe('Connection id whose engine dialect conventions to return.'),
+});
+
+const mongoQuerySchema = z.object({
+  connectionId: connectionIdSchema.describe('MongoDB connection id to query.'),
+  collection: z.string().min(1).describe('Collection to query, e.g. "business".'),
+  database: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Database name when the connection spans several; defaults to the connection\'s first configured database.'),
+  pipeline: z
+    .array(z.record(z.string(), z.unknown()))
+    .default([])
+    .describe('MongoDB aggregation pipeline stages, e.g. [{ "$match": { "city": "Indianapolis" } }].'),
+  limit: z.number().int().min(1).max(10_000).default(1000).describe('Maximum documents to return.'),
+});
+
+const mongoQueryOutputSchema = z.object({
+  headers: z.array(z.string()),
+  rows: z.array(z.array(z.unknown())),
+  rowCount: z.number(),
 });
 
 const memoryIngestSchema = z.object({
@@ -962,6 +986,38 @@ export function registerKtxContextTools(deps: RegisterKtxContextToolsDeps): void
               connectionId: input.connectionId,
               sql: input.sql,
               maxRows: input.maxRows ?? 1000,
+            },
+            onProgress ? { onProgress } : undefined,
+          ),
+        );
+      },
+      toolTelemetry,
+    );
+  }
+
+  if (ports.mongoQuery) {
+    const mongoQuery = ports.mongoQuery;
+    registerParsedTool(
+      server,
+      'mongo_query',
+      {
+        title: toolAnnotations.mongo_query.title!,
+        description: toolDescriptions.mongo_query,
+        inputSchema: mongoQuerySchema.shape,
+        outputSchema: mongoQueryOutputSchema,
+        annotations: toolAnnotations.mongo_query,
+      },
+      mongoQuerySchema,
+      async (input, context) => {
+        const onProgress = mcpProgressCallback(context);
+        return jsonToolResult(
+          await mongoQuery.execute(
+            {
+              connectionId: input.connectionId,
+              collection: input.collection,
+              ...(input.database ? { database: input.database } : {}),
+              pipeline: input.pipeline,
+              limit: input.limit,
             },
             onProgress ? { onProgress } : undefined,
           ),
