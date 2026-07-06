@@ -146,6 +146,17 @@ const sqlCompletedSchema = telemetryCommonEnvelopeSchema
   })
   .strict();
 
+const mongoQueryCompletedSchema = telemetryCommonEnvelopeSchema
+  .extend({
+    driver: z.string(),
+    isDemoConnection: z.boolean(),
+    stageCount: z.number().int().nonnegative(),
+    durationMs: z.number().nonnegative(),
+    outcome: outcomeSchema,
+    errorClass: z.string().optional(),
+  })
+  .strict();
+
 const wikiQueryCompletedSchema = telemetryCommonEnvelopeSchema
   .extend({
     queryLength: z.number().int().nonnegative(),
@@ -230,6 +241,7 @@ export const telemetryEventSchemas = {
   sl_validate_completed: slValidateCompletedSchema,
   sl_query_completed: slQueryCompletedSchema,
   sql_completed: sqlCompletedSchema,
+  mongo_query_completed: mongoQueryCompletedSchema,
   wiki_query_completed: wikiQueryCompletedSchema,
   mcp_request_completed: mcpRequestCompletedSchema,
   daemon_started: daemonStartedSchema,
@@ -341,6 +353,11 @@ export const telemetryEventCatalog = [
       'outcome',
       'errorClass',
     ],
+  },
+  {
+    name: 'mongo_query_completed',
+    description: 'Emitted after ktx mongo-query completes validation and execution.',
+    fields: ['driver', 'isDemoConnection', 'stageCount', 'durationMs', 'outcome', 'errorClass'],
   },
   {
     name: 'wiki_query_completed',

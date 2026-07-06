@@ -30,6 +30,7 @@ def test_python_schema_copy_matches_node_schema() -> None:
         "sl_validate_completed",
         "sl_query_completed",
         "sql_completed",
+        "mongo_query_completed",
         "wiki_query_completed",
         "mcp_request_completed",
         "daemon_started",

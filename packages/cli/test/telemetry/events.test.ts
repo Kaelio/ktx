@@ -31,6 +31,7 @@ describe('telemetry event schemas', () => {
       'sl_validate_completed',
       'sl_query_completed',
       'sql_completed',
+      'mongo_query_completed',
       'wiki_query_completed',
       'mcp_request_completed',
       'daemon_started',
