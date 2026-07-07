@@ -48,6 +48,8 @@ describe('analytics SKILL.md SQL craft', () => {
       'Parse text-encoded numerics before doing math on them', // detect text-encoded numbers (spec 12)
       'Strip, scale, and cast in one early CTE', // parse/scale early (spec 12)
       'Confirm the parse covered every value', // failure-detecting cast coverage (spec 12)
+      'Extract the number from prose before parsing it', // lift the numeric token out of a narrative column first (spec 07)
+      'must pass the parse-coverage check before you answer', // parsed-from-text ranking re-checks parse coverage (spec 07)
       'Answer every requested output', // multi-part/multi-output umbrella over identity+inputs (spec 14)
       'Final completeness check', // re-read the question, confirm the projection covers all four facets (spec 14)
       "Don't over-project", // match the request exactly, no padding columns (spec 14)
