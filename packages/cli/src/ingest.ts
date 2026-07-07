@@ -121,6 +121,7 @@ const REPORT_SOURCE_LABELS = new Map<string, string>([
   ['looker', 'Looker'],
   ['metabase', 'Metabase'],
   ['notion', 'Notion'],
+  ['sharepoint', 'SharePoint / OneDrive'],
 ]);
 
 function reportSourceLabel(sourceKey: string): string {

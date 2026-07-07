@@ -427,6 +427,21 @@ function buildConnectionStatus(
       const hint = envHint(tokenRef);
       return warn(hint ? `auth token missing (env: ${hint})` : 'auth token not set', hint ? `Set ${hint}` : 'Rerun `ktx setup`');
     }
+    case 'sharepoint': {
+      const tenantRef = (conn as Record<string, unknown>).tenant_id_ref;
+      const clientRef = (conn as Record<string, unknown>).client_id_ref;
+      const secretRef = (conn as Record<string, unknown>).client_secret_ref;
+      const tenant = resolveRef(tenantRef, env);
+      const client = resolveRef(clientRef, env);
+      const secret = resolveRef(secretRef, env);
+      const driveId = (conn as Record<string, unknown>).drive_id;
+      const folderId = (conn as Record<string, unknown>).folder_id;
+      if (tenant.resolved.length > 0 && client.resolved.length > 0 && secret.resolved.length > 0 && typeof driveId === 'string' && driveId.length > 0 && typeof folderId === 'string' && folderId.length > 0) {
+        return ok(`drive: ${driveId}, folder: ${folderId}`);
+      }
+      const hint = envHint(tenantRef) || envHint(clientRef) || envHint(secretRef)
+      return warn(hint ? `credentials missing (env: ${hint})` : 'credentials not set', hint ? `Set ${hint}` : 'Rerun `ktx setup`');
+    }
     case 'dbt':
     case 'dbt-core':
     case 'dbt-cloud': {
@@ -557,6 +572,7 @@ const ADAPTER_DRIVER_REQUIREMENT: Record<string, string[]> = {
   'live-database': ['postgres', 'mysql', 'snowflake', 'bigquery', 'clickhouse', 'sqlite', 'duckdb', 'sqlserver'],
   dbt: ['dbt', 'dbt-core', 'dbt-cloud'],
   notion: ['notion'],
+  sharepoint: ['sharepoint'],
   metabase: ['metabase'],
   looker: ['looker', 'lookml'],
   lookml: ['looker', 'lookml'],

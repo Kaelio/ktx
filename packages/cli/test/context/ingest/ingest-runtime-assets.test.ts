@@ -15,6 +15,7 @@ const adapterSkillNames = [
   'metricflow_ingest',
   'notion_synthesize',
   'gdrive_synthesize',
+  'sharepoint_synthesize',
   'historic_sql_table_digest',
   'historic_sql_patterns',
   'ingest_triage',

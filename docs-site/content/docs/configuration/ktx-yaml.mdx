@@ -36,7 +36,7 @@ read, how to think, and where to put the results.
         Inputs
       </p>
       <ul className="mt-3 space-y-2 text-sm leading-6 text-fd-foreground">
-        <li><code className="text-[13px] font-semibold">connections</code> - warehouses, BI tools, dbt, Notion</li>
+        <li><code className="text-[13px] font-semibold">connections</code> - warehouses, BI tools, dbt, Notion, SharePoint</li>
         <li><code className="text-[13px] font-semibold">setup</code> - which connections are primary databases</li>
       </ul>
     </div>
@@ -89,7 +89,8 @@ secrets out of `ktx.yaml` so the file can stay in git.
 | Literal string | Used as-is | Non-secret values such as `base_url` |
 
 References work in: warehouse `url`, Metabase `api_key` / `api_key_ref`, Looker
-`client_secret` / `client_secret_ref`, Notion / dbt / LookML / MetricFlow
+`client_secret` / `client_secret_ref`, SharePoint `tenant_id_ref` /
+`client_id_ref` / `client_secret_ref`, Notion / dbt / LookML / MetricFlow
 `auth_token` / `auth_token_ref`, and any `api_key` under the `llm` and
 `ingest.embeddings` blocks.
 
@@ -120,6 +121,7 @@ context-source drivers share the map.
 | `dbt` | Context source | `driver`, one of `source_dir` or `repo_url` | `branch`, `path`, `profiles_path`, `target`, `project_name` |
 | `metricflow` | Context source | `driver`, `metricflow.repoUrl` | `metricflow.branch`, `metricflow.path`, `metricflow.auth_token_ref` |
 | `notion` | Context source | `driver`, `auth_token_ref` | `crawl_mode`, `root_*_ids`, `max_*_per_run` |
+| `sharepoint` | Context source | `driver`, `tenant_id_ref`, `client_id_ref`, `client_secret_ref`, `drive_id`, `folder_id` | `recursive` |
 | `sigma` | Context source | `driver`, `client_id`, `client_secret_ref` | `api_url` |
 
 ### Warehouse drivers
@@ -382,6 +384,31 @@ connections:
 | `max_knowledge_creates_per_run` | Max new wiki pages created per run (0-25). |
 | `max_knowledge_updates_per_run` | Max existing wiki pages updated per run (0-100). |
 
+### SharePoint / OneDrive
+
+```yaml
+connections:
+  sharepoint-docs:
+    driver: sharepoint
+    tenant_id_ref: env:AZURE_TENANT_ID
+    client_id_ref: env:AZURE_CLIENT_ID
+    client_secret_ref: env:AZURE_CLIENT_SECRET
+    drive_id: your-drive-id
+    folder_id: your-folder-id
+    recursive: false
+```
+
+| Field | Purpose |
+|-------|---------|
+| `tenant_id_ref` | Environment reference for the Azure tenant id. Required. |
+| `client_id_ref` | Environment reference for the Azure client id. Required. |
+| `client_secret_ref` | Environment reference for the Azure client secret. Required. |
+| `drive_id` | Microsoft Graph drive id for the SharePoint document library or OneDrive drive. Required. |
+| `folder_id` | Microsoft Graph folder item id to ingest. Required. |
+| `recursive` | Traverse subfolders under `folder_id`. Default: `false`. |
+
+SharePoint credentials use `env:` references only in v1. `file:` refs and inline secrets are not accepted for this driver. The Azure AD app must have Microsoft Graph application permissions `Files.Read.All` and `Sites.Read.All` with admin consent.
+
 ### Sigma
 
 ```yaml
@@ -568,6 +595,7 @@ connector that **ktx** ships locally:
 | `looker` | Looker dashboards and looks via the API. |
 | `metabase` | Metabase cards, dashboards, and database mappings. |
 | `notion` | Notion pages and databases for wiki context. |
+| `sharepoint` | SharePoint document libraries or OneDrive folders for wiki context. |
 | `fake` | Test/demo connector. Useful in fixtures. |
 
 ### Embeddings

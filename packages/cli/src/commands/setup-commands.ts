@@ -60,7 +60,8 @@ function sourceType(value: string): KtxSetupSourceType {
     value === 'lookml' ||
     value === 'notion' ||
     value === 'sigma' ||
-    value === 'gdrive'
+    value === 'gdrive' ||
+    value === 'sharepoint'
   ) {
     return value;
   }
@@ -138,6 +139,13 @@ function shouldShowSetupEntryMenu(
     gdriveServiceAccountKeyRef?: string;
     gdriveFolderId?: string;
     gdriveRecursive?: boolean;
+    sharepointTenantIdRef?: string;
+    sharepointClientIdRef?: string;
+    sharepointClientSecretRef?: string;
+    sharepointDriveId?: string;
+    sharepointFolderId?: string;
+    sharepointRecursive?: boolean;
+    sharepointSiteId?: string;
     skipSources?: boolean;
   },
   command: Command,
@@ -206,6 +214,13 @@ function shouldShowSetupEntryMenu(
     'gdriveServiceAccountKeyRef',
     'gdriveFolderId',
     'gdriveRecursive',
+    'sharepointTenantIdRef',
+    'sharepointClientIdRef',
+    'sharepointClientSecretRef',
+    'sharepointDriveId',
+    'sharepointFolderId',
+    'sharepointRecursive',
+    'sharepointSiteId',
     'skipSources',
   ].some((optionName) => optionWasSpecified(command, optionName));
 }
@@ -352,6 +367,13 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
     )
     .addOption(new Option('--gdrive-folder-id <id>', 'Google Drive folder id to ingest').hideHelp())
     .addOption(new Option('--gdrive-recursive', 'Recursively traverse Google Drive subfolders').hideHelp().default(false))
+    .addOption(new Option('--sharepoint-tenant-id-ref <ref>', 'env: reference to the Azure tenant id').hideHelp())
+    .addOption(new Option('--sharepoint-client-id-ref <ref>', 'env: reference to the Azure client id').hideHelp())
+    .addOption(new Option('--sharepoint-client-secret-ref <ref>', 'env: reference to the Azure client secret').hideHelp())
+    .addOption(new Option('--sharepoint-drive-id <id>', 'Microsoft Graph drive id to ingest').hideHelp())
+    .addOption(new Option('--sharepoint-folder-id <id>', 'Microsoft Graph folder item id to ingest').hideHelp())
+    .addOption(new Option('--sharepoint-recursive', 'Recursively traverse SharePoint / OneDrive subfolders').hideHelp().default(false))
+    .addOption(new Option('--sharepoint-site-id <id>', 'Optional Microsoft Graph site id used only to discover drives during setup').hideHelp())
     .addOption(new Option('--skip-sources', 'Mark optional source setup complete with no sources').hideHelp().default(false))
     .showHelpAfterError();
 
@@ -506,6 +528,13 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
         : {}),
       ...(options.gdriveFolderId ? { gdriveFolderId: options.gdriveFolderId } : {}),
       ...(options.gdriveRecursive ? { gdriveRecursive: true } : {}),
+      ...(options.sharepointTenantIdRef ? { sharepointTenantIdRef: options.sharepointTenantIdRef } : {}),
+      ...(options.sharepointClientIdRef ? { sharepointClientIdRef: options.sharepointClientIdRef } : {}),
+      ...(options.sharepointClientSecretRef ? { sharepointClientSecretRef: options.sharepointClientSecretRef } : {}),
+      ...(options.sharepointDriveId ? { sharepointDriveId: options.sharepointDriveId } : {}),
+      ...(options.sharepointFolderId ? { sharepointFolderId: options.sharepointFolderId } : {}),
+      ...(options.sharepointRecursive ? { sharepointRecursive: true } : {}),
+      ...(options.sharepointSiteId ? { sharepointSiteId: options.sharepointSiteId } : {}),
       runInitialSourceIngest: false,
       skipSources: options.skipSources === true,
       showEntryMenu: shouldShowSetupEntryMenu(options, command),

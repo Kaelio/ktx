@@ -75,6 +75,7 @@ describe('local ingest adapters', () => {
       'metabase',
       'sigma',
       'gdrive',
+      'sharepoint',
       'looker',
       'metricflow',
       'notion',

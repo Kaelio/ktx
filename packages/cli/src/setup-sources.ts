@@ -1,6 +1,6 @@
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { localConnectionTypeForConfig } from './context/connections/local-warehouse-descriptor.js';
 import {
@@ -8,12 +8,15 @@ import {
   resolveGdriveServiceAccountKey,
 } from './context/connections/gdrive-config.js';
 import { resolveNotionConnectionAuthToken } from './context/connections/notion-config.js';
+import { parseSharepointConnectionConfig, sharepointConnectionToPullConfig } from './context/connections/sharepoint-config.js';
 import { resolveKtxConfigReference } from './context/core/config-reference.js';
 import {
   createGoogleDocsClients,
   verifyGdriveFolderAndCountDocs,
 } from './context/ingest/adapters/gdrive/gdrive-client.js';
 import { gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
+import { createSharepointGraphClient } from './context/ingest/adapters/sharepoint/graph-client.js';
+import { SHAREPOINT_ALLOWED_EXTENSIONS } from './context/ingest/adapters/sharepoint/types.js';
 import { cloneOrPull, testRepoConnection } from './context/ingest/repo-fetch.js';
 import { DEFAULT_METABASE_CLIENT_CONFIG, MetabaseClient } from './context/ingest/adapters/metabase/client.js';
 import { DEFAULT_SIGMA_CLIENT_CONFIG, DefaultSigmaClient } from './context/ingest/adapters/sigma/client.js';
@@ -48,7 +51,7 @@ import {
   type KtxSetupPromptOption,
 } from './setup-prompts.js';
 
-export type KtxSetupSourceType = 'dbt' | 'metricflow' | 'metabase' | 'looker' | 'lookml' | 'notion' | 'sigma' | 'gdrive';
+export type KtxSetupSourceType = 'dbt' | 'metricflow' | 'metabase' | 'looker' | 'lookml' | 'notion' | 'sigma' | 'gdrive' | 'sharepoint';
 
 const DEFAULT_NOTION_MAX_KNOWLEDGE_CREATES_PER_RUN = 25;
 
@@ -76,6 +79,13 @@ export interface KtxSetupSourcesArgs {
   gdriveServiceAccountKeyRef?: string;
   gdriveFolderId?: string;
   gdriveRecursive?: boolean;
+  sharepointTenantIdRef?: string;
+  sharepointClientIdRef?: string;
+  sharepointClientSecretRef?: string;
+  sharepointDriveId?: string;
+  sharepointFolderId?: string;
+  sharepointRecursive?: boolean;
+  sharepointSiteId?: string;
   runInitialSourceIngest: boolean;
   skipSources: boolean;
 }
@@ -119,6 +129,7 @@ export interface KtxSetupSourcesDeps {
   validateNotion?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   validateSigma?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   validateGdrive?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
+  validateSharepoint?: (connection: KtxProjectConnectionConfig) => Promise<SourceValidationResult>;
   pickNotionRootPages?: typeof pickNotionRootPages;
   discoverMetabaseDatabases?: (args: {
     sourceUrl: string;
@@ -143,6 +154,7 @@ const SOURCE_OPTIONS: Array<{ value: KtxSetupSourceType; label: string }> = [
   { value: 'lookml', label: 'LookML' },
   { value: 'sigma', label: 'Sigma Computing' },
   { value: 'gdrive', label: 'Google Drive' },
+  { value: 'sharepoint', label: 'SharePoint / OneDrive' },
 ];
 
 const SOURCE_LABELS = Object.fromEntries(SOURCE_OPTIONS.map((option) => [option.value, option.label])) as Record<
@@ -254,6 +266,7 @@ const SOURCE_CREDENTIAL_FLAG: Record<KtxSetupSourceType, SourceCredentialFlag> =
   looker: { field: 'sourceClientSecretRef', flag: '--source-client-secret-ref' },
   sigma: { field: 'sourceClientSecretRef', flag: '--source-client-secret-ref' },
   gdrive: { field: null, flag: '--gdrive-service-account-key-ref' },
+  sharepoint: { field: null, flag: '--sharepoint-tenant-id-ref' },
 };
 
 const ALL_SOURCE_CREDENTIAL_FLAGS: Array<{ field: SharedSourceCredentialField; flag: string }> = [
@@ -610,6 +623,26 @@ function buildGdriveConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionC
   };
 }
 
+function buildSharepointConnection(args: KtxSetupSourcesArgs): KtxProjectConnectionConfig {
+  const driveId = args.sharepointDriveId?.trim();
+  const folderId = args.sharepointFolderId?.trim();
+  if (!driveId) {
+    throw new Error('SharePoint setup requires --sharepoint-drive-id.');
+  }
+  if (!folderId) {
+    throw new Error('SharePoint setup requires --sharepoint-folder-id.');
+  }
+  return {
+    driver: 'sharepoint',
+    tenant_id_ref: credentialRef(args.sharepointTenantIdRef, 'SharePoint tenant id ref'),
+    client_id_ref: credentialRef(args.sharepointClientIdRef, 'SharePoint client id ref'),
+    client_secret_ref: credentialRef(args.sharepointClientSecretRef, 'SharePoint client secret ref'),
+    drive_id: driveId,
+    folder_id: folderId,
+    recursive: args.sharepointRecursive === true,
+  };
+}
+
 function sourcePathFromFileRepoUrl(repoUrl: string, subpath?: string): string {
   const root = fileURLToPath(repoUrl);
   return subpath ? join(root, subpath) : root;
@@ -752,6 +785,20 @@ async function defaultValidateGdrive(connection: KtxProjectConnectionConfig): Pr
   const keyText = await resolveGdriveServiceAccountKey(config.service_account_key_ref);
   const clients = createGoogleDocsClients(gdriveServiceAccountKeySchema.parse(JSON.parse(keyText)));
   const docs = await verifyGdriveFolderAndCountDocs(clients.drive, config.folder_id);
+  return { ok: true, detail: `docs=${docs}` };
+}
+
+async function defaultValidateSharepoint(connection: KtxProjectConnectionConfig): Promise<SourceValidationResult> {
+  const config = parseSharepointConnectionConfig(connection);
+  const pullConfig = await sharepointConnectionToPullConfig(config);
+  const client = createSharepointGraphClient(pullConfig);
+  const folder = await client.getDriveItem(config.drive_id, config.folder_id);
+  if (!folder.folder) {
+    return { ok: false, message: `SharePoint folder ${config.folder_id} is not accessible` };
+  }
+  const docs = (await client.listDriveFiles({ driveId: config.drive_id, folderId: config.folder_id, recursive: config.recursive }))
+    .filter(({ item }) => SHAREPOINT_ALLOWED_EXTENSIONS.has(extname(item.name).toLowerCase()))
+    .length;
   return { ok: true, detail: `docs=${docs}` };
 }
 
@@ -1506,6 +1553,107 @@ async function promptForInteractiveSource(
     ]);
   }
 
+  if (source === 'sharepoint') {
+    return await runSourcePromptSteps(initialState, () => [
+      ...connectionSteps,
+      async (currentState) => {
+        const tenantIdRef = await promptText(prompts, {
+          message: 'Azure tenant id reference',
+          placeholder: 'env:AZURE_TENANT_ID',
+          ...(currentState.sharepointTenantIdRef ? { initialValue: currentState.sharepointTenantIdRef } : {}),
+        });
+        if (tenantIdRef === undefined) return 'back';
+        currentState.sharepointTenantIdRef = tenantIdRef.trim();
+        return 'next';
+      },
+      async (currentState) => {
+        const clientIdRef = await promptText(prompts, {
+          message: 'Azure client id reference',
+          placeholder: 'env:AZURE_CLIENT_ID',
+          ...(currentState.sharepointClientIdRef ? { initialValue: currentState.sharepointClientIdRef } : {}),
+        });
+        if (clientIdRef === undefined) return 'back';
+        currentState.sharepointClientIdRef = clientIdRef.trim();
+        return 'next';
+      },
+      async (currentState) => {
+        const clientSecretRef = await promptText(prompts, {
+          message: 'Azure client secret reference',
+          placeholder: 'env:AZURE_CLIENT_SECRET',
+          ...(currentState.sharepointClientSecretRef ? { initialValue: currentState.sharepointClientSecretRef } : {}),
+        });
+        if (clientSecretRef === undefined) return 'back';
+        currentState.sharepointClientSecretRef = clientSecretRef.trim();
+        return 'next';
+      },
+      async (currentState) => {
+        const siteId = await promptText(prompts, {
+          message: 'Microsoft Graph site id (optional drive discovery helper)',
+          ...(currentState.sharepointSiteId ? { initialValue: currentState.sharepointSiteId } : {}),
+        });
+        if (siteId === undefined) return 'back';
+        currentState.sharepointSiteId = siteId.trim() || undefined;
+        if (currentState.sharepointSiteId) {
+          try {
+            const pullConfig = await sharepointConnectionToPullConfig({
+              driver: 'sharepoint',
+              tenant_id_ref: credentialRef(currentState.sharepointTenantIdRef, 'SharePoint tenant id ref'),
+              client_id_ref: credentialRef(currentState.sharepointClientIdRef, 'SharePoint client id ref'),
+              client_secret_ref: credentialRef(currentState.sharepointClientSecretRef, 'SharePoint client secret ref'),
+              drive_id: currentState.sharepointDriveId ?? 'setup-drive-placeholder',
+              folder_id: currentState.sharepointFolderId ?? 'setup-folder-placeholder',
+              recursive: currentState.sharepointRecursive === true,
+            });
+            const drives = await createSharepointGraphClient(pullConfig).listDrivesForSite(currentState.sharepointSiteId);
+            if (drives.length === 1 && !currentState.sharepointDriveId) {
+              currentState.sharepointDriveId = drives[0].id;
+              prompts.log?.(`Found drive ${drives[0].name} (${drives[0].id})`);
+            } else if (drives.length > 1) {
+              prompts.log?.('Discovered drives:');
+              for (const drive of drives) {
+                prompts.log?.(`- ${drive.name}: ${drive.id}`);
+              }
+            }
+          } catch (error) {
+            prompts.log?.(`Drive discovery unavailable: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        return 'next';
+      },
+      async (currentState) => {
+        const driveId = await promptText(prompts, {
+          message: 'Microsoft Graph drive id',
+          ...(currentState.sharepointDriveId ? { initialValue: currentState.sharepointDriveId } : {}),
+        });
+        if (driveId === undefined) return 'back';
+        currentState.sharepointDriveId = driveId.trim();
+        return 'next';
+      },
+      async (currentState) => {
+        const folderId = await promptText(prompts, {
+          message: 'Microsoft Graph folder item id',
+          ...(currentState.sharepointFolderId ? { initialValue: currentState.sharepointFolderId } : {}),
+        });
+        if (folderId === undefined) return 'back';
+        currentState.sharepointFolderId = folderId.trim();
+        return 'next';
+      },
+      async (currentState) => {
+        const recursive = await prompts.select({
+          message: 'Include SharePoint / OneDrive docs from subfolders?',
+          options: [
+            { value: 'false', label: 'No' },
+            { value: 'true', label: 'Yes' },
+            { value: 'back', label: 'Back' },
+          ],
+        });
+        if (recursive === 'back') return 'back';
+        currentState.sharepointRecursive = recursive === 'true';
+        return 'next';
+      },
+    ]);
+  }
+
   return await runSourcePromptSteps(initialState, () => [
     ...connectionSteps,
     async (currentState) => {
@@ -1723,6 +1871,16 @@ function sourceArgsFromExistingConnection(input: {
     return sourceArgs;
   }
 
+  if (input.source === 'sharepoint') {
+    sourceArgs.sharepointTenantIdRef = stringField(input.connection.tenant_id_ref);
+    sourceArgs.sharepointClientIdRef = stringField(input.connection.client_id_ref);
+    sourceArgs.sharepointClientSecretRef = stringField(input.connection.client_secret_ref);
+    sourceArgs.sharepointDriveId = stringField(input.connection.drive_id);
+    sourceArgs.sharepointFolderId = stringField(input.connection.folder_id);
+    sourceArgs.sharepointRecursive = input.connection.recursive === true;
+    return sourceArgs;
+  }
+
   sourceArgs.sourceAuthTokenRef = stringField(input.connection.auth_token_ref);
   sourceArgs.notionCrawlMode =
     input.connection.crawl_mode === 'all_accessible' ? 'all_accessible' : 'selected_roots';
@@ -1910,6 +2068,9 @@ function buildConnection(source: KtxSetupSourceType, args: KtxSetupSourcesArgs):
   if (source === 'notion') {
     return buildNotionConnection(args);
   }
+  if (source === 'sharepoint') {
+    return buildSharepointConnection(args);
+  }
   return buildGdriveConnection(args);
 }
 
@@ -1940,6 +2101,9 @@ async function validateSource(
   }
   if (source === 'notion') {
     return await (deps.validateNotion ?? defaultValidateNotion)(args.connection);
+  }
+  if (source === 'sharepoint') {
+    return await (deps.validateSharepoint ?? defaultValidateSharepoint)(args.connection);
   }
   return await (deps.validateGdrive ?? defaultValidateGdrive)(args.connection);
 }

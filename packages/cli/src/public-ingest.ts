@@ -136,6 +136,7 @@ const sourceAdapterByDriver = new Map<string, string>([
   ['looker', 'looker'],
   ['notion', 'notion'],
   ['gdrive', 'gdrive'],
+  ['sharepoint', 'sharepoint'],
   ['metricflow', 'metricflow'],
   ['dbt', 'dbt'],
   ['lookml', 'lookml'],

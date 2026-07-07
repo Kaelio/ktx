@@ -233,6 +233,26 @@ const gdriveConnectionSchema = z
   })
   .describe('Google Drive Google Docs context-source connection.');
 
+const sharepointConnectionSchema = z
+  .looseObject({
+    driver: z.literal('sharepoint'),
+    tenant_id_ref: z
+      .string()
+      .min(1)
+      .describe('Environment-variable reference for the Azure tenant id. Must use env:AZURE_TENANT_ID.'),
+    client_id_ref: z
+      .string()
+      .min(1)
+      .describe('Environment-variable reference for the Azure client id. Must use env:AZURE_CLIENT_ID.'),
+    client_secret_ref: z
+      .string()
+      .min(1)
+      .describe('Environment-variable reference for the Azure client secret. Must use env:AZURE_CLIENT_SECRET.'),
+    drive_id: z.string().min(1).describe('Microsoft Graph drive id for the SharePoint document library or OneDrive drive.'),
+    folder_id: z.string().min(1).describe('Drive item id for the root folder to ingest within the selected drive.'),
+    recursive: z.boolean().optional().describe('When true, recursively traverse subfolders beneath folder_id.'),
+  })
+  .describe('SharePoint / OneDrive context-source connection.');
 const dbtConnectionSchema = z
   .looseObject({
     driver: z.literal('dbt'),
@@ -310,6 +330,7 @@ export const connectionConfigSchema = z.discriminatedUnion('driver', [
   lookmlConnectionSchema,
   notionConnectionSchema,
   gdriveConnectionSchema,
+  sharepointConnectionSchema,
   dbtConnectionSchema,
   metricflowConnectionSchema,
   sigmaConnectionSchema,

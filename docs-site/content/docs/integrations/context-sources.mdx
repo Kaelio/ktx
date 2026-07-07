@@ -1,6 +1,6 @@
 ---
 title: Context Sources
-description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, Sigma, and Google Drive.
+description: Ingest semantic context from dbt, MetricFlow, LookML, Metabase, Looker, Notion, Sigma, Google Drive, and SharePoint / OneDrive.
 ---
 
 Context sources feed your existing analytics tooling into **ktx**. During ingestion, **ktx** extracts metadata from each source and uses a reconciliation agent to reconcile it with your existing semantic layer and knowledge base - preserving accepted edits rather than overwriting.
@@ -27,7 +27,7 @@ LookML uses top-level `repoUrl`, and MetricFlow uses nested
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, `sigma`, or `gdrive` |
+| `driver` | Yes | Source connector: `dbt`, `metricflow`, `lookml`, `metabase`, `looker`, `notion`, `sigma`, `gdrive`, or `sharepoint` |
 | `source_dir` | For local file sources | Absolute or project-relative source directory |
 | `repo_url` | For Git-hosted dbt sources | Git repository URL |
 | `repoUrl` | For Git-hosted LookML sources | Git repository URL |
@@ -536,6 +536,72 @@ connections:
 - `ktx connection test <connectionId>` supports `gdrive`: it verifies that `folder_id` resolves to a folder the service account can read, then reports the number of Google Docs visible in it. A wrong or unshared `folder_id` fails the test instead of reporting zero docs
 - Only Google Docs are ingested in v1; other file types (Sheets, Slides, PDFs) in the folder are skipped and recorded in the staged manifest
 - The service account must be granted access to the target folder explicitly
+
+---
+
+## SharePoint / OneDrive
+
+Ingests Markdown and Word documents from a Microsoft Graph drive folder. The drive can belong to either a SharePoint document library or a OneDrive account. This v1 implementation is knowledge-only.
+
+### What it provides
+
+- Wiki pages synthesized from SharePoint and OneDrive documents
+- Folder-scoped knowledge ingest from a specific Microsoft Graph `drive_id` + `folder_id`
+- Native Markdown passthrough for `.md` files and Markdown conversion for `.docx` files
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  company-docs:
+    driver: sharepoint
+    tenant_id_ref: env:AZURE_TENANT_ID
+    client_id_ref: env:AZURE_CLIENT_ID
+    client_secret_ref: env:AZURE_CLIENT_SECRET
+    drive_id: your-drive-id
+    folder_id: your-folder-id
+    recursive: false
+```
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| Azure AD client credentials | `tenant_id_ref`, `client_id_ref`, `client_secret_ref` as `env:NAME` |
+
+SharePoint uses `env:` references only for credentials in v1. `file:` refs and inline secrets are rejected for this driver.
+
+### Required Microsoft Graph application permissions
+
+Grant these application permissions to the Azure AD app and complete admin consent:
+
+- `Files.Read.All`
+- `Sites.Read.All`
+
+### Configuration options
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `tenant_id_ref` | Environment reference for the Azure tenant id | - |
+| `client_id_ref` | Environment reference for the Azure client id | - |
+| `client_secret_ref` | Environment reference for the Azure client secret | - |
+| `drive_id` | Microsoft Graph drive id to ingest | - |
+| `folder_id` | Microsoft Graph folder item id to ingest | - |
+| `recursive` | Traverse subfolders under `folder_id` | `false` |
+
+### What gets ingested
+
+- `.md` and `.docx` files only
+- Wiki-oriented knowledge content
+- One work unit per staged document
+
+### Notes
+
+- `sharepoint` is knowledge-only in v1; it does not produce semantic-layer sources
+- `ktx setup` supports SharePoint configuration, including the credential refs, drive id, folder id, optional site-id-assisted drive discovery, and recursive crawl flag
+- `ktx connection test <connectionId>` supports `sharepoint`: it verifies that `folder_id` resolves to a readable folder, then reports the number of supported docs visible in it
+- Other file types in the folder are skipped and recorded in the staged manifest
+- Runtime ingest is drive-folder centric: SharePoint document libraries and OneDrive folders both use `drive_id` + `folder_id`
 
 ## Common errors
 

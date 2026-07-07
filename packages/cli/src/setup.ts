@@ -129,6 +129,13 @@ export type KtxSetupArgs =
       gdriveServiceAccountKeyRef?: string;
       gdriveFolderId?: string;
       gdriveRecursive?: boolean;
+      sharepointTenantIdRef?: string;
+      sharepointClientIdRef?: string;
+      sharepointClientSecretRef?: string;
+      sharepointDriveId?: string;
+      sharepointFolderId?: string;
+      sharepointRecursive?: boolean;
+      sharepointSiteId?: string;
       runInitialSourceIngest?: boolean;
       skipSources?: boolean;
       showEntryMenu?: boolean;
@@ -170,7 +177,7 @@ export interface KtxSetupDeps {
   setupUi?: KtxSetupUiAdapter;
 }
 
-const SOURCE_DRIVERS = new Set(['dbt', 'metricflow', 'metabase', 'looker', 'lookml', 'notion', 'gdrive']);
+const SOURCE_DRIVERS = new Set(['dbt', 'metricflow', 'metabase', 'looker', 'lookml', 'notion', 'gdrive', 'sharepoint']);
 const KTX_DOCS_URL = 'https://docs.kaelio.com/ktx';
 
 type KtxSetupEntryAction = 'setup' | 'new-project' | 'agents' | 'status' | 'demo' | 'exit';
@@ -881,6 +888,13 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
               : {}),
             ...(args.gdriveFolderId ? { gdriveFolderId: args.gdriveFolderId } : {}),
             ...(args.gdriveRecursive !== undefined ? { gdriveRecursive: args.gdriveRecursive } : {}),
+            ...(args.sharepointTenantIdRef ? { sharepointTenantIdRef: args.sharepointTenantIdRef } : {}),
+            ...(args.sharepointClientIdRef ? { sharepointClientIdRef: args.sharepointClientIdRef } : {}),
+            ...(args.sharepointClientSecretRef ? { sharepointClientSecretRef: args.sharepointClientSecretRef } : {}),
+            ...(args.sharepointDriveId ? { sharepointDriveId: args.sharepointDriveId } : {}),
+            ...(args.sharepointFolderId ? { sharepointFolderId: args.sharepointFolderId } : {}),
+            ...(args.sharepointRecursive !== undefined ? { sharepointRecursive: args.sharepointRecursive } : {}),
+            ...(args.sharepointSiteId ? { sharepointSiteId: args.sharepointSiteId } : {}),
             runInitialSourceIngest: args.runInitialSourceIngest ?? false,
             skipSources: args.skipSources === true || !shouldRunSources || skipSourcesFromDatabaseMenu,
           },

@@ -4,10 +4,13 @@ import type { LookerClient } from './context/ingest/adapters/looker/client.js';
 import type { MetabaseRuntimeClient } from './context/ingest/adapters/metabase/client-port.js';
 import { type NotionBotInfo, NotionClient } from './context/ingest/adapters/notion/notion-client.js';
 import { parseGdriveConnectionConfig, resolveGdriveServiceAccountKey } from './context/connections/gdrive-config.js';
+import { parseSharepointConnectionConfig, sharepointConnectionToPullConfig } from './context/connections/sharepoint-config.js';
 import { createLocalLookerCredentialResolver } from './context/ingest/adapters/looker/local-looker.adapter.js';
 import { metabaseRuntimeConfigFromLocalConnection } from './context/ingest/adapters/metabase/local-metabase.adapter.js';
 import { createGoogleDocsClients, verifyGdriveFolderAndCountDocs } from './context/ingest/adapters/gdrive/gdrive-client.js';
 import { gdriveServiceAccountKeySchema } from './context/ingest/adapters/gdrive/types.js';
+import { SHAREPOINT_ALLOWED_EXTENSIONS } from './context/ingest/adapters/sharepoint/types.js';
+import { SharepointGraphClient, createSharepointGraphClient } from './context/ingest/adapters/sharepoint/graph-client.js';
 import { testRepoConnection } from './context/ingest/repo-fetch.js';
 import { federatedConnectionListing } from './context/connections/federation.js';
 import { getDriverRegistration } from './context/connections/drivers.js';
@@ -38,6 +41,7 @@ type GdriveTestPort = Pick<
   ReturnType<typeof createGoogleDocsClients>['drive'],
   'listFiles' | 'getFile'
 >;
+type SharepointTestPort = Pick<SharepointGraphClient, 'getDriveItem' | 'listDriveFiles'>;
 type TestRepoConnection = typeof testRepoConnection;
 
 export interface KtxConnectionDeps {
@@ -46,6 +50,7 @@ export interface KtxConnectionDeps {
   createLookerClient?: (project: KtxLocalProject, connectionId: string) => Promise<LookerTestPort>;
   createNotionClient?: (project: KtxLocalProject, connectionId: string) => Promise<NotionTestPort>;
   createGdriveClient?: (project: KtxLocalProject, connectionId: string) => Promise<GdriveTestPort>;
+  createSharepointClient?: (project: KtxLocalProject, connectionId: string) => Promise<SharepointTestPort>;
   testRepoConnection?: TestRepoConnection;
 }
 
@@ -62,6 +67,7 @@ const SUPPORTED_TEST_DRIVERS = [
   'looker',
   'notion',
   'gdrive',
+  'sharepoint',
   'dbt',
   'metricflow',
   'lookml',
@@ -221,6 +227,46 @@ async function testGdriveConnection(
   return { docs: await verifyGdriveFolderAndCountDocs(client, parsed.folder_id) };
 }
 
+async function createDefaultSharepointClient(
+  project: KtxLocalProject,
+  connectionId: string,
+): Promise<SharepointTestPort> {
+  const connection = project.config.connections[connectionId];
+  if (!connection) {
+    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
+  }
+  const parsed = parseSharepointConnectionConfig(connection);
+  return createSharepointGraphClient(await sharepointConnectionToPullConfig(parsed));
+}
+
+async function testSharepointConnection(
+  project: KtxLocalProject,
+  connectionId: string,
+  createClient: (project: KtxLocalProject, connectionId: string) => Promise<SharepointTestPort>,
+): Promise<{ docs: number }> {
+  const connection = project.config.connections[connectionId];
+  if (!connection) {
+    throw new Error(`Connection "${connectionId}" is not configured in ktx.yaml`);
+  }
+  const parsed = parseSharepointConnectionConfig(connection);
+  const client = await createClient(project, connectionId);
+  const folder = await client.getDriveItem(parsed.drive_id, parsed.folder_id);
+  if (!folder.folder) {
+    throw new Error(`SharePoint folder ${parsed.folder_id} is not accessible`);
+  }
+  const files = await client.listDriveFiles({
+    driveId: parsed.drive_id,
+    folderId: parsed.folder_id,
+    recursive: parsed.recursive,
+  });
+  const docs = files.filter(({ item }) => {
+    const dot = item.name.lastIndexOf('.');
+    const ext = dot >= 0 ? item.name.slice(dot).toLowerCase() : '';
+    return SHAREPOINT_ALLOWED_EXTENSIONS.has(ext);
+  }).length;
+  return { docs };
+}
+
 interface GitConnectionFields {
   repoUrl: string;
   authToken: string | null;
@@ -314,6 +360,15 @@ async function testConnectionByDriver(
       project,
       connectionId,
       deps.createGdriveClient ?? createDefaultGdriveClient,
+    );
+    return { driver, detailKey: 'Docs', detailValue: String(result.docs) };
+  }
+
+  if (driver === 'sharepoint') {
+    const result = await testSharepointConnection(
+      project,
+      connectionId,
+      deps.createSharepointClient ?? createDefaultSharepointClient,
     );
     return { driver, detailKey: 'Docs', detailValue: String(result.docs) };
   }
