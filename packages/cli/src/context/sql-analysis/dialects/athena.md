@@ -8,5 +8,6 @@
 - **Approximate aggregates:** `approx_distinct(x)` for cardinality and `approx_percentile(x, 0.5)` for quantiles are far cheaper than exact `COUNT(DISTINCT ...)` on large scans.
 - **Arrays & maps:** explode with `CROSS JOIN UNNEST(arr) AS t(x)` (add `WITH ORDINALITY` for an index); build with `array_agg(x)`, join with `array_join(arr, ',')`, index 1-based (`arr[1]`), and read a map with `element_at(m, key)`.
 - **Safe cast:** `TRY_CAST(x AS DOUBLE)` yields `NULL` for a value that does not parse instead of raising, so counting residual `NULL`s catches an encoding the sample missed; `TRY(expr)` swallows other runtime errors.
+- **Extract from text:** to rank/aggregate by a number buried in a narrative column, pull the token *with its separators* first — `regexp_extract(txt, '[0-9][0-9.,_ ]*')` — then apply the strip/scale/cast and **Safe cast** above. The class keeps `,`/`_`/space so `'30,522 forks'` yields `'30,522'`, not `'30'`; extracting a bare `[0-9]+` would silently truncate at the first separator.
 - **Integer division:** `/` between integers truncates (`5 / 2` → `2`); cast an operand (`x / CAST(y AS DOUBLE)`) to keep the fraction, and round only in the final projection.
 - **JSON:** `json_extract_scalar(col, '$.a.b')` returns varchar, `json_extract(col, '$.a')` returns json; cast a JSON string with `CAST(json_parse(col) AS ...)`.
