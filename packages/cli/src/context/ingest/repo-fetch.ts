@@ -154,7 +154,9 @@ async function tryPull(cacheDir: string, authUrl: string, branch: string): Promi
     await git.remote(['set-url', 'origin', authUrl]);
     await git.fetch(['origin', branch]);
     await git.checkout(branch);
-    await git.pull('origin', branch);
+    // --ff-only rejects a diverged local history instead of creating a merge commit,
+    // so a locally-modified cache falls back to a fresh clone rather than silently merging.
+    await git.pull('origin', branch, ['--ff-only']);
     return true;
   } catch {
     return false;

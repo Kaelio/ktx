@@ -140,6 +140,7 @@ const sourceAdapterByDriver = new Map<string, string>([
   ['dbt', 'dbt'],
   ['lookml', 'lookml'],
   ['sigma', 'sigma'],
+  ['jira', 'jira'],
 ]);
 
 export function publicProgressMessage(message: string, target: KtxPublicIngestPlanTarget): string {

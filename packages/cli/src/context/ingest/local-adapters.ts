@@ -47,6 +47,7 @@ import { pullConfigFromMetricflowIntegration } from './adapters/metricflow/pull-
 import { LocalNotionRuntimeStore } from './adapters/notion/local-state-store.js';
 import { NotionSourceAdapter } from './adapters/notion/notion.adapter.js';
 import type { NotionFetchLogger } from './adapters/notion/fetch.js';
+import { JiraSourceAdapter } from './adapters/jira/jira.adapter.js';
 import { seedLocalMappingStateFromKtxYaml } from './local-mapping-reconcile.js';
 import type { SourceAdapter } from './types.js';
 
@@ -131,6 +132,9 @@ export function createDefaultLocalIngestAdapters(
       onPullSucceeded: async ({ connectionId, nextSuccessfulCursor }) => {
         await localNotionRuntimeStore(project).setCursor(connectionId, nextSuccessfulCursor);
       },
+      ...(options.logger ? { logger: options.logger } : {}),
+    }),
+    new JiraSourceAdapter({
       ...(options.logger ? { logger: options.logger } : {}),
     }),
   ];
@@ -358,6 +362,25 @@ export async function localPullConfigForAdapter(
     return {
       ...pullConfig,
       lastSuccessfulCursor: await localNotionRuntimeStore(project).readCursor(connectionId),
+    };
+  }
+  if (adapter.source === 'jira') {
+    if (!isRecord(connection)) throw new Error(`Connection "${connectionId}" config must be an object`);
+    const apiToken =
+      typeof connection.api_token === 'string'
+        ? connection.api_token
+        : resolveKtxConfigReference(
+            typeof connection.api_token_ref === 'string' ? connection.api_token_ref : undefined,
+            options.looker?.env ?? process.env,
+          );
+    if (!apiToken) throw new Error(`Connection "${connectionId}" requires api_token or api_token_ref`);
+    return {
+      baseUrl: String(connection.base_url ?? ''),
+      email: String(connection.email ?? ''),
+      apiToken,
+      projects: Array.isArray(connection.projects) ? connection.projects.filter((p: unknown) => typeof p === 'string') : [],
+      labels: Array.isArray(connection.labels) ? connection.labels.filter((l: unknown) => typeof l === 'string') : [],
+      since: typeof connection.since === 'string' ? connection.since : undefined,
     };
   }
   if (adapter.source === 'gdrive') {

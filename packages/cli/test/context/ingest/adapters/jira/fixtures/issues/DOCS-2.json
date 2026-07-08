@@ -1,0 +1,15 @@
+{
+  "id": "10002",
+  "key": "DOCS-2",
+  "summary": "Untitled task",
+  "description": null,
+  "status": "Open",
+  "issuetype": "Bug",
+  "labels": ["kb"],
+  "project": { "key": "DOCS", "name": "Test Documentation" },
+  "created": "2026-06-20T00:00:00.000Z",
+  "updated": "2026-06-20T00:00:00.000Z",
+  "assignee": null,
+  "priority": "Medium",
+  "url": "https://example.atlassian.net/browse/DOCS-2"
+}

@@ -19,6 +19,7 @@ const expectedAdapterSkillHeadings: Record<string, string> = {
   gdrive_synthesize: '# Google Drive Doc Synthesis',
   historic_sql_patterns: '# Historic SQL Patterns',
   historic_sql_table_digest: '# Historic SQL Table Digest',
+  jira_ingest: '# Jira Ingest',
   live_database_ingest: '# Live Database Ingest',
   looker_ingest: '# Looker Runtime Ingest',
   lookml_ingest: '# LookML to ktx Semantic Layer',

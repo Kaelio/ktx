@@ -1,0 +1,15 @@
+{
+  "id": "10001",
+  "key": "DOCS-1",
+  "summary": "ARR calculation definition for enterprise segment",
+  "description": "## Definition\n\nAnnual Recurring Revenue (ARR) is calculated as monthly recurring revenue multiplied by 12, excluding one-time fees and professional services.\n\n## Scope\n\nApplies to enterprise accounts only. SMB uses a separate MRR-based metric.",
+  "status": "Done",
+  "issuetype": "Task",
+  "labels": ["kb", "decision"],
+  "project": { "key": "DOCS", "name": "Test Documentation" },
+  "created": "2025-01-15T00:00:00.000Z",
+  "updated": "2026-06-01T00:00:00.000Z",
+  "assignee": "Jane Smith",
+  "priority": "High",
+  "url": "https://example.atlassian.net/browse/DOCS-1"
+}
