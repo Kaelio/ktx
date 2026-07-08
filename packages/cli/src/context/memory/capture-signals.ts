@@ -16,8 +16,18 @@ export function detectCaptureSignals(input: MemoryAgentInput): CaptureSignals {
   const assistantMessage = input.assistantMessage?.trim() ?? '';
   const reasons: string[] = [];
 
+  // The user-message length gate is a research-path proxy for "the turn was substantive
+  // enough to promote the assistant's SQL." External ingest carries a fixed boilerplate
+  // user message and keeps the real content in the assistant message, so the proxy never
+  // holds there - treat the deliberate submission itself as the substantive signal.
+  const deliberateSubmission = input.sourceType === 'external_ingest';
+
   let sl = false;
-  if (assistantMessage && SQL_AGGREGATE_PATTERN.test(assistantMessage) && userMessage.length >= 100) {
+  if (
+    assistantMessage &&
+    SQL_AGGREGATE_PATTERN.test(assistantMessage) &&
+    (deliberateSubmission || userMessage.length >= 100)
+  ) {
     sl = true;
     reasons.push('sql aggregate in assistant message');
   }
