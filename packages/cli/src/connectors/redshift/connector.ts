@@ -1,5 +1,5 @@
 import { resolveStringReference } from '../shared/string-reference.js';
-import { getDialectForDriver } from '../../context/connections/dialects.js';
+import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
@@ -412,7 +412,7 @@ export class KtxRedshiftScanConnector implements KtxScanConnector {
   private readonly poolFactory: KtxRedshiftPoolFactory;
   private readonly endpointResolver?: KtxRedshiftEndpointResolver;
   private readonly now: () => Date;
-  private readonly dialect = getDialectForDriver('redshift');
+  private readonly dialect = getSqlDialectForDriver('redshift');
   private pool: KtxRedshiftPool | null = null;
   private lastIdlePoolError: Error | null = null;
   private resolvedEndpoint: KtxRedshiftResolvedEndpoint | null = null;
