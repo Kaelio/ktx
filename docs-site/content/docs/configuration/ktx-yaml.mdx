@@ -120,6 +120,7 @@ context-source drivers share the map.
 | `dbt` | Context source | `driver`, one of `source_dir` or `repo_url` | `branch`, `path`, `profiles_path`, `target`, `project_name` |
 | `metricflow` | Context source | `driver`, `metricflow.repoUrl` | `metricflow.branch`, `metricflow.path`, `metricflow.auth_token_ref` |
 | `notion` | Context source | `driver`, `auth_token_ref` | `crawl_mode`, `root_*_ids`, `max_*_per_run` |
+| `confluence` | Context source | `driver`, `base_url`, `email`, one of `api_token` or `api_token_ref` | `space_keys` |
 | `sigma` | Context source | `driver`, `client_id`, `client_secret_ref` | `api_url` |
 
 ### Warehouse drivers
@@ -381,6 +382,27 @@ connections:
 | `max_pages_per_run` | Max pages fetched per ingest run (1-10000). |
 | `max_knowledge_creates_per_run` | Max new wiki pages created per run (0-25). |
 | `max_knowledge_updates_per_run` | Max existing wiki pages updated per run (0-100). |
+
+### Confluence
+
+```yaml
+connections:
+  my-confluence:
+    driver: confluence
+    base_url: https://yourorg.atlassian.net
+    email: you@yourorg.com
+    api_token_ref: env:CONFLUENCE_API_TOKEN
+    space_keys:
+      - ENG
+      - PROD
+```
+
+| Field | Purpose |
+|-------|---------|
+| `base_url` | Confluence Cloud base URL (e.g. `https://yourorg.atlassian.net`). Required. |
+| `email` | Atlassian account email used for Basic auth. Required. |
+| `api_token` / `api_token_ref` | Literal API token or reference. Prefer the `_ref`. |
+| `space_keys` | List of space keys to ingest. Omit to ingest all accessible global spaces. |
 
 ### Sigma
 

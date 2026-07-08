@@ -1,0 +1,14 @@
+{
+  "pageId": "bbb222",
+  "spaceId": "space-1",
+  "spaceKey": "ENG",
+  "spaceName": "Engineering",
+  "title": "Metric Definitions",
+  "parentId": "aaa111",
+  "breadcrumb": "Engineering > Data Pipeline Architecture > Metric Definitions",
+  "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/bbb222",
+  "lastEditedAt": "2026-06-10T14:00:00.000Z",
+  "version": 3,
+  "status": "current",
+  "contentStorage": "<h1>Metric Definitions</h1><p>Canonical definitions for core business metrics used by the data team.</p><h2>Monthly Active Users (MAU)</h2><p>A user is considered active if they logged in at least once in the trailing 30 days.</p>"
+}
