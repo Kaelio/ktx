@@ -97,7 +97,7 @@ function metadataResults(): Map<string, FakeQueryResponse> {
     ['FROM pg_stats s', { rows: [{ column_name: 'status', estimated_cardinality: '2' }] }],
     ['SELECT 1', { rows: [{ '?column?': 1 }], fields: [{ name: '?column?', dataTypeID: 23 }] }],
     [
-      'FROM svv_tables WHERE table_schema = ANY($1) AND table_type IN',
+      'FROM svv_tables WHERE table_schema IN ($1) AND table_type IN',
       {
         rows: [
           { schema_name: 'public', table_name: 'customers', table_kind: 'r' },
@@ -463,8 +463,13 @@ describe('KtxRedshiftScanConnector', () => {
     );
     expect(snapshot.tables.map((table) => table.name)).toEqual(['orders']);
     const tablesQuery = queries.find((query) => query.sql.includes('FROM svv_tables t'));
-    expect(tablesQuery?.sql).toMatch(/t\.table_name = ANY\(\$2\)/);
-    expect(tablesQuery?.params).toEqual(['public', ['orders']]);
+    // Scoped predicates must expand to positional placeholders: Redshift rejects a
+    // bound array in `= ANY($n)`.
+    expect(tablesQuery?.sql).toMatch(/t\.table_name IN \(\$2\)/);
+    expect(tablesQuery?.params).toEqual(['public', 'orders']);
+    // SVV_TABLES reports regular tables as BASE TABLE, not TABLE.
+    expect(tablesQuery?.sql).toContain("'BASE TABLE'");
+    expect(tablesQuery?.sql).not.toMatch(/IN \('TABLE'/);
   });
 
   it('attaches an error listener to the pg pool', async () => {

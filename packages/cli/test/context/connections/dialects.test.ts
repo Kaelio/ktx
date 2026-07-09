@@ -85,7 +85,7 @@ const fixtures: DialectFixture[] = [
     textLengthExpression: 'LENGTH(CAST("status" AS TEXT))',
     castToText: 'CAST("status" AS TEXT)',
     sampleValueAggregation:
-      '(SELECT STRING_AGG(CAST(value AS TEXT), CHR(31)) FROM (SELECT status AS value FROM orders) AS relationship_profile_values)',
+      '(SELECT LISTAGG(CAST(value AS TEXT), CHR(31)) FROM (SELECT status AS value FROM orders) AS relationship_profile_values)',
     cardinalityContains: 'SELECT COUNT(DISTINCT val) AS cardinality',
     randomizedCardinalityContains: 'ORDER BY RANDOM()',
     distinctValuesContains: 'SELECT DISTINCT "status"::text AS val',

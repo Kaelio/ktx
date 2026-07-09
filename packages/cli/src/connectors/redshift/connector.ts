@@ -144,6 +144,17 @@ interface RedshiftStatsRow {
 /** @internal */
 export const prepareRedshiftReadOnlyQuery = preparePgReadOnlyQuery;
 
+/**
+ * Build a positional `IN ($n, $n+1, ...)` predicate. Redshift does not accept a
+ * bound array for `= ANY($1)` the way PostgreSQL does, so scoped predicates are
+ * expanded into one placeholder per value. Placeholders are derived from the
+ * value count only, never from the values themselves.
+ */
+function positionalInClause(values: readonly string[], columnExpression: string, startIndex: number): string {
+  const placeholders = values.map((_value, index) => `$${startIndex + index}`);
+  return `${columnExpression} IN (${placeholders.join(', ')})`;
+}
+
 export function isKtxRedshiftConnectionConfig(
   connection: KtxRedshiftConnectionConfig | undefined,
 ): connection is KtxRedshiftConnectionConfig {
@@ -363,16 +374,17 @@ export class KtxRedshiftScanConnector implements KtxScanConnector {
   async listTables(schemas?: string[]): Promise<KtxTableListEntry[]> {
     const filterSchemas = schemas ?? (await this.listSchemas());
     if (filterSchemas.length === 0) return [];
+    const schemaPredicate = positionalInClause(filterSchemas, 'table_schema', 1);
     const rows = await this.queryRaw<RedshiftTableListRow>(
       `
       SELECT table_schema AS schema_name, table_name AS table_name,
         CASE WHEN table_type = 'VIEW' THEN 'v' ELSE 'r' END AS table_kind
       FROM svv_tables
-      WHERE table_schema = ANY($1)
-        AND table_type IN ('TABLE', 'VIEW', 'EXTERNAL TABLE')
+      WHERE ${schemaPredicate}
+        AND table_type IN ('BASE TABLE', 'VIEW', 'EXTERNAL TABLE')
       ORDER BY table_schema, table_name
       `,
-      [filterSchemas],
+      [...filterSchemas],
     );
     return rows.map((row) => ({
       catalog: null,
@@ -399,10 +411,11 @@ export class KtxRedshiftScanConnector implements KtxScanConnector {
     snapshotWarnings: KtxScanWarning[],
   ): Promise<KtxSchemaTable[]> {
     if (scopedNames && scopedNames.length === 0) return [];
-    const svvTableScopeClause = scopedNames ? 'AND t.table_name = ANY($2)' : '';
-    const svvColumnScopeClause = scopedNames ? 'AND table_name = ANY($2)' : '';
-    const tableConstraintScopeClause = scopedNames ? 'AND tc.table_name = ANY($2)' : '';
-    const scopeValues = scopedNames ? [scopedNames] : [];
+    // Schema is $1 in every query below, so scoped table names start at $2.
+    const svvTableScopeClause = scopedNames ? `AND ${positionalInClause(scopedNames, 't.table_name', 2)}` : '';
+    const svvColumnScopeClause = scopedNames ? `AND ${positionalInClause(scopedNames, 'table_name', 2)}` : '';
+    const tableConstraintScopeClause = scopedNames ? `AND ${positionalInClause(scopedNames, 'tc.table_name', 2)}` : '';
+    const scopeValues = scopedNames ? [...scopedNames] : [];
     const tables = await this.queryRaw<RedshiftTableRow>(
       `
       SELECT
@@ -414,7 +427,7 @@ export class KtxRedshiftScanConnector implements KtxScanConnector {
       LEFT JOIN svv_table_info ti
         ON ti.schema = t.table_schema AND ti.\"table\" = t.table_name
       WHERE t.table_schema = $1
-        AND t.table_type IN ('TABLE', 'VIEW', 'EXTERNAL TABLE')
+        AND t.table_type IN ('BASE TABLE', 'VIEW', 'EXTERNAL TABLE')
         ${svvTableScopeClause}
       ORDER BY t.table_name
       `,

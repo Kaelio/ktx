@@ -150,7 +150,10 @@ export class KtxRedshiftDialect implements KtxDialect {
   }
 
   getSampleValueAggregation(innerSql: string): string {
-    return `(SELECT STRING_AGG(CAST(value AS TEXT), CHR(31)) FROM (${innerSql}) AS relationship_profile_values)`;
+    // Redshift has no STRING_AGG; LISTAGG is its string aggregate. WITHIN GROUP is
+    // optional here because profiling does not depend on value order. LISTAGG
+    // returns VARCHAR(MAX) and errors if the concatenation exceeds that limit.
+    return `(SELECT LISTAGG(CAST(value AS TEXT), CHR(31)) FROM (${innerSql}) AS relationship_profile_values)`;
   }
 
   generateCardinalitySampleQuery(tableName: string, columnName: string, sampleSize: number): string {
