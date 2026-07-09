@@ -4,6 +4,7 @@ import { sqlAnalysisDialectForDriver } from '../../../src/context/sql-analysis/d
 describe('sqlAnalysisDialectForDriver', () => {
   it('maps ktx.yaml driver names to sqlglot dialects', () => {
     expect(sqlAnalysisDialectForDriver('postgres')).toBe('postgres');
+    expect(sqlAnalysisDialectForDriver('redshift')).toBe('redshift');
     expect(sqlAnalysisDialectForDriver('bigquery')).toBe('bigquery');
     expect(sqlAnalysisDialectForDriver('snowflake')).toBe('snowflake');
     expect(sqlAnalysisDialectForDriver('mysql')).toBe('mysql');
