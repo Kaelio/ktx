@@ -1,6 +1,25 @@
-import { resolveStringReference } from '../shared/string-reference.js';
 import { getSqlDialectForDriver } from '../../context/connections/dialects.js';
 import { resolveQueryDeadlineMs, queryDeadlineExceededError } from '../../context/connections/query-deadline.js';
+import {
+  DefaultPgPoolFactory,
+  PG_OID_TYPE_MAP,
+  finiteNumber,
+  groupByTable,
+  isDeniedError,
+  isPgTimeoutError,
+  numberValue,
+  pgPoolConfigFromConfig,
+  preparePgReadOnlyQuery,
+  primaryKeyMap,
+  queryRows,
+  schemasFromConnection,
+  type KtxPgConnectionConfig,
+  type KtxPgEndpointResolver,
+  type KtxPgPool,
+  type KtxPgPoolConfig,
+  type KtxPgPoolFactory,
+  type KtxPgResolvedEndpoint,
+} from '../shared/pg-wire.js';
 import { assertReadOnlySql, limitSqlForExecution } from '../../context/connections/read-only-sql.js';
 import { tryConstraintQuery } from '../../context/scan/constraint-discovery.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
@@ -27,95 +46,13 @@ import {
   type KtxTableSampleInput,
   type KtxTableSampleResult,
 } from '../../context/scan/types.js';
-import { Pool } from 'pg';
 
-const PG_OID_TYPE_MAP: Record<number, string> = {
-  16: 'boolean',
-  20: 'bigint',
-  21: 'smallint',
-  23: 'integer',
-  25: 'text',
-  700: 'real',
-  701: 'double precision',
-  1043: 'varchar',
-  1082: 'date',
-  1114: 'timestamp',
-  1184: 'timestamptz',
-  1700: 'numeric',
-  2950: 'uuid',
-  3802: 'jsonb',
-  114: 'json',
-  1009: 'text[]',
-  1007: 'integer[]',
-  1016: 'bigint[]',
-};
-
-export interface KtxPostgresConnectionConfig {
-  driver?: string;
-  host?: string;
-  port?: number;
-  database?: string;
-  username?: string;
-  user?: string;
-  password?: string;
-  url?: string;
-  schema?: string;
-  schemas?: string[];
-  ssl?: boolean;
-  sslmode?: string;
-  sslMode?: string;
-  rejectUnauthorized?: boolean;
-  maxConnections?: number;
-  [key: string]: unknown;
-}
-
-export interface KtxPostgresPoolConfig {
-  host?: string;
-  port?: number;
-  database?: string;
-  user?: string;
-  password?: string;
-  connectionString?: string;
-  max: number;
-  idleTimeoutMillis: number;
-  connectionTimeoutMillis: number;
-  options?: string;
-  ssl?: { rejectUnauthorized: boolean };
-}
-
-interface KtxPostgresQueryResult {
-  fields?: Array<{ name: string; dataTypeID: number }>;
-  rows: Record<string, unknown>[];
-}
-
-interface KtxPostgresClient {
-  query(sql: string, params?: unknown[]): Promise<KtxPostgresQueryResult>;
-  release(): void;
-}
-
-interface KtxPostgresPool {
-  connect(): Promise<KtxPostgresClient>;
-  end(): Promise<void>;
-  on?(event: 'error', listener: (error: Error) => void): void;
-}
-
-export interface KtxPostgresPoolFactory {
-  createPool(config: KtxPostgresPoolConfig): KtxPostgresPool;
-}
-
-interface KtxPostgresResolvedEndpoint {
-  host: string;
-  port: number;
-  close?: () => Promise<void>;
-}
-
-export interface KtxPostgresEndpointResolver {
-  resolve(input: {
-    host: string;
-    port: number;
-    connection: KtxPostgresConnectionConfig;
-  }): Promise<KtxPostgresResolvedEndpoint>;
-}
+export type KtxPostgresConnectionConfig = KtxPgConnectionConfig;
+export type KtxPostgresPoolConfig = KtxPgPoolConfig;
+type KtxPostgresPool = KtxPgPool;
+export type KtxPostgresPoolFactory = KtxPgPoolFactory;
+type KtxPostgresResolvedEndpoint = KtxPgResolvedEndpoint;
+export type KtxPostgresEndpointResolver = KtxPgEndpointResolver;
 
 export interface KtxPostgresScanConnectorOptions {
   connectionId: string;
@@ -204,138 +141,8 @@ interface PostgresStatsRow {
   estimated_cardinality: unknown;
 }
 
-class DefaultPostgresPoolFactory implements KtxPostgresPoolFactory {
-  createPool(config: KtxPostgresPoolConfig): KtxPostgresPool {
-    return new Pool(config);
-  }
-}
-
-function groupByTable<T extends { table_name: string }>(rows: T[]): Map<string, T[]> {
-  const grouped = new Map<string, T[]>();
-  for (const row of rows) {
-    const tableRows = grouped.get(row.table_name) ?? [];
-    tableRows.push(row);
-    grouped.set(row.table_name, tableRows);
-  }
-  return grouped;
-}
-
 /** @internal */
-export function preparePostgresReadOnlyQuery(
-  sql: string,
-  params?: Record<string, unknown>,
-): { sql: string; params?: unknown[] } {
-  if (!params) {
-    return { sql, params: undefined };
-  }
-  const paramNames = Object.keys(params);
-  const values: unknown[] = new Array(paramNames.length);
-  const paramIndexMap = new Map<string, number>();
-  paramNames.forEach((name, index) => {
-    paramIndexMap.set(name, index + 1);
-    values[index] = params[name];
-  });
-  const sortedKeys = [...paramNames].sort((a, b) => b.length - a.length);
-  let parameterizedQuery = sql;
-  for (const name of sortedKeys) {
-    parameterizedQuery = parameterizedQuery.replace(new RegExp(`:${name}\\b`, 'g'), `$${paramIndexMap.get(name)}`);
-  }
-  return { sql: parameterizedQuery, params: values };
-}
-
-function primaryKeyMap(rows: PostgresPrimaryKeyRow[]): Map<string, Set<string>> {
-  const grouped = new Map<string, Set<string>>();
-  for (const row of rows) {
-    const columns = grouped.get(row.table_name) ?? new Set<string>();
-    columns.add(row.column_name);
-    grouped.set(row.table_name, columns);
-  }
-  return grouped;
-}
-
-function isDeniedError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  const code = (error as { code?: unknown }).code;
-  return code === '42501' || code === '42P01';
-}
-
-// 57014 = query_canceled, which is how statement_timeout surfaces.
-function isPostgresTimeoutError(error: unknown): boolean {
-  return Boolean(error) && typeof error === 'object' && (error as { code?: unknown }).code === '57014';
-}
-
-function queryRows(result: KtxPostgresQueryResult): unknown[][] {
-  const headers = (result.fields ?? []).map((field) => field.name);
-  return result.rows.map((row) => headers.map((header) => row[header]));
-}
-
-function finiteNumber(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function stringConfigValue(
-  connection: KtxPostgresConnectionConfig | undefined,
-  key: keyof KtxPostgresConnectionConfig,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  const value = connection?.[key];
-  return typeof value === 'string' && value.trim().length > 0 ? resolveStringReference(value.trim(), env) : undefined;
-}
-
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function positiveIntegerConfigValue(input: {
-  connection: KtxPostgresConnectionConfig;
-  key: keyof KtxPostgresConnectionConfig;
-  connectionId: string;
-  defaultValue: number;
-}): number {
-  const value = input.connection[input.key];
-  if (value === undefined) {
-    return input.defaultValue;
-  }
-  const numberValue = Number(value);
-  if (!Number.isInteger(numberValue) || numberValue < 1) {
-    throw new Error(`connections.${input.connectionId}.${String(input.key)} must be a positive integer`);
-  }
-  return numberValue;
-}
-
-function parsePostgresUrl(url: string): Partial<KtxPostgresConnectionConfig> {
-  const parsed = new URL(url);
-  const sslmode = parsed.searchParams.get('sslmode') ?? undefined;
-  return {
-    host: parsed.hostname,
-    port: parsed.port ? Number(parsed.port) : undefined,
-    database: parsed.pathname.replace(/^\/+/, '') || undefined,
-    username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
-    password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
-    ...(sslmode ? { sslmode } : {}),
-  };
-}
-
-function normalizedSslMode(connection: KtxPostgresConnectionConfig): string | undefined {
-  const value = connection.sslmode ?? connection.sslMode;
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim().toLowerCase() : undefined;
-}
-
-function schemasFromConnection(connection: KtxPostgresConnectionConfig): string[] {
-  if (Array.isArray(connection.schemas) && connection.schemas.length > 0) {
-    return connection.schemas.filter((schema): schema is string => typeof schema === 'string' && schema.length > 0);
-  }
-  return typeof connection.schema === 'string' && connection.schema.length > 0 ? [connection.schema] : ['public'];
-}
-
-function searchPathSchemasFromConnection(connection: KtxPostgresConnectionConfig): string[] {
-  const schemas = schemasFromConnection(connection);
-  return schemas.includes('public') ? schemas : [...schemas, 'public'];
-}
+export const preparePostgresReadOnlyQuery = preparePgReadOnlyQuery;
 
 export function isKtxPostgresConnectionConfig(
   connection: KtxPostgresConnectionConfig | undefined,
@@ -354,53 +161,13 @@ export function postgresPoolConfigFromConfig(input: {
   if (!isKtxPostgresConnectionConfig(input.connection)) {
     throw new Error(`Native PostgreSQL connector cannot run driver "${inputDriver}"`);
   }
-
-  const env = input.env ?? process.env;
-  const referencedUrl = stringConfigValue(input.connection, 'url', env);
-  const urlConfig = referencedUrl ? parsePostgresUrl(referencedUrl) : {};
-  const merged: KtxPostgresConnectionConfig = { ...urlConfig, ...input.connection };
-  const host = stringConfigValue(merged, 'host', env);
-  const database = stringConfigValue(merged, 'database', env);
-  const user = stringConfigValue(merged, 'username', env) ?? stringConfigValue(merged, 'user', env);
-  const password = stringConfigValue(merged, 'password', env);
-  const sslmode = normalizedSslMode(merged);
-  const maxConnections = positiveIntegerConfigValue({
-    connection: merged,
-    key: 'maxConnections',
+  return pgPoolConfigFromConfig({
     connectionId: input.connectionId,
-    defaultValue: 10,
+    connection: input.connection,
+    defaultPort: 5432,
+    connectorLabel: 'Native PostgreSQL connector',
+    env: input.env,
   });
-
-  if (!referencedUrl && !host) {
-    throw new Error(`Native PostgreSQL connector requires connections.${input.connectionId}.host or url`);
-  }
-  if (!database && !referencedUrl) {
-    throw new Error(`Native PostgreSQL connector requires connections.${input.connectionId}.database or url`);
-  }
-  if (!user && !referencedUrl) {
-    throw new Error(`Native PostgreSQL connector requires connections.${input.connectionId}.username, user, or url`);
-  }
-
-  const config: KtxPostgresPoolConfig = {
-    max: maxConnections,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 10_000,
-    ...(referencedUrl && sslmode !== 'prefer' && sslmode !== 'disable'
-      ? { connectionString: referencedUrl }
-      : { host, port: numberValue(merged.port) ?? 5432, database, user, password }),
-  };
-  const searchPathSchemas = searchPathSchemasFromConnection(merged);
-  // statement_timeout (ms) bounds every query on connections from this pool, so
-  // the server itself aborts a runaway query and frees the connection cleanly.
-  const serverOptions = [`-c statement_timeout=${resolveQueryDeadlineMs(merged)}`];
-  if (searchPathSchemas.length > 0) {
-    serverOptions.unshift(`-c search_path=${searchPathSchemas.join(',')}`);
-  }
-  config.options = serverOptions.join(' ');
-  if (merged.ssl && sslmode !== 'prefer' && sslmode !== 'disable') {
-    config.ssl = { rejectUnauthorized: merged.rejectUnauthorized ?? true };
-  }
-  return config;
 }
 
 export class KtxPostgresScanConnector implements KtxScanConnector {
@@ -436,7 +203,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
       connection: options.connection,
       env: options.env,
     });
-    this.poolFactory = options.poolFactory ?? new DefaultPostgresPoolFactory();
+    this.poolFactory = options.poolFactory ?? new DefaultPgPoolFactory();
     this.endpointResolver = options.endpointResolver;
     this.now = options.now ?? (() => new Date());
     this.deadlineMs = resolveQueryDeadlineMs(this.connection);
@@ -832,7 +599,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
         rowCount: result.rows.length,
       };
     } catch (error) {
-      if (isPostgresTimeoutError(error)) {
+      if (isPgTimeoutError(error)) {
         throw queryDeadlineExceededError(this.deadlineMs, { cause: error });
       }
       throw error;

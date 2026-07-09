@@ -157,7 +157,7 @@ describe('KtxRedshiftScanConnector', () => {
       database: 'analytics',
       user: 'reader',
       password: 'test-password', // pragma: allowlist secret
-      options: '-c search_path=analytics,public',
+      options: '-c search_path=analytics,public -c statement_timeout=30000',
       ssl: { rejectUnauthorized: false },
     });
     const libpqPreferConfig = redshiftPoolConfigFromConfig({
