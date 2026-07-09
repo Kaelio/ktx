@@ -22,6 +22,7 @@ export interface LocalConnectionInfo {
 
 const DRIVER_TO_CONNECTION_TYPE: Record<string, ConnectionType> = {
   postgres: 'POSTGRESQL',
+  redshift: 'REDSHIFT',
   sqlite: 'SQLITE',
   duckdb: 'DUCKDB',
   sqlserver: 'SQLSERVER',

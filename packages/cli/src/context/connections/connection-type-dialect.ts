@@ -2,6 +2,7 @@ import type { ConnectionType } from './connection-type.js';
 
 const CONNECTION_TYPE_TO_SQLGLOT = {
   POSTGRESQL: 'postgres',
+  REDSHIFT: 'redshift',
   SQLITE: 'sqlite',
   DUCKDB: 'duckdb',
   SQLSERVER: 'tsql',

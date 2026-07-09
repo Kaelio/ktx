@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const connectionTypeSchema = z.enum([
   'POSTGRESQL',
+  'REDSHIFT',
   'SQLITE',
   'DUCKDB',
   'SQLSERVER',
