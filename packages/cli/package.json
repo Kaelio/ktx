@@ -1,6 +1,6 @@
 {
   "name": "@kaelio/ktx",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Standalone ktx context layer for data agents",
   "author": {
     "name": "Kaelio",

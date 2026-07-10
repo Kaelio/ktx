@@ -1,7 +1,11 @@
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
-import { createHttpSemanticLayerComputePort, createPythonSemanticLayerComputePort } from '../../../src/context/daemon/semantic-layer-compute.js';
+import {
+  createHttpSemanticLayerComputePort,
+  createPythonSemanticLayerComputePort,
+  KtxDaemonComputeError,
+} from '../../../src/context/daemon/semantic-layer-compute.js';
 
 const source = {
   name: 'orders',
@@ -171,6 +175,79 @@ describe('createPythonSemanticLayerComputePort', () => {
     });
 
     expect(runJson).toHaveBeenCalledWith('semantic-generate-sources', sourceGenerationDaemonPayload);
+  });
+});
+
+describe('KtxDaemonComputeError classification', () => {
+  const query = { sources: [source], dialect: 'postgres', query: { measures: ['count(*)'], dimensions: [] } };
+
+  function exitingPort(code: number, stderr: string) {
+    return createPythonSemanticLayerComputePort({
+      command: process.execPath,
+      args: [
+        '-e',
+        `process.stdin.on('data',()=>{});process.stdin.on('end',()=>{process.stderr.write(${JSON.stringify(stderr)});process.exit(${code})});`,
+      ],
+    });
+  }
+
+  async function rejection(promise: Promise<unknown>): Promise<KtxDaemonComputeError> {
+    const error = await promise.then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(KtxDaemonComputeError);
+    return error as KtxDaemonComputeError;
+  }
+
+  it('marks a subprocess input-rejection (exit 3) as inputRejected', async () => {
+    const error = await rejection(exitingPort(3, 'Measure expr does not reference any source').query(query));
+    expect(error.inputRejected).toBe(true);
+    expect(error.detail).toContain('does not reference any source');
+  });
+
+  it('marks a subprocess fault (exit 1) as not inputRejected', async () => {
+    const error = await rejection(exitingPort(1, 'Traceback: boom').query(query));
+    expect(error.inputRejected).toBe(false);
+    expect(error.detail).toContain('boom');
+  });
+
+  async function statusPort(statusCode: number, body: string): Promise<{ port: ReturnType<typeof createHttpSemanticLayerComputePort>; close: () => void }> {
+    const server = createServer((_request, response) => {
+      response.writeHead(statusCode, { 'content-type': 'application/json' });
+      response.end(body);
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+    return {
+      port: createHttpSemanticLayerComputePort({ baseUrl: `http://127.0.0.1:${address.port}` }),
+      close: () => server.close(),
+    };
+  }
+
+  it('marks an HTTP 400 as inputRejected and unwraps the daemon detail', async () => {
+    const { port, close } = await statusPort(400, JSON.stringify({ detail: 'Measure expr does not reference any source' }));
+    try {
+      const error = await rejection(port.query(query));
+      expect(error.inputRejected).toBe(true);
+      expect(error.detail).toBe('Measure expr does not reference any source');
+    } finally {
+      close();
+    }
+  });
+
+  it('marks an HTTP 500 as not inputRejected', async () => {
+    const { port, close } = await statusPort(500, JSON.stringify({ detail: 'Daemon request failed: boom' }));
+    try {
+      const error = await rejection(port.query(query));
+      expect(error.inputRejected).toBe(false);
+    } finally {
+      close();
+    }
   });
 });
 

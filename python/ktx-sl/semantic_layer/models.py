@@ -169,6 +169,9 @@ class SemanticQuery(BaseModel):
     order_by: list[str | dict[str, Any]] = []
     limit: int = 1000
     include_empty: bool = True
+    # Set by ktx from the connection's query_policy, never by agent input:
+    # reject runtime-composed measures so only predefined measures execute.
+    predefined_measures_only: bool = False
 
     @model_validator(mode="after")
     def _validate_limit(self) -> SemanticQuery:

@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from pydantic import ValidationError
 
 from ktx_daemon import VERSION
 from ktx_daemon.code_execution import (
@@ -268,6 +269,14 @@ def create_app(
     ) -> SemanticLayerQueryResponse:
         try:
             return query_semantic_layer(request)
+        except ValidationError as error:
+            # A malformed source or response is a ktx contract fault, not a
+            # caller rejection; surface it as a server fault (500) so the Node
+            # client does not classify it as an expected query rejection, matching
+            # the subprocess transport (exit 1) and query_semantic_layer's own
+            # report. ValidationError subclasses ValueError, so catch it first.
+            logger.exception("Semantic query failed on a malformed source")
+            raise HTTPException(status_code=500, detail=str(error)) from error
         except ValueError as error:
             logger.warning("Semantic query rejected: %s", error)
             raise HTTPException(status_code=400, detail=str(error)) from error

@@ -424,6 +424,24 @@ def test_semantic_query_endpoint_maps_value_error_to_400() -> None:
     assert "missing.order_count" in response.json()["detail"]
 
 
+def test_semantic_query_endpoint_maps_malformed_source_to_fault() -> None:
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    invalid_source = {
+        key: value for key, value in ORDERS_SOURCE.items() if key != "table"
+    }
+
+    response = client.post(
+        "/semantic-layer/query",
+        json={
+            "sources": [invalid_source],
+            "dialect": "postgres",
+            "query": {"measures": ["orders.order_count"], "dimensions": []},
+        },
+    )
+
+    assert response.status_code == 500
+
+
 def test_semantic_validate_endpoint_returns_structured_validation() -> None:
     client = TestClient(create_app())
     invalid_source = {

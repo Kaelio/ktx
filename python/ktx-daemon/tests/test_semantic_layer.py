@@ -51,6 +51,34 @@ def test_query_semantic_layer_generates_sql_and_plan() -> None:
     assert response.plan["sources_used"] == ["orders"]
 
 
+def test_query_semantic_layer_enforces_predefined_measures_only() -> None:
+    with pytest.raises(ValueError, match="composed measure"):
+        query_semantic_layer(
+            SemanticLayerQueryRequest(
+                sources=[ORDERS_SOURCE],
+                dialect="postgres",
+                query={
+                    "measures": ["sum(orders.amount)"],
+                    "predefined_measures_only": True,
+                },
+            )
+        )
+
+
+def test_query_semantic_layer_allows_predefined_measures_under_policy() -> None:
+    response = query_semantic_layer(
+        SemanticLayerQueryRequest(
+            sources=[ORDERS_SOURCE],
+            dialect="postgres",
+            query={
+                "measures": ["orders.revenue"],
+                "predefined_measures_only": True,
+            },
+        )
+    )
+    assert "public.orders" in response.sql
+
+
 def test_query_semantic_layer_emits_plan_and_sql_debug_events(
     tmp_path: Path,
     monkeypatch,
@@ -97,7 +125,7 @@ def test_query_semantic_layer_emits_plan_and_sql_debug_events(
     assert "public.orders" not in captured.err
 
 
-def test_query_semantic_layer_reports_exception(monkeypatch) -> None:
+def test_query_semantic_layer_reports_unexpected_fault(monkeypatch) -> None:
     from ktx_daemon import semantic_layer as semantic_layer_module
 
     reports: list[dict[str, object]] = []
@@ -105,12 +133,16 @@ def test_query_semantic_layer_reports_exception(monkeypatch) -> None:
     def fake_report(exception: BaseException, **kwargs: object) -> None:
         reports.append({"exception": exception, **kwargs})
 
-    monkeypatch.setattr(semantic_layer_module, "report_exception", fake_report)
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("engine construction failed")
 
-    with pytest.raises(ValueError):
+    monkeypatch.setattr(semantic_layer_module, "report_exception", fake_report)
+    monkeypatch.setattr(semantic_layer_module.SemanticEngine, "from_sources", boom)
+
+    with pytest.raises(RuntimeError):
         query_semantic_layer(
             SemanticLayerQueryRequest(
-                sources=[ORDERS_SOURCE, ORDERS_SOURCE],
+                sources=[ORDERS_SOURCE],
                 dialect="postgres",
                 projectId="a" * 64,
                 query={"measures": ["orders.order_count"]},
@@ -122,6 +154,32 @@ def test_query_semantic_layer_reports_exception(monkeypatch) -> None:
     assert reports[0]["handled"] is True
     assert reports[0]["fatal"] is False
     assert reports[0]["project_id"] == "a" * 64
+
+
+def test_query_semantic_layer_does_not_report_expected_query_rejection(
+    monkeypatch,
+) -> None:
+    from ktx_daemon import semantic_layer as semantic_layer_module
+
+    reports: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        semantic_layer_module,
+        "report_exception",
+        lambda *_args, **kwargs: reports.append(kwargs),
+    )
+
+    # A planner ValueError is the engine refusing the agent's query — surfaced to
+    # the caller and re-raised, but never filed as a ktx fault.
+    with pytest.raises(ValueError, match="does not reference any source"):
+        query_semantic_layer(
+            SemanticLayerQueryRequest(
+                sources=[ORDERS_SOURCE],
+                dialect="postgres",
+                query={"measures": ["count(*)"]},
+            )
+        )
+
+    assert reports == []
 
 
 def test_semantic_layer_request_rejects_project_id_field_name() -> None:

@@ -81,6 +81,9 @@ export interface SemanticLayerQueryInput {
   order_by?: Array<string | { field: string; direction?: string }>;
   limit?: number;
   include_empty?: boolean;
+  // Set by compileLocalSlQuery from the connection's query_policy, never from
+  // caller input: the planner rejects runtime-composed measures when true.
+  predefined_measures_only?: boolean;
 }
 
 export interface SemanticLayerQueryExecutionResult {
