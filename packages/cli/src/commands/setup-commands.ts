@@ -109,6 +109,8 @@ function shouldShowSetupEntryMenu(
     database?: KtxSetupDatabaseDriver[];
     databaseConnectionId?: string[];
     databaseUrl?: string;
+    databaseProjectId?: string;
+    databaseCredentials?: string;
     databaseSchema?: string[];
     enableQueryHistory?: boolean;
     disableQueryHistory?: boolean;
@@ -181,6 +183,8 @@ function shouldShowSetupEntryMenu(
     'embeddingApiKeyFile',
     'skipEmbeddings',
     'databaseUrl',
+    'databaseProjectId',
+    'databaseCredentials',
     'enableQueryHistory',
     'disableQueryHistory',
     'queryHistoryWindowDays',
@@ -272,6 +276,15 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
     )
     .addOption(
       new Option('--database-url <url>', 'URL, env:NAME, or file:/path for one new URL-style database connection').hideHelp(),
+    )
+    .addOption(
+      new Option('--database-project-id <id>', 'Billing project for one new BigQuery connection').hideHelp(),
+    )
+    .addOption(
+      new Option(
+        '--database-credentials <ref>',
+        'Optional env:NAME or file:/path credential reference for one new BigQuery connection',
+      ).hideHelp(),
     )
     .addOption(
       new Option('--database-schema <schema>', 'Database schema to include; repeatable')
@@ -467,6 +480,8 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
         ? { databaseConnectionIds: options.databaseConnectionId }
         : {}),
       ...(options.databaseUrl ? { databaseUrl: options.databaseUrl } : {}),
+      ...(options.databaseProjectId ? { databaseProjectId: options.databaseProjectId } : {}),
+      ...(options.databaseCredentials ? { databaseCredentials: options.databaseCredentials } : {}),
       databaseSchemas: options.databaseSchema,
       ...(options.enableQueryHistory ? { enableQueryHistory: true } : {}),
       ...(options.disableQueryHistory ? { disableQueryHistory: true } : {}),

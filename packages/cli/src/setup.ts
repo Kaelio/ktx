@@ -100,6 +100,8 @@ export type KtxSetupArgs =
       databaseConnectionIds?: string[];
       databaseConnectionId?: string;
       databaseUrl?: string;
+      databaseProjectId?: string;
+      databaseCredentials?: string;
       databaseSchemas: string[];
       enableQueryHistory?: boolean;
       disableQueryHistory?: boolean;
@@ -832,6 +834,8 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
             ...(args.databaseConnectionIds ? { databaseConnectionIds: args.databaseConnectionIds } : {}),
             ...(args.databaseConnectionId ? { databaseConnectionId: args.databaseConnectionId } : {}),
             ...(args.databaseUrl ? { databaseUrl: args.databaseUrl } : {}),
+            ...(args.databaseProjectId ? { databaseProjectId: args.databaseProjectId } : {}),
+            ...(args.databaseCredentials ? { databaseCredentials: args.databaseCredentials } : {}),
             databaseSchemas: args.databaseSchemas,
             ...(args.enableQueryHistory !== undefined ? { enableQueryHistory: args.enableQueryHistory } : {}),
             ...(args.disableQueryHistory !== undefined ? { disableQueryHistory: args.disableQueryHistory } : {}),

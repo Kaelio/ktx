@@ -211,16 +211,16 @@ describe('CLI local ingest adapters', () => {
     expect(adapters.some((adapter) => adapter.source === 'historic-sql')).toBe(true);
   });
 
-  it('registers BigQuery historic SQL from the requested connection', async () => {
+  it('registers BigQuery historic SQL with Application Default Credentials', async () => {
     await writeProject(
       tempDir,
       [
         'connections:',
         '  bq:',
         '    driver: bigquery',
+        '    project_id: demo-project',
         '    dataset_id: analytics',
         '    location: us',
-        '    credentials_json: \'{"project_id":"demo-project"}\'',
         '    context:',
         '      queryHistory:',
         '        enabled: true',
@@ -287,6 +287,7 @@ describe('CLI local ingest adapters', () => {
         'connections:',
         '  bq:',
         '    driver: bigquery',
+        '    project_id: demo-project',
         '    dataset_id: analytics',
         '    location: us',
         `    credentials_json: 'file:${credentialsPath}'`,
@@ -312,7 +313,7 @@ describe('CLI local ingest adapters', () => {
     ]);
   });
 
-  it('uses query-history wording for public BigQuery capability errors', async () => {
+  it('uses the canonical BigQuery project validation for query history ingest', async () => {
     await writeProject(
       tempDir,
       [
@@ -321,7 +322,6 @@ describe('CLI local ingest adapters', () => {
         '    driver: bigquery',
         '    readonly: true',
         '    dataset_id: analytics',
-        '    credentials_json: "{}"',
         '    context:',
         '      queryHistory:',
         '        enabled: true',
@@ -338,6 +338,6 @@ describe('CLI local ingest adapters', () => {
         historicSqlConnectionId: 'bq',
         sqlAnalysis: sqlAnalysisStub(),
       }),
-    ).toThrow('Query history BigQuery connection requires credentials_json.project_id');
+    ).toThrow('connections.bq.project_id');
   });
 });

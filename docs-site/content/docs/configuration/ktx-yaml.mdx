@@ -111,7 +111,7 @@ context-source drivers share the map.
 | `sqlite` | Warehouse | `driver` | `url` or `path`, `enabled_tables` |
 | `duckdb` | Warehouse | `driver` | `url` or `path`, `enabled_tables` |
 | `sqlserver` | Warehouse | `driver` | `url`, `enabled_tables` |
-| `bigquery` | Warehouse | `driver` | `credentials_json`, `dataset_ids`, `enabled_tables`, `historicSql` |
+| `bigquery` | Warehouse | `driver`, `project_id` | `credentials_json`, `dataset_ids`, `enabled_tables`, `historicSql` |
 | `snowflake` | Warehouse | `driver` | `schema_names`, `enabled_tables`, `historicSql` |
 | `clickhouse` | Warehouse | `driver` | `url`, `database`, `databases`, `enabled_tables` |
 | `metabase` | Context source | `driver`, `api_url` | `api_key_ref`, `mappings` |
@@ -169,15 +169,15 @@ connections:
     databases: [analytics, mart]
   bigquery-warehouse:
     driver: bigquery
-    credentials_json: file:./service-account.json
+    project_id: my-gcp-project
     location: US
     dataset_ids: [analytics, mart]
 ```
 
 A BigQuery `dataset_ids` / `dataset_id` entry may be written `project.dataset`
 to introspect a dataset hosted in another project (for example
-`bigquery-public-data.austin_311`); jobs still bill to the `project_id` in
-`credentials_json`. A bare `dataset` keeps using your own project. See
+`bigquery-public-data.austin_311`); jobs still bill to the connection's
+`project_id`. A bare `dataset` keeps using that project. See
 [Primary sources → BigQuery](/docs/integrations/primary-sources#cross-project-datasets).
 
 For Postgres, MySQL, SQL Server, and Snowflake connections, set

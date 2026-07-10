@@ -569,7 +569,7 @@ describe('setup databases step', () => {
       {
         driver: 'bigquery',
         selectValues: ['no'],
-        textValues: ['', '/path/to/service-account.json', ''],
+        textValues: ['', 'project-1', '/path/to/service-account.json', ''],
         expectedTextPrompts: [
           {
             message: connectionNamePrompt('BigQuery'),
@@ -577,7 +577,10 @@ describe('setup databases step', () => {
             initialValue: 'bigquery-warehouse',
           },
           {
-            message: 'Path to service account JSON file',
+            message: 'BigQuery billing project ID',
+          },
+          {
+            message: 'Optional path to service account JSON file\nPress Enter to use Application Default Credentials.',
           },
           {
             message: 'BigQuery location\nPress Enter for US, or enter a location like EU.',
@@ -2029,7 +2032,7 @@ describe('setup databases step', () => {
     const prompts = makePromptAdapter({
       multiselectValues: [['bigquery']],
       selectValues: ['no', 'continue'],
-      textValues: ['bigquery-warehouse', '/tmp/service-account.json', 'US'],
+      textValues: ['bigquery-warehouse', 'project-1', '/tmp/service-account.json', 'US'],
     });
     const listSchemas = vi.fn(async () => ['analytics']);
     const listTables = vi.fn(async () => [{ catalog: 'project-1', schema: 'analytics', name: 'orders', kind: 'table' as const }]);
@@ -2240,6 +2243,7 @@ describe('setup databases step', () => {
         'connections:',
         '  bigquery-warehouse:',
         '    driver: bigquery',
+        '    project_id: project-1',
         '    dataset_ids:',
         "      - 'sales'",
         '    credentials_json: env:BIGQUERY_CREDENTIALS_JSON',
@@ -2272,6 +2276,32 @@ describe('setup databases step', () => {
       driver: 'bigquery',
       dataset_ids: ['sales'],
     });
+  });
+
+  it('adds a non-interactive BigQuery connection that uses Application Default Credentials', async () => {
+    const result = await runKtxSetupDatabasesStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        databaseDrivers: ['bigquery'],
+        databaseConnectionId: 'analytics',
+        databaseProjectId: 'project-1',
+        databaseSchemas: ['analytics'],
+        skipDatabases: false,
+      },
+      makeIo().io,
+      { testConnection: vi.fn(async () => 0), scanConnection: vi.fn(async () => 0) },
+    );
+
+    expect(result.status).toBe('ready');
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.connections.analytics).toMatchObject({
+      driver: 'bigquery',
+      project_id: 'project-1',
+      dataset_ids: ['analytics'],
+      location: 'US',
+    });
+    expect(config.connections.analytics).not.toHaveProperty('credentials_json');
   });
 
   it('preserves existing Postgres schemas in non-interactive setup without rediscovering', async () => {
@@ -3101,6 +3131,7 @@ describe('setup databases step', () => {
         'connections:',
         '  analytics:',
         '    driver: bigquery',
+        '    project_id: project-1',
         '    dataset_id: analytics',
         '    credentials_json: env:BIGQUERY_CREDENTIALS_JSON',
         '',
@@ -3169,6 +3200,7 @@ describe('setup databases step', () => {
         'connections:',
         '  analytics:',
         '    driver: bigquery',
+        '    project_id: project-1',
         '    dataset_id: analytics',
         '    credentials_json: env:BIGQUERY_CREDENTIALS_JSON',
         '',

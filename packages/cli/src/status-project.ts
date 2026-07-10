@@ -407,10 +407,23 @@ function buildConnectionStatus(
       return warn('account not set', 'Rerun `ktx setup`');
     }
     case 'bigquery': {
+      const project = resolveRef((conn as Record<string, unknown>).project_id, env);
+      if (project.resolved.length === 0) {
+        const hint = envHint((conn as Record<string, unknown>).project_id);
+        return warn(
+          hint ? `project id missing (env: ${hint})` : 'project_id not set',
+          hint ? `Set ${hint}` : 'Set project_id for this BigQuery connection',
+        );
+      }
+      const credentialsRef = (conn as Record<string, unknown>).credentials_json;
+      if (credentialsRef === undefined) return ok(`ADC configured for project: ${project.resolved}`);
       const cred = resolveRef((conn as Record<string, unknown>).credentials_json, env);
-      if (cred.resolved.length > 0) return ok('credentials configured');
+      if (cred.resolved.length > 0) return ok(`credentials configured for project: ${project.resolved}`);
       const hint = envHint((conn as Record<string, unknown>).credentials_json);
-      return warn(hint ? `credentials missing (env: ${hint})` : 'credentials not set', hint ? `Set ${hint}` : 'Rerun `ktx setup`');
+      return warn(
+        hint ? `credentials missing (env: ${hint})` : 'credentials reference is empty',
+        hint ? `Set ${hint}` : 'Remove credentials_json to use ADC',
+      );
     }
     case 'duckdb':
     case 'sqlite': {

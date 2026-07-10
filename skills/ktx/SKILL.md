@@ -54,7 +54,8 @@ Before invoking `ktx setup`, collect in one round:
    no key; use `openai` only if the user already has a key, then pass
    `--embedding-api-key-env OPENAI_API_KEY`).
 4. Database: driver, connection id, URL (or `env:` / `file:` ref), and one or
-   more schemas.
+   more schemas. For BigQuery, collect the billing project id and use ADC by
+   default; collect a credential reference only when ADC is unavailable.
 5. Optional context sources (dbt, Metabase, Looker, LookML, MetricFlow,
    Notion). Add each one with a follow-up `ktx setup --source …` run (see
    [Add context sources](#add-context-sources)); use `--skip-sources` only
@@ -84,6 +85,21 @@ Do not discover these inputs across multiple setup runs.
      --database <driver> --database-connection-id <id> \
      --database-url '<raw-url | file:/abs/path>' \
      --database-schema <schema> \
+     --skip-sources \
+     --skip-agents
+   ```
+
+   For BigQuery, replace `--database-url` with the billing project flag. Omit
+   `--database-credentials` to use Application Default Credentials:
+
+   ```bash
+   ktx setup --no-input --yes \
+     --project-dir <path> \
+     --llm-backend claude-code \
+     --embedding-backend sentence-transformers \
+     --database bigquery --database-connection-id <id> \
+     --database-project-id <project-id> \
+     --database-schema <dataset> \
      --skip-sources \
      --skip-agents
    ```

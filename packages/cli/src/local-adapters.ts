@@ -1,7 +1,12 @@
 import { createAthenaLiveDatabaseIntrospection } from './connectors/athena/live-database-introspection.js';
 import { isKtxAthenaConnectionConfig } from './connectors/athena/connector.js';
 import { createBigQueryLiveDatabaseIntrospection } from './connectors/bigquery/live-database-introspection.js';
-import { isKtxBigQueryConnectionConfig, KtxBigQueryScanConnector, type KtxBigQueryConnectionConfig } from './connectors/bigquery/connector.js';
+import {
+  bigQueryConnectionConfigFromConfig,
+  isKtxBigQueryConnectionConfig,
+  KtxBigQueryScanConnector,
+  type KtxBigQueryConnectionConfig,
+} from './connectors/bigquery/connector.js';
 import { createClickHouseLiveDatabaseIntrospection } from './connectors/clickhouse/live-database-introspection.js';
 import { isKtxClickHouseConnectionConfig } from './connectors/clickhouse/connector.js';
 import { createMysqlLiveDatabaseIntrospection } from './connectors/mysql/live-database-introspection.js';
@@ -38,7 +43,6 @@ import {
   type ManagedPythonDaemonHttpOptions,
 } from './managed-python-http.js';
 import type { KtxOperationalLogger } from './io/logger.js';
-import { resolveKtxConfigReference } from './context/core/config-reference.js';
 
 function hasSnowflakeDriver(connection: unknown): boolean {
   return (
@@ -278,20 +282,7 @@ async function createEphemeralSnowflakeHistoricSqlClient(
   };
 }
 
-function bigQueryProjectId(connection: KtxBigQueryConnectionConfig, env: NodeJS.ProcessEnv): string {
-  const raw = typeof connection.credentials_json === 'string' ? connection.credentials_json : '';
-  const resolved = resolveKtxConfigReference(raw, env);
-  if (!resolved) {
-    throw new Error('Query history BigQuery connection requires credentials_json');
-  }
-  const parsed = JSON.parse(resolved) as { project_id?: unknown };
-  if (typeof parsed.project_id !== 'string' || parsed.project_id.trim().length === 0) {
-    throw new Error('Query history BigQuery connection requires credentials_json.project_id');
-  }
-  return parsed.project_id;
-}
-
-function bigQueryRegion(connection: KtxBigQueryConnectionConfig): string {
+function bigQueryRegion(connection: Record<string, unknown>): string {
   return typeof connection.location === 'string' && connection.location.trim().length > 0
     ? connection.location.trim()
     : 'us';
@@ -338,7 +329,10 @@ function historicSqlOptionsForLocalRun(
       ...base,
       dialect,
       reader: new BigQueryHistoricSqlQueryHistoryReader({
-        projectId: bigQueryProjectId(connection, process.env),
+        projectId: bigQueryConnectionConfigFromConfig({
+          connectionId,
+          connection,
+        }).projectId,
         region: bigQueryRegion(connection),
       }) satisfies HistoricSqlReader,
       queryClient: createEphemeralBigQueryHistoricSqlClient(project, connectionId),

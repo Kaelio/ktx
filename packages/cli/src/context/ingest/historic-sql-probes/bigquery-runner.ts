@@ -6,8 +6,8 @@ import {
   type HistoricSqlProbeRunner,
   type HistoricSqlSuccessDetail,
 } from '../historic-sql-probes.js';
-import { resolveKtxConfigReference } from '../../core/config-reference.js';
 import {
+  bigQueryConnectionConfigFromConfig,
   isKtxBigQueryConnectionConfig,
   KtxBigQueryScanConnector,
   type KtxBigQueryConnectionConfig,
@@ -30,28 +30,6 @@ interface BigQueryJobsByProjectProbeRunnerOptions {
   createClient?: (
     input: HistoricSqlProbeInput & { connection: KtxBigQueryConnectionConfig },
   ) => ClientHandle;
-  resolveReference?: (value: string | undefined, env: NodeJS.ProcessEnv) => string | undefined;
-}
-
-function bigQueryProjectId(
-  connectionId: string,
-  connection: KtxBigQueryConnectionConfig,
-  env: NodeJS.ProcessEnv,
-  resolveReference: (value: string | undefined, env: NodeJS.ProcessEnv) => string | undefined,
-): string {
-  const rawCredentials =
-    typeof connection.credentials_json === 'string' ? connection.credentials_json : '';
-  const resolvedCredentials = resolveReference(rawCredentials, env);
-  if (!resolvedCredentials) {
-    throw new Error(`Query history BigQuery connection ${connectionId} requires credentials_json`);
-  }
-  const parsed = JSON.parse(resolvedCredentials) as { project_id?: unknown };
-  if (typeof parsed.project_id !== 'string' || parsed.project_id.trim().length === 0) {
-    throw new Error(
-      `Query history BigQuery connection ${connectionId} requires credentials_json.project_id`,
-    );
-  }
-  return parsed.project_id;
 }
 
 function bigQueryRegion(connection: KtxBigQueryConnectionConfig): string {
@@ -74,11 +52,6 @@ export class BigQueryJobsByProjectProbeRunner implements HistoricSqlProbeRunner 
   private readonly createClient: (
     input: HistoricSqlProbeInput & { connection: KtxBigQueryConnectionConfig },
   ) => ClientHandle;
-  private readonly resolveReference: (
-    value: string | undefined,
-    env: NodeJS.ProcessEnv,
-  ) => string | undefined;
-
   constructor(options: BigQueryJobsByProjectProbeRunnerOptions = {}) {
     this.createReader =
       options.createReader ??
@@ -108,7 +81,6 @@ export class BigQueryJobsByProjectProbeRunner implements HistoricSqlProbeRunner 
           cleanup: () => connector.cleanup(),
         };
       });
-    this.resolveReference = options.resolveReference ?? resolveKtxConfigReference;
   }
 
   async run(input: HistoricSqlProbeInput): Promise<GenericProbeResult> {
@@ -116,12 +88,11 @@ export class BigQueryJobsByProjectProbeRunner implements HistoricSqlProbeRunner 
     if (!isKtxBigQueryConnectionConfig(input.connection)) {
       throw new Error(`Native BigQuery connector cannot run driver "${inputDriver}"`);
     }
-    const projectId = bigQueryProjectId(
-      input.connectionId,
-      input.connection,
-      input.env ?? process.env,
-      this.resolveReference,
-    );
+    const projectId = bigQueryConnectionConfigFromConfig({
+      connectionId: input.connectionId,
+      connection: input.connection,
+      env: input.env,
+    }).projectId;
     const reader = this.createReader({
       projectId,
       region: bigQueryRegion(input.connection),
