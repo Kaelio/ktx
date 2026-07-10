@@ -1,6 +1,6 @@
 ---
 title: Primary Sources
-description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, MongoDB, or Amazon Athena.
+description: Connect ktx to PostgreSQL, Amazon Redshift, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, MongoDB, or Amazon Athena.
 ---
 
 **ktx** connects to your data warehouse or database to build schema context,
@@ -26,7 +26,7 @@ Agents should prefer environment or file references over literal secrets.
 
 | Field | Required | Applies to | Description |
 |-------|----------|------------|-------------|
-| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, `mongodb`, or `athena` |
+| `driver` | Yes | all connections | Connector driver such as `postgres`, `redshift`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, `mongodb`, or `athena` |
 | `url` | One of the connection methods | URL-style connectors | Database URL, `env:NAME`, or `file:/path/to/secret` |
 | `host`, `port`, `database`, `username`, `password` | One of the connection methods | PostgreSQL, MySQL, SQL Server | Field-by-field connection values |
 | `schema` or `schemas` | No | schema-aware warehouses | Single schema or list of schemas to scan |
@@ -123,6 +123,78 @@ This helps **ktx** understand how your team actually queries the data.
 - Full support for PostgreSQL types: `uuid`, `jsonb`, `timestamptz`, `numeric`, `text[]`, etc.
 
 ---
+
+## Amazon Redshift
+
+Amazon Redshift speaks the PostgreSQL wire protocol, so the connector reuses the
+PostgreSQL connection layer (via the `pg` driver) while reading metadata from
+Redshift-specific system views for accurate results. Supports schema
+introspection, primary/foreign key detection, column statistics, table
+sampling, and read-only SQL execution.
+
+Redshift connections are configured manually in `ktx.yaml`. `ktx setup` does not
+yet create or manage them interactively.
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  my-redshift:
+    driver: redshift
+    url: env:REDSHIFT_URL
+    schema: public
+```
+
+Or with individual fields:
+
+```yaml title="ktx.yaml"
+connections:
+  my-redshift:
+    driver: redshift
+    host: analytics.123456789012.us-east-1.redshift.amazonaws.com
+    port: 5439
+    database: analytics
+    username: ktx_reader
+    password: env:REDSHIFT_PASSWORD
+    schemas:
+      - public
+      - analytics
+    ssl: true
+```
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| Password | `password: env:REDSHIFT_PASSWORD` or `password: file:/path/to/secret` |
+| Connection URL | `url: env:REDSHIFT_URL` |
+| SSL | `ssl: true`, optionally `rejectUnauthorized: false` for self-signed certs |
+
+IAM-based authentication (temporary credentials via `GetClusterCredentials`) is
+not yet supported and is planned as a follow-up.
+
+### Features
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Tables & views | Yes | Via `SVV_TABLES` |
+| Columns | Yes | Via `SVV_COLUMNS` |
+| Primary keys | Yes | Via `information_schema.table_constraints` |
+| Foreign keys | Yes | Declared constraints (Redshift does not enforce them) |
+| Row count estimates | Yes | Via `SVV_TABLE_INFO.tbl_rows` |
+| Column statistics | Yes | Reuses the PostgreSQL-compatible statistics path |
+| Table sampling | Yes | `TABLESAMPLE SYSTEM` |
+| Query history | No | `STL_QUERY` ingestion is planned as a follow-up |
+
+### Dialect notes
+
+- Redshift uses the same SQL compilation as PostgreSQL (`LIMIT/OFFSET`
+  pagination, positional parameters, `COUNT(*) FILTER (WHERE ...)`).
+- Metadata is read from Redshift system views (`SVV_TABLES`, `SVV_COLUMNS`,
+  `SVV_TABLE_INFO`) rather than `pg_catalog`, because `pg_class.reltuples` is
+  unreliable on Redshift and the `SVV_*` views report accurate row counts and
+  cover external (Spectrum) schemas.
+- The default port is `5439`.
 
 ## Snowflake
 

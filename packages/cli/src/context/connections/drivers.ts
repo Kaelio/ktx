@@ -169,6 +169,27 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
       };
     },
   },
+  redshift: {
+    driver: 'redshift',
+    scopeConfigKey: 'schemas',
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/redshift/connector.js');
+      return {
+        isConnectionConfig: (connection) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxRedshiftConnectionConfig>[0];
+          return m.isKtxRedshiftConnectionConfig(typedConnection);
+        },
+        createScanConnector: ({ connectionId, connection }) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxRedshiftConnectionConfig>[0];
+          if (!m.isKtxRedshiftConnectionConfig(typedConnection)) {
+            throw invalidConnectionConfig('redshift');
+          }
+          return new m.KtxRedshiftScanConnector({ connectionId, connection: typedConnection });
+        },
+      };
+    },
+  },
   sqlite: {
     driver: 'sqlite',
     scopeConfigKey: null,

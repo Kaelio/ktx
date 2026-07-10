@@ -47,55 +47,55 @@ import {
   type KtxTableSampleResult,
 } from '../../context/scan/types.js';
 
-export type KtxPostgresConnectionConfig = KtxPgConnectionConfig;
-export type KtxPostgresPoolConfig = KtxPgPoolConfig;
-type KtxPostgresPool = KtxPgPool;
-export type KtxPostgresPoolFactory = KtxPgPoolFactory;
-type KtxPostgresResolvedEndpoint = KtxPgResolvedEndpoint;
-export type KtxPostgresEndpointResolver = KtxPgEndpointResolver;
+export type KtxRedshiftConnectionConfig = KtxPgConnectionConfig;
+export type KtxRedshiftPoolConfig = KtxPgPoolConfig;
+type KtxRedshiftPool = KtxPgPool;
+export type KtxRedshiftPoolFactory = KtxPgPoolFactory;
+type KtxRedshiftResolvedEndpoint = KtxPgResolvedEndpoint;
+export type KtxRedshiftEndpointResolver = KtxPgEndpointResolver;
 
-export interface KtxPostgresScanConnectorOptions {
+export interface KtxRedshiftScanConnectorOptions {
   connectionId: string;
-  connection: KtxPostgresConnectionConfig | undefined;
-  poolFactory?: KtxPostgresPoolFactory;
-  endpointResolver?: KtxPostgresEndpointResolver;
+  connection: KtxRedshiftConnectionConfig | undefined;
+  poolFactory?: KtxRedshiftPoolFactory;
+  endpointResolver?: KtxRedshiftEndpointResolver;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
 }
 
-export interface KtxPostgresReadOnlyQueryInput extends KtxReadOnlyQueryInput {
+export interface KtxRedshiftReadOnlyQueryInput extends KtxReadOnlyQueryInput {
   params?: Record<string, unknown> | unknown[];
 }
 
-export interface KtxPostgresColumnDistinctValuesOptions {
+export interface KtxRedshiftColumnDistinctValuesOptions {
   maxCardinality: number;
   limit: number;
   sampleSize?: number;
 }
 
-export interface KtxPostgresColumnDistinctValuesResult {
+export interface KtxRedshiftColumnDistinctValuesResult {
   values: string[] | null;
   cardinality: number;
 }
 
-export interface KtxPostgresColumnStatisticsResult {
+export interface KtxRedshiftColumnStatisticsResult {
   cardinalityByColumn: Map<string, number>;
 }
 
-export interface KtxPostgresTableSampleResult extends KtxTableSampleResult {
+export interface KtxRedshiftTableSampleResult extends KtxTableSampleResult {
   headerTypes?: string[];
 }
 
-type PostgresTableRef = Pick<KtxTableRef, 'name'> & Partial<Pick<KtxTableRef, 'catalog' | 'db'>>;
+type RedshiftTableRef = Pick<KtxTableRef, 'name'> & Partial<Pick<KtxTableRef, 'catalog' | 'db'>>;
 
-interface PostgresTableRow {
+interface RedshiftTableRow {
   table_name: string;
   table_kind: string;
   row_count: unknown;
   table_comment: string | null;
 }
 
-interface PostgresColumnRow {
+interface RedshiftColumnRow {
   table_name: string;
   column_name: string;
   data_type: string;
@@ -103,12 +103,12 @@ interface PostgresColumnRow {
   column_comment: string | null;
 }
 
-interface PostgresPrimaryKeyRow {
+interface RedshiftPrimaryKeyRow {
   table_name: string;
   column_name: string;
 }
 
-interface PostgresForeignKeyRow {
+interface RedshiftForeignKeyRow {
   table_name: string;
   column_name: string;
   foreign_table_schema: string | null;
@@ -117,62 +117,73 @@ interface PostgresForeignKeyRow {
   constraint_name: string | null;
 }
 
-interface PostgresSchemaRow {
+interface RedshiftSchemaRow {
   schema_name: string;
 }
 
-interface PostgresTableListRow {
+interface RedshiftTableListRow {
   schema_name: string;
   table_name: string;
   table_kind: string;
 }
 
-interface PostgresCountRow {
+interface RedshiftCountRow {
   count?: unknown;
   cardinality?: unknown;
 }
 
-interface PostgresDistinctValueRow {
+interface RedshiftDistinctValueRow {
   val: unknown;
 }
 
-interface PostgresStatsRow {
+interface RedshiftStatsRow {
   column_name: string;
   estimated_cardinality: unknown;
 }
 
 /** @internal */
-export const preparePostgresReadOnlyQuery = preparePgReadOnlyQuery;
+export const prepareRedshiftReadOnlyQuery = preparePgReadOnlyQuery;
 
-export function isKtxPostgresConnectionConfig(
-  connection: KtxPostgresConnectionConfig | undefined,
-): connection is KtxPostgresConnectionConfig {
+/**
+ * Build a positional `IN ($n, $n+1, ...)` predicate. Redshift does not accept a
+ * bound array for `= ANY($1)` the way PostgreSQL does, so scoped predicates are
+ * expanded into one placeholder per value. Placeholders are derived from the
+ * value count only, never from the values themselves.
+ */
+function positionalInClause(values: readonly string[], columnExpression: string, startIndex: number): string {
+  const placeholders = values.map((_value, index) => `$${startIndex + index}`);
+  return `${columnExpression} IN (${placeholders.join(', ')})`;
+}
+
+export function isKtxRedshiftConnectionConfig(
+  connection: KtxRedshiftConnectionConfig | undefined,
+): connection is KtxRedshiftConnectionConfig {
   const driver = String(connection?.driver ?? '').toLowerCase();
-  return driver === 'postgres';
+  return driver === 'redshift';
 }
 
 /** @internal */
-export function postgresPoolConfigFromConfig(input: {
+export function redshiftPoolConfigFromConfig(input: {
   connectionId: string;
-  connection: KtxPostgresConnectionConfig | undefined;
+  connection: KtxRedshiftConnectionConfig | undefined;
   env?: NodeJS.ProcessEnv;
-}): KtxPostgresPoolConfig {
+}): KtxRedshiftPoolConfig {
   const inputDriver = input.connection?.driver ?? 'unknown';
-  if (!isKtxPostgresConnectionConfig(input.connection)) {
-    throw new Error(`Native PostgreSQL connector cannot run driver "${inputDriver}"`);
+  if (!isKtxRedshiftConnectionConfig(input.connection)) {
+    throw new Error(`Native Redshift connector cannot run driver "${inputDriver}"`);
   }
   return pgPoolConfigFromConfig({
     connectionId: input.connectionId,
     connection: input.connection,
-    defaultPort: 5432,
-    connectorLabel: 'Native PostgreSQL connector',
+    defaultPort: 5439,
+    connectorLabel: 'Native Redshift connector',
     env: input.env,
   });
 }
 
-export class KtxPostgresScanConnector implements KtxScanConnector {
+export class KtxRedshiftScanConnector implements KtxScanConnector {
   readonly id: string;
-  readonly driver = 'postgres' as const;
+  readonly driver = 'redshift' as const;
   readonly capabilities = createKtxConnectorCapabilities({
     tableSampling: true,
     columnSampling: true,
@@ -184,21 +195,21 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
   });
 
   private readonly connectionId: string;
-  private readonly connection: KtxPostgresConnectionConfig;
-  private readonly poolConfig: KtxPostgresPoolConfig;
-  private readonly poolFactory: KtxPostgresPoolFactory;
-  private readonly endpointResolver?: KtxPostgresEndpointResolver;
+  private readonly connection: KtxRedshiftConnectionConfig;
+  private readonly poolConfig: KtxRedshiftPoolConfig;
+  private readonly poolFactory: KtxRedshiftPoolFactory;
+  private readonly endpointResolver?: KtxRedshiftEndpointResolver;
   private readonly now: () => Date;
   private readonly deadlineMs: number;
-  private readonly dialect = getSqlDialectForDriver('postgres');
-  private pool: KtxPostgresPool | null = null;
+  private readonly dialect = getSqlDialectForDriver('redshift');
+  private pool: KtxRedshiftPool | null = null;
   private lastIdlePoolError: Error | null = null;
-  private resolvedEndpoint: KtxPostgresResolvedEndpoint | null = null;
+  private resolvedEndpoint: KtxRedshiftResolvedEndpoint | null = null;
 
-  constructor(options: KtxPostgresScanConnectorOptions) {
+  constructor(options: KtxRedshiftScanConnectorOptions) {
     this.connectionId = options.connectionId;
     this.connection = options.connection ?? {};
-    this.poolConfig = postgresPoolConfigFromConfig({
+    this.poolConfig = redshiftPoolConfigFromConfig({
       connectionId: options.connectionId,
       connection: options.connection,
       env: options.env,
@@ -207,7 +218,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     this.endpointResolver = options.endpointResolver;
     this.now = options.now ?? (() => new Date());
     this.deadlineMs = resolveQueryDeadlineMs(this.connection);
-    this.id = `postgres:${options.connectionId}`;
+    this.id = `redshift:${options.connectionId}`;
   }
 
   async testConnection(): Promise<KtxConnectorTestResult> {
@@ -232,7 +243,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     }
     return {
       connectionId: this.connectionId,
-      driver: 'postgres',
+      driver: 'redshift',
       extractedAt: this.now().toISOString(),
       scope: { schemas },
       metadata: {
@@ -247,7 +258,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     };
   }
 
-  async sampleTable(input: KtxTableSampleInput, _ctx: KtxScanContext): Promise<KtxPostgresTableSampleResult> {
+  async sampleTable(input: KtxTableSampleInput, _ctx: KtxScanContext): Promise<KtxRedshiftTableSampleResult> {
     this.assertConnection(input.connectionId);
     const result = await this.query(this.dialect.generateSampleQuery(this.qTableName(input.table), input.limit, input.columns));
     return {
@@ -275,12 +286,12 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
       : { min: null, max: null, average: null, nullCount: null, distinctCount: value };
   }
 
-  async executeReadOnly(input: KtxPostgresReadOnlyQueryInput, _ctx: KtxScanContext): Promise<KtxQueryResult> {
+  async executeReadOnly(input: KtxRedshiftReadOnlyQueryInput, _ctx: KtxScanContext): Promise<KtxQueryResult> {
     this.assertConnection(input.connectionId);
     const limitedSql = limitSqlForExecution(assertReadOnlySql(input.sql), input.maxRows);
     const prepared = Array.isArray(input.params)
       ? { sql: limitedSql, params: input.params }
-      : preparePostgresReadOnlyQuery(limitedSql, input.params);
+      : prepareRedshiftReadOnlyQuery(limitedSql, input.params);
     const result = await this.query(prepared.sql, prepared.params);
     return { ...result, rowCount: result.rows.length };
   }
@@ -288,12 +299,12 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
   async getColumnDistinctValues(
     table: KtxTableRef,
     columnName: string,
-    options: KtxPostgresColumnDistinctValuesOptions,
-  ): Promise<KtxPostgresColumnDistinctValuesResult | null> {
+    options: KtxRedshiftColumnDistinctValuesOptions,
+  ): Promise<KtxRedshiftColumnDistinctValuesResult | null> {
     const sampleSize = options.sampleSize ?? 10000;
     const tableName = this.qTableName(table);
     const quotedColumn = this.dialect.quoteIdentifier(columnName);
-    const cardinalityRows = await this.queryRaw<PostgresCountRow>(
+    const cardinalityRows = await this.queryRaw<RedshiftCountRow>(
       this.dialect.generateCardinalitySampleQuery(tableName, quotedColumn, sampleSize),
     );
     const cardinality = finiteNumber(cardinalityRows[0]?.cardinality);
@@ -306,7 +317,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     if (cardinality > options.maxCardinality) {
       return { values: null, cardinality };
     }
-    const valuesRows = await this.queryRaw<PostgresDistinctValueRow>(
+    const valuesRows = await this.queryRaw<RedshiftDistinctValueRow>(
       this.dialect.generateDistinctValuesQuery(tableName, quotedColumn, options.limit),
     );
     return {
@@ -315,13 +326,13 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     };
   }
 
-  async getColumnStatistics(table: KtxTableRef): Promise<KtxPostgresColumnStatisticsResult | null> {
+  async getColumnStatistics(table: KtxTableRef): Promise<KtxRedshiftColumnStatisticsResult | null> {
     const schema = table.db ?? schemasFromConnection(this.connection)[0] ?? 'public';
     const sql = this.dialect.generateColumnStatisticsQuery(schema, table.name);
     if (!sql) {
       return null;
     }
-    const rows = await this.queryRaw<PostgresStatsRow>(sql);
+    const rows = await this.queryRaw<RedshiftStatsRow>(sql);
     const cardinalityByColumn = new Map<string, number>();
     for (const row of rows) {
       const cardinality = finiteNumber(row.estimated_cardinality);
@@ -332,16 +343,16 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     return cardinalityByColumn.size > 0 ? { cardinalityByColumn } : null;
   }
 
-  async getTableRowCount(table: string | PostgresTableRef): Promise<number> {
+  async getTableRowCount(table: string | RedshiftTableRef): Promise<number> {
     const tableRef =
       typeof table === 'string'
         ? { catalog: null, db: schemasFromConnection(this.connection)[0] ?? 'public', name: table }
         : table;
-    const rows = await this.queryRaw<PostgresCountRow>(`SELECT COUNT(*) AS count FROM ${this.qTableName(tableRef)}`);
+    const rows = await this.queryRaw<RedshiftCountRow>(`SELECT COUNT(*) AS count FROM ${this.qTableName(tableRef)}`);
     return finiteNumber(rows[0]?.count) ?? 0;
   }
 
-  qTableName(table: PostgresTableRef): string {
+  qTableName(table: RedshiftTableRef): string {
     return this.dialect.formatTableName(table);
   }
 
@@ -350,7 +361,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
   }
 
   async listSchemas(): Promise<string[]> {
-    const rows = await this.queryRaw<PostgresSchemaRow>(`
+    const rows = await this.queryRaw<RedshiftSchemaRow>(`
       SELECT schema_name
       FROM information_schema.schemata
       WHERE schema_name <> 'information_schema'
@@ -363,16 +374,17 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
   async listTables(schemas?: string[]): Promise<KtxTableListEntry[]> {
     const filterSchemas = schemas ?? (await this.listSchemas());
     if (filterSchemas.length === 0) return [];
-    const rows = await this.queryRaw<PostgresTableListRow>(
+    const schemaPredicate = positionalInClause(filterSchemas, 'table_schema', 1);
+    const rows = await this.queryRaw<RedshiftTableListRow>(
       `
-      SELECT n.nspname AS schema_name, c.relname AS table_name, c.relkind AS table_kind
-      FROM pg_catalog.pg_class c
-      JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-      WHERE n.nspname = ANY($1)
-        AND c.relkind IN ('r', 'v')
-      ORDER BY n.nspname, c.relname
+      SELECT table_schema AS schema_name, table_name AS table_name,
+        CASE WHEN table_type = 'VIEW' THEN 'v' ELSE 'r' END AS table_kind
+      FROM svv_tables
+      WHERE ${schemaPredicate}
+        AND table_type IN ('BASE TABLE', 'VIEW', 'EXTERNAL TABLE')
+      ORDER BY table_schema, table_name
       `,
-      [filterSchemas],
+      [...filterSchemas],
     );
     return rows.map((row) => ({
       catalog: null,
@@ -399,53 +411,47 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     snapshotWarnings: KtxScanWarning[],
   ): Promise<KtxSchemaTable[]> {
     if (scopedNames && scopedNames.length === 0) return [];
-    const pgCatalogScopeClause = scopedNames ? 'AND c.relname = ANY($2)' : '';
-    const tableConstraintScopeClause = scopedNames ? 'AND tc.table_name = ANY($2)' : '';
-    const scopeValues = scopedNames ? [scopedNames] : [];
-    const tables = await this.queryRaw<PostgresTableRow>(
+    // Schema is $1 in every query below, so scoped table names start at $2.
+    const svvTableScopeClause = scopedNames ? `AND ${positionalInClause(scopedNames, 't.table_name', 2)}` : '';
+    const svvColumnScopeClause = scopedNames ? `AND ${positionalInClause(scopedNames, 'table_name', 2)}` : '';
+    const tableConstraintScopeClause = scopedNames ? `AND ${positionalInClause(scopedNames, 'tc.table_name', 2)}` : '';
+    const scopeValues = scopedNames ? [...scopedNames] : [];
+    const tables = await this.queryRaw<RedshiftTableRow>(
       `
       SELECT
-        c.relname AS table_name,
-        c.relkind AS table_kind,
-        c.reltuples::bigint AS row_count,
-        d.description AS table_comment
-      FROM pg_catalog.pg_class c
-      JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-      LEFT JOIN pg_catalog.pg_description d
-        ON d.objoid = c.oid AND d.objsubid = 0
-      WHERE n.nspname = $1
-        AND c.relkind IN ('r', 'v')
-        ${pgCatalogScopeClause}
-      ORDER BY c.relname
+        t.table_name AS table_name,
+        CASE WHEN t.table_type = 'VIEW' THEN 'v' ELSE 'r' END AS table_kind,
+        ti.tbl_rows AS row_count,
+        t.remarks AS table_comment
+      FROM svv_tables t
+      LEFT JOIN svv_table_info ti
+        ON ti.schema = t.table_schema AND ti.\"table\" = t.table_name
+      WHERE t.table_schema = $1
+        AND t.table_type IN ('BASE TABLE', 'VIEW', 'EXTERNAL TABLE')
+        ${svvTableScopeClause}
+      ORDER BY t.table_name
       `,
       [schema, ...scopeValues],
     );
-    const columns = await this.queryRaw<PostgresColumnRow>(
+    const columns = await this.queryRaw<RedshiftColumnRow>(
       `
       SELECT
-        c.relname AS table_name,
-        a.attname AS column_name,
-        format_type(a.atttypid, a.atttypmod) AS data_type,
-        NOT a.attnotnull AS is_nullable,
-        d.description AS column_comment
-      FROM pg_catalog.pg_attribute a
-      JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
-      JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-      LEFT JOIN pg_catalog.pg_description d
-        ON d.objoid = c.oid AND d.objsubid = a.attnum
-      WHERE n.nspname = $1
-        AND c.relkind IN ('r', 'v')
-        AND a.attnum > 0
-        AND NOT a.attisdropped
-        ${pgCatalogScopeClause}
-      ORDER BY c.relname, a.attnum
+        table_name AS table_name,
+        column_name AS column_name,
+        data_type AS data_type,
+        CASE WHEN is_nullable = 'YES' THEN TRUE ELSE FALSE END AS is_nullable,
+        remarks AS column_comment
+      FROM svv_columns
+      WHERE table_schema = $1
+        ${svvColumnScopeClause}
+      ORDER BY table_name, ordinal_position
       `,
       [schema, ...scopeValues],
     );
     const primaryKeysResult = await tryConstraintQuery(
       { schema, kind: 'primary_key', isDeniedError },
       () =>
-        this.queryRaw<PostgresPrimaryKeyRow>(
+        this.queryRaw<RedshiftPrimaryKeyRow>(
           `
       SELECT tc.table_name, kcu.column_name
       FROM information_schema.table_constraints tc
@@ -467,7 +473,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     const foreignKeysResult = await tryConstraintQuery(
       { schema, kind: 'foreign_key', isDeniedError },
       () =>
-        this.queryRaw<PostgresForeignKeyRow>(
+        this.queryRaw<RedshiftForeignKeyRow>(
           `
       SELECT
         tc.table_name,
@@ -512,10 +518,10 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
 
   private toSchemaTable(
     schema: string,
-    table: PostgresTableRow,
-    columns: PostgresColumnRow[],
+    table: RedshiftTableRow,
+    columns: RedshiftColumnRow[],
     primaryKeys: Set<string>,
-    foreignKeys: PostgresForeignKeyRow[],
+    foreignKeys: RedshiftForeignKeyRow[],
   ): KtxSchemaTable {
     const kind = table.table_kind === 'v' ? 'view' : 'table';
     return {
@@ -530,7 +536,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     };
   }
 
-  private toSchemaColumn(column: PostgresColumnRow, primaryKeys: Set<string>): KtxSchemaColumn {
+  private toSchemaColumn(column: RedshiftColumnRow, primaryKeys: Set<string>): KtxSchemaColumn {
     return {
       name: column.column_name,
       nativeType: column.data_type,
@@ -542,7 +548,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     };
   }
 
-  private toSchemaForeignKey(row: PostgresForeignKeyRow): KtxSchemaForeignKey {
+  private toSchemaForeignKey(row: RedshiftForeignKeyRow): KtxSchemaForeignKey {
     return {
       fromColumn: row.column_name,
       toCatalog: null,
@@ -553,13 +559,13 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     };
   }
 
-  private async getPool(): Promise<KtxPostgresPool> {
+  private async getPool(): Promise<KtxRedshiftPool> {
     if (!this.pool) {
       let config = { ...this.poolConfig };
       if (this.endpointResolver) {
         const endpoint = await this.endpointResolver.resolve({
           host: config.host ?? this.connection.host ?? 'localhost',
-          port: config.port ?? numberValue(this.connection.port) ?? 5432,
+          port: config.port ?? numberValue(this.connection.port) ?? 5439,
           connection: this.connection,
         });
         this.resolvedEndpoint = endpoint;
@@ -610,7 +616,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
 
   private assertConnection(connectionId: string): void {
     if (connectionId !== this.connectionId) {
-      throw new Error(`PostgreSQL connector ${this.connectionId} cannot run scan for ${connectionId}`);
+      throw new Error(`Redshift connector ${this.connectionId} cannot run scan for ${connectionId}`);
     }
   }
 

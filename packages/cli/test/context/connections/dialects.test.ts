@@ -66,6 +66,36 @@ const fixtures: DialectFixture[] = [
     normalizedType: 'numeric(12,2)',
   },
   {
+    driver: 'redshift',
+    table: { catalog: null, db: 'public', name: 'orders' },
+    quoteInput: 'order"items',
+    quotedIdentifier: '"order""items"',
+    formattedTable: '"public"."orders"',
+    display: 'public.orders',
+    invalidDisplay: 'orders',
+    columnDisplayTablePartCount: 2,
+    limitClause: 'LIMIT 25 OFFSET 5',
+    topClause: '',
+    randomFilter: 'RANDOM() < 0.25',
+    tableSampleClause: 'TABLESAMPLE SYSTEM (25)',
+    sampleQuery: 'SELECT "id", "status" FROM "public"."orders" LIMIT 5',
+    columnSampleContains: 'TRIM(CAST("status" AS TEXT)) != \'\'',
+    nullCountExpression: 'COUNT(*) FILTER (WHERE "status" IS NULL)',
+    distinctCountExpression: 'COUNT(DISTINCT "status")',
+    textLengthExpression: 'LENGTH(CAST("status" AS TEXT))',
+    castToText: 'CAST("status" AS TEXT)',
+    sampleValueAggregation:
+      '(SELECT LISTAGG(CAST(value AS TEXT), CHR(31)) FROM (SELECT status AS value FROM orders) AS relationship_profile_values)',
+    cardinalityContains: 'SELECT COUNT(DISTINCT val) AS cardinality',
+    randomizedCardinalityContains: 'ORDER BY RANDOM()',
+    distinctValuesContains: 'SELECT DISTINCT "status"::text AS val',
+    statisticsContains: 'FROM pg_stats s',
+    dimensionInput: 'timestamp with time zone',
+    dimensionType: 'time',
+    nativeTypeInput: 'numeric(12,2)',
+    normalizedType: 'numeric(12,2)',
+  },
+  {
     driver: 'mysql',
     table: { catalog: null, db: 'analytics', name: 'orders' },
     quoteInput: 'order`items',
@@ -305,7 +335,7 @@ describe('getDialectForDriver', () => {
 
   it('throws with a supported-driver list for unknown drivers', () => {
     expect(() => getDialectForDriver('oracle')).toThrow(
-      'Unsupported driver "oracle". Supported drivers: athena, bigquery, clickhouse, duckdb, mongodb, mysql, postgres, snowflake, sqlite, sqlserver',
+      'Unsupported driver "oracle". Supported drivers: athena, bigquery, clickhouse, duckdb, mongodb, mysql, postgres, redshift, snowflake, sqlite, sqlserver',
     );
   });
 

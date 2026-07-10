@@ -10,7 +10,8 @@ export type KtxConnectionDriver =
   | 'mysql'
   | 'clickhouse'
   | 'athena'
-  | 'mongodb';
+  | 'mongodb'
+  | 'redshift';
 
 /** Canonical scan-mode registry. Runtime validation derives its allowlist here. */
 export const KTX_SCAN_MODES = ['structural', 'relationships', 'enriched'] as const;

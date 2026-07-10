@@ -5,6 +5,7 @@ import { KtxDuckDbDialect } from '../../connectors/duckdb/dialect.js';
 import { KtxMongoDbDialect } from '../../connectors/mongodb/dialect.js';
 import { KtxMysqlDialect } from '../../connectors/mysql/dialect.js';
 import { KtxPostgresDialect } from '../../connectors/postgres/dialect.js';
+import { KtxRedshiftDialect } from '../../connectors/redshift/dialect.js';
 import { KtxSqliteDialect } from '../../connectors/sqlite/dialect.js';
 import { KtxSnowflakeDialect } from '../../connectors/snowflake/dialect.js';
 import { KtxSqlServerDialect } from '../../connectors/sqlserver/dialect.js';
@@ -61,6 +62,7 @@ const sqlDialectFactories: Record<KtxSqlDriver, () => KtxSqlDialect> = {
   duckdb: () => new KtxDuckDbDialect(),
   mysql: () => new KtxMysqlDialect(),
   postgres: () => new KtxPostgresDialect(),
+  redshift: () => new KtxRedshiftDialect(),
   sqlite: () => new KtxSqliteDialect(),
   snowflake: () => new KtxSnowflakeDialect(),
   sqlserver: () => new KtxSqlServerDialect(),

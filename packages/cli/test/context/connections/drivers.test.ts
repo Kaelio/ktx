@@ -21,6 +21,15 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     url: 'postgresql://reader:secret@localhost:5432/analytics', // pragma: allowlist secret
     schemas: ['public'],
   }),
+  redshift: () => ({
+    driver: 'redshift',
+    host: 'analytics.123456789012.us-east-1.redshift.amazonaws.com',
+    port: 5439,
+    database: 'analytics',
+    username: 'reader',
+    password: 'secret', // pragma: allowlist secret
+    schemas: ['public'],
+  }),
   sqlite: () => ({ driver: 'sqlite', path: 'warehouse.db' }),
   duckdb: (projectDir) => ({ driver: 'duckdb', path: join(projectDir, 'warehouse.duckdb') }),
   mongodb: () => ({
@@ -112,6 +121,7 @@ describe('driverRegistrations', () => {
       'mongodb',
       'mysql',
       'postgres',
+      'redshift',
       'snowflake',
       'sqlite',
       'sqlserver',
