@@ -36,6 +36,7 @@ import { resolveStringReference } from '../shared/string-reference.js';
 
 export interface KtxBigQueryConnectionConfig {
   driver?: string;
+  project_id?: string;
   dataset_id?: string;
   dataset_ids?: string[];
   credentials_json?: string;
@@ -47,9 +48,9 @@ export interface KtxBigQueryConnectionConfig {
 
 /**
  * A dataset to introspect, paired with the project that hosts it. `project`
- * defaults to the billing project (`credentials.project_id`) when an entry has
+ * defaults to the billing project (`project_id`) when an entry has
  * no `project.` prefix; a fully-qualified `project.dataset` entry resolves to
- * its own host project. Jobs always bill in `credentials.project_id`.
+ * its own host project. Jobs always bill in `project_id`.
  */
 export interface BigQueryDatasetRef {
   project: string;
@@ -58,7 +59,7 @@ export interface BigQueryDatasetRef {
 
 export interface KtxBigQueryResolvedConnectionConfig {
   projectId: string;
-  credentials: Record<string, unknown>;
+  credentials?: Record<string, unknown>;
   datasetIds: BigQueryDatasetRef[];
   location?: string;
 }
@@ -123,7 +124,7 @@ export interface KtxBigQueryClient {
 }
 
 export interface KtxBigQueryClientFactory {
-  createClient(input: { projectId: string; credentials: Record<string, unknown> }): KtxBigQueryClient;
+  createClient(input: { projectId: string; credentials?: Record<string, unknown> }): KtxBigQueryClient;
 }
 
 export interface KtxBigQueryScanConnectorOptions {
@@ -136,7 +137,7 @@ export interface KtxBigQueryScanConnectorOptions {
 }
 
 class DefaultBigQueryClientFactory implements KtxBigQueryClientFactory {
-  createClient(input: { projectId: string; credentials: Record<string, unknown> }): KtxBigQueryClient {
+  createClient(input: { projectId: string; credentials?: Record<string, unknown> }): KtxBigQueryClient {
     const client = new BigQuery(input);
     return {
       getDatasets: (options) => client.getDatasets(options) as Promise<[Array<{ id?: string }>, ...unknown[]]>,
@@ -321,18 +322,26 @@ export function bigQueryConnectionConfigFromConfig(input: {
   }
 
   const env = input.env ?? process.env;
+  const configuredProjectId = stringConfigValue(input.connection, 'project_id', env);
+  if (!configuredProjectId) {
+    throw new Error(`Native BigQuery connector requires connections.${input.connectionId}.project_id`);
+  }
+  const projectId = normalizeBigQueryProjectId(
+    configuredProjectId,
+    `connections.${input.connectionId}.project_id`,
+  );
   const credentialsJson = stringConfigValue(input.connection, 'credentials_json', env);
-  if (!credentialsJson) {
-    throw new Error(`Native BigQuery connector requires connections.${input.connectionId}.credentials_json`);
-  }
-  const credentials = JSON.parse(credentialsJson) as Record<string, unknown>;
-  const projectId = typeof credentials.project_id === 'string' ? credentials.project_id : undefined;
-  if (!projectId) {
-    throw new Error(`Native BigQuery connector requires credentials_json.project_id for connections.${input.connectionId}`);
-  }
+  const credentials = credentialsJson
+    ? (JSON.parse(credentialsJson) as Record<string, unknown>)
+    : undefined;
   const resolvedDatasetIds = resolveDatasetRefs(input.connection, env, projectId, input.connectionId);
   const location = stringConfigValue(input.connection, 'location', env);
-  return { projectId, credentials, datasetIds: resolvedDatasetIds, ...(location ? { location } : {}) };
+  return {
+    projectId,
+    ...(credentials ? { credentials } : {}),
+    datasetIds: resolvedDatasetIds,
+    ...(location ? { location } : {}),
+  };
 }
 
 export class KtxBigQueryScanConnector implements KtxScanConnector {
@@ -543,7 +552,7 @@ export class KtxBigQueryScanConnector implements KtxScanConnector {
     if (!this.client) {
       this.client = this.clientFactory.createClient({
         projectId: this.resolved.projectId,
-        credentials: this.resolved.credentials,
+        ...(this.resolved.credentials ? { credentials: this.resolved.credentials } : {}),
       });
     }
     return this.client;

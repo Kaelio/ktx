@@ -151,6 +151,28 @@ describe('buildProjectStatus embeddings', () => {
   });
 });
 
+describe('buildProjectStatus BigQuery authentication', () => {
+  it('reports Application Default Credentials when project_id is set without credentials_json', async () => {
+    const config = baseProjectConfig();
+    config.connections.analytics = {
+      driver: 'bigquery',
+      project_id: 'project-1',
+      dataset_ids: ['analytics'],
+    };
+
+    const status = await buildProjectStatus(projectWithConfig(config), {
+      claudeCodeAuthProbe: stubClaudeCodeAuthProbe,
+    });
+
+    expect(status.connections).toContainEqual({
+      name: 'analytics',
+      driver: 'bigquery',
+      status: 'ok',
+      detail: 'ADC configured for project: project-1',
+    });
+  });
+});
+
 function withPostgresQueryHistory(config: KtxProjectConfig): KtxProjectConfig {
   return {
     ...config,
@@ -190,6 +212,7 @@ function withBigQueryQueryHistory(config: KtxProjectConfig): KtxProjectConfig {
       ...config.connections,
       bq: {
         driver: 'bigquery',
+        project_id: 'project-1',
         credentials_json: 'env:BQ_CREDENTIALS_JSON',
         context: { queryHistory: { enabled: true } },
       } as KtxProjectConfig['connections'][string],

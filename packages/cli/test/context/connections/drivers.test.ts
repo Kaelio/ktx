@@ -53,6 +53,7 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
   }),
   bigquery: () => ({
     driver: 'bigquery',
+    project_id: 'project-1',
     dataset_id: 'analytics',
     credentials_json: JSON.stringify({
       project_id: 'project-1',

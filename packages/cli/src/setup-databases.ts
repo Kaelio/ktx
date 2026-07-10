@@ -85,6 +85,8 @@ export interface KtxSetupDatabasesArgs {
   databaseConnectionIds?: string[];
   databaseConnectionId?: string;
   databaseUrl?: string;
+  databaseProjectId?: string;
+  databaseCredentials?: string;
   databaseSchemas: string[];
   enableQueryHistory?: boolean;
   disableQueryHistory?: boolean;
@@ -856,22 +858,45 @@ async function buildConnectionConfig(input: {
     });
   }
   if (driver === 'bigquery') {
-    const credentialsPath = await promptText(
-      prompts,
-      'Path to service account JSON file',
-      displayFileReference(stringConfigField(input.existingConnection, 'credentials_json')),
-    );
-    if (credentialsPath === undefined) return 'back';
-    const location = await promptText(
-      prompts,
-      'BigQuery location\nPress Enter for US, or enter a location like EU.',
-      stringConfigField(input.existingConnection, 'location') ?? 'US',
-    );
+    if (args.inputMode === 'disabled' && !args.databaseProjectId) return null;
+    const projectId =
+      args.databaseProjectId ??
+      (await promptText(
+        prompts,
+        'BigQuery billing project ID',
+        stringConfigField(input.existingConnection, 'project_id'),
+      ));
+    if (projectId === undefined) return 'back';
+    if (!projectId) return null;
+    const credentials = args.databaseCredentials
+      ? normalizeInputReference(args.databaseCredentials)
+      : args.inputMode === 'disabled'
+        ? undefined
+        : await promptText(
+            prompts,
+            'Optional path to service account JSON file\nPress Enter to use Application Default Credentials.',
+            displayFileReference(stringConfigField(input.existingConnection, 'credentials_json')),
+          );
+    if (credentials === undefined && args.inputMode !== 'disabled') return 'back';
+    const location =
+      args.inputMode === 'disabled'
+        ? stringConfigField(input.existingConnection, 'location') ?? 'US'
+        : await promptText(
+            prompts,
+            'BigQuery location\nPress Enter for US, or enter a location like EU.',
+            stringConfigField(input.existingConnection, 'location') ?? 'US',
+          );
     if (location === undefined) return 'back';
-    if (!credentialsPath) return null;
     return {
       driver: 'bigquery',
-      credentials_json: normalizeFileReference(credentialsPath),
+      project_id: projectId,
+      ...(credentials
+        ? {
+            credentials_json: args.databaseCredentials
+              ? credentials
+              : normalizeFileReference(credentials),
+          }
+        : {}),
       ...(location ? { location } : {}),
       ...scriptedScopeConfigForDriver('bigquery', args.databaseSchemas),
     };

@@ -123,6 +123,8 @@ runtime features are missing.
 | `--database <driver>` | Database driver to configure; repeatable. Choices: `sqlite`, `duckdb`, `postgres`, `mysql`, `clickhouse`, `sqlserver`, `bigquery`, `snowflake` |
 | `--database-connection-id <id>` | Existing selected connection id; repeatable. With `--database` or `--database-url`, connection id for the new connection. |
 | `--database-url <url>` | URL, `env:NAME`, or `file:/path` for one new URL-style database connection; also used as the SQLite or DuckDB path |
+| `--database-project-id <id>` | Billing project for one new BigQuery connection |
+| `--database-credentials <ref>` | Optional `env:NAME` or `file:/path` credential reference for BigQuery; omit to use ADC |
 | `--database-schema <schema>` | Database schema or dataset to include; repeatable |
 | `--skip-databases` | Leave database setup incomplete |
 
@@ -136,8 +138,8 @@ BigQuery; and `databases` for ClickHouse.
 
 A BigQuery `--database-schema` value may be qualified as `project.dataset` to
 scan a dataset hosted in another project (such as
-`bigquery-public-data.austin_311`); a bare value stays in the credentials'
-project. Setup does not discover foreign-project datasets, so supply qualified
+`bigquery-public-data.austin_311`); a bare value stays in the connection's
+`project_id`. Setup does not discover foreign-project datasets, so supply qualified
 entries explicitly. See
 [Primary sources → BigQuery](/docs/integrations/primary-sources#cross-project-datasets).
 

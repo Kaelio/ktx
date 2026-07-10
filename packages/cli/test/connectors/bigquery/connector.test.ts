@@ -93,6 +93,7 @@ function fakeClientFactory(options: { primaryKeyError?: Error } = {}): KtxBigQue
 
 const connection = {
   driver: 'bigquery',
+  project_id: 'project-1',
   dataset_id: 'analytics',
   credentials_json: JSON.stringify({ project_id: 'project-1', client_email: 'reader@example.test' }),
   location: 'US',
@@ -120,12 +121,42 @@ describe('KtxBigQueryScanConnector', () => {
     });
   });
 
+  it('uses Application Default Credentials when credentials_json is omitted', async () => {
+    const clientFactory = fakeClientFactory();
+    const connector = new KtxBigQueryScanConnector({
+      connectionId: 'warehouse',
+      connection: {
+        driver: 'bigquery',
+        project_id: 'project-1',
+        dataset_id: 'analytics',
+      },
+      clientFactory,
+    });
+
+    await expect(connector.testConnection()).resolves.toEqual({ success: true });
+    expect(clientFactory.createClient).toHaveBeenCalledWith({ projectId: 'project-1' });
+  });
+
+  it('requires an explicit billing project for every authentication method', () => {
+    expect(() =>
+      bigQueryConnectionConfigFromConfig({
+        connectionId: 'warehouse',
+        connection: {
+          driver: 'bigquery',
+          dataset_id: 'analytics',
+          credentials_json: JSON.stringify({ project_id: 'credential-project' }),
+        },
+      }),
+    ).toThrow('connections.warehouse.project_id');
+  });
+
   it('parses project.dataset entries to host-project pairs and rejects malformed entries', () => {
     expect(
       bigQueryConnectionConfigFromConfig({
         connectionId: 'warehouse',
         connection: {
           driver: 'bigquery',
+          project_id: 'project-1',
           dataset_ids: ['bigquery-public-data.austin_311', 'analytics'],
           credentials_json: JSON.stringify({ project_id: 'project-1' }),
         },
@@ -141,6 +172,7 @@ describe('KtxBigQueryScanConnector', () => {
           connectionId: 'warehouse',
           connection: {
             driver: 'bigquery',
+            project_id: 'project-1',
             dataset_ids: [badEntry],
             credentials_json: JSON.stringify({ project_id: 'project-1' }),
           },
@@ -220,6 +252,7 @@ describe('KtxBigQueryScanConnector', () => {
       connectionId: 'warehouse',
       connection: {
         driver: 'bigquery',
+        project_id: 'project-1',
         dataset_ids: ['bigquery-public-data.austin_311'],
         credentials_json: JSON.stringify({ project_id: 'project-1' }),
         location: 'US',
@@ -250,6 +283,7 @@ describe('KtxBigQueryScanConnector', () => {
       connectionId: 'warehouse',
       connection: {
         driver: 'bigquery',
+        project_id: 'project-1',
         dataset_ids: ['bigquery-public-data.austin_311', 'analytics'],
         credentials_json: JSON.stringify({ project_id: 'project-1' }),
         location: 'US',
@@ -276,6 +310,7 @@ describe('KtxBigQueryScanConnector', () => {
       connectionId: 'warehouse',
       connection: {
         driver: 'bigquery',
+        project_id: 'project-1',
         dataset_ids: ['proj_a.shared', 'proj_b.shared'],
         credentials_json: JSON.stringify({ project_id: 'project-1' }),
       },
@@ -522,6 +557,7 @@ describe('KtxBigQueryScanConnector', () => {
       connectionId: 'warehouse',
       connection: {
         driver: 'bigquery',
+        project_id: 'project-1',
         credentials_json: JSON.stringify({ project_id: 'project-1' }),
         location: 'US',
       },
@@ -551,6 +587,7 @@ describe('KtxBigQueryScanConnector', () => {
       connectionId: 'warehouse',
       connection: {
         driver: 'bigquery',
+        project_id: 'project-1',
         credentials_json: JSON.stringify({ project_id: 'project-1' }),
         location: 'US',
       },

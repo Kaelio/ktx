@@ -200,7 +200,7 @@ artifact shape as Postgres and BigQuery.
 
 ## BigQuery
 
-Authenticates via GCP service account credentials. Supports multi-dataset scanning and query-history configuration for `INFORMATION_SCHEMA.JOBS_BY_PROJECT`.
+Authenticates with Google Application Default Credentials (ADC) by default, with optional explicit service account credentials for workloads outside ADC-capable environments. Supports multi-dataset scanning and query-history configuration for `INFORMATION_SCHEMA.JOBS_BY_PROJECT`.
 
 ### Connection config
 
@@ -208,7 +208,7 @@ Authenticates via GCP service account credentials. Supports multi-dataset scanni
 connections:
   my-bigquery:
     driver: bigquery
-    credentials_json: file:~/.config/gcloud/bq-service-account.json
+    project_id: my-gcp-project
     dataset_id: analytics
     location: US
 ```
@@ -237,7 +237,7 @@ as `project.dataset`:
 connections:
   public-bq:
     driver: bigquery
-    credentials_json: file:~/.config/gcloud/bq-service-account.json
+    project_id: my-billing-project
     location: US
     dataset_ids:
       - bigquery-public-data.austin_311
@@ -246,8 +246,8 @@ connections:
 ```
 
 **ktx** introspects each dataset in its host project while every query job still
-bills to the `project_id` inside your `credentials_json`. A bare `dataset` entry
-(no prefix) is scanned in your own project, exactly as before. A single
+bills to the connection's `project_id`. A bare `dataset` entry (no prefix) is
+scanned in that project. A single
 connection may mix datasets from several projects, and two projects may host
 datasets with the same name without colliding.
 
@@ -261,13 +261,16 @@ cross-project dataset regardless of region.
 
 | Method | Config |
 |--------|--------|
+| Application Default Credentials | Set `project_id`; omit `credentials_json` |
 | Service account JSON | `credentials_json: file:/path/to/key.json` |
 | Environment variable | `credentials_json: env:BIGQUERY_CREDENTIALS_JSON` |
 
-The project ID is extracted automatically from the service account JSON file.
-If you set `project_id` in `ktx.yaml`, **ktx** treats it as local descriptor and
-mapping metadata. The BigQuery connector still authenticates with the
-`project_id` inside `credentials_json`.
+`project_id` is always required and determines where query jobs are billed. When
+`credentials_json` is omitted, Google's client library resolves ADC from the
+environment. On Google Cloud, assign a service identity to the workload. For a
+local shell, run `gcloud auth application-default login`. When
+`credentials_json` is present, **ktx** passes those explicit credentials to the
+client instead.
 
 ### Features
 

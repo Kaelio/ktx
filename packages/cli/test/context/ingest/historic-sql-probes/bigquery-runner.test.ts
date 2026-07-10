@@ -12,7 +12,6 @@ describe('BigQueryJobsByProjectProbeRunner', () => {
     const runner = new BigQueryJobsByProjectProbeRunner({
       createReader,
       createClient: () => ({ client: { executeQuery: vi.fn() }, cleanup }),
-      resolveReference: () => '{"project_id":"project-1"}',
     });
 
     await expect(
@@ -21,7 +20,7 @@ describe('BigQueryJobsByProjectProbeRunner', () => {
         connectionId: 'bq',
         connection: {
           driver: 'bigquery',
-          credentials_json: 'env:BQ_CREDENTIALS_JSON',
+          project_id: 'project-1',
           location: 'EU',
         },
         env: {},
@@ -39,7 +38,6 @@ describe('BigQueryJobsByProjectProbeRunner', () => {
     const runner = new BigQueryJobsByProjectProbeRunner({
       createReader,
       createClient: () => ({ client: {}, cleanup: vi.fn(async () => undefined) }),
-      resolveReference: () => '{"project_id":"project-1"}',
     });
 
     await runner.run({
@@ -47,7 +45,7 @@ describe('BigQueryJobsByProjectProbeRunner', () => {
       connectionId: 'bq',
       connection: {
         driver: 'bigquery',
-        credentials_json: '{"project_id":"project-1"}',
+        project_id: 'project-1',
       },
       env: {},
     });
@@ -55,11 +53,10 @@ describe('BigQueryJobsByProjectProbeRunner', () => {
     expect(createReader).toHaveBeenCalledWith({ projectId: 'project-1', region: 'us' });
   });
 
-  it('rejects missing BigQuery credentials_json.project_id', async () => {
+  it('rejects a missing BigQuery project_id', async () => {
     const runner = new BigQueryJobsByProjectProbeRunner({
       createReader: vi.fn(),
       createClient: () => ({ client: {}, cleanup: vi.fn() }),
-      resolveReference: () => '{"client_email":"svc@example.test"}',
     });
 
     await expect(
@@ -68,11 +65,10 @@ describe('BigQueryJobsByProjectProbeRunner', () => {
         connectionId: 'bq',
         connection: {
           driver: 'bigquery',
-          credentials_json: 'env:BQ_CREDENTIALS_JSON',
         },
         env: {},
       }),
-    ).rejects.toThrow('Query history BigQuery connection bq requires credentials_json.project_id');
+    ).rejects.toThrow('connections.bq.project_id');
   });
 
   it('formats successful BigQuery details', () => {
