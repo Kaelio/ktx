@@ -22,12 +22,12 @@ import type {
   KtxMcpContextPorts,
   KtxMcpToolHandlerContext,
   KtxMongoQueryMcpPort,
-  KtxMongoQueryResponse,
   KtxSemanticLayerMcpPort,
   KtxSqlExecutionMcpPort,
   KtxSqlExecutionResponse,
   MemoryIngestPort,
 } from '../../../src/context/mcp/types.js';
+import type { KtxMongoQueryResult } from '../../../src/context/scan/types.js';
 
 const reportExceptionMock = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -499,7 +499,7 @@ describe('createKtxMcpServer', () => {
 
   it('registers mongo_query when the host provides a MongoDB query port', async () => {
     const fake = makeFakeServer();
-    const response: KtxMongoQueryResponse = {
+    const response: KtxMongoQueryResult = {
       headers: ['_id', 'city'],
       rows: [
         ['a1', 'Indianapolis'],

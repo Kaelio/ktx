@@ -24,7 +24,7 @@ JSON.
 |------|-------------|---------|
 | `-c`, `--connection <id>` | **ktx** database connection id. Required. | - |
 | `--max-rows <n>` | Maximum rows to return. Must be between `1` and `10000`. | `1000` |
-| `--output <mode>` | Output mode: `pretty`, `plain` (TSV), or `json`. | `pretty` |
+| `--output <mode>` | Output mode: `pretty`, `plain` (TSV), or `json`. | `pretty` on a terminal, `plain` when piped or in CI (override with `KTX_OUTPUT`) |
 | `--json` | Shortcut for `--output=json` (overrides `--output`). | `false` |
 
 ## Examples

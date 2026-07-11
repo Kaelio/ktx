@@ -26,7 +26,7 @@ ktx mongo-query '<pipeline-json>' --connection <id> --collection <name> [options
 | `--collection <name>` | Collection to query. Required. | - |
 | `--database <name>` | Database name. | Connection's first configured database |
 | `--limit <n>` | Maximum documents to return. Must be between `1` and `10000`. | `1000` |
-| `--output <mode>` | Output mode: `pretty`, `plain` (TSV), or `json`. | `pretty` |
+| `--output <mode>` | Output mode: `pretty`, `plain` (TSV), or `json`. | `pretty` on a terminal, `plain` when piped or in CI (override with `KTX_OUTPUT`) |
 | `--json` | Shortcut for `--output=json` (overrides `--output`). | `false` |
 
 ## Examples

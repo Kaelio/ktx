@@ -295,4 +295,23 @@ describe('KtxMongoDbScanConnector.executeQuery', () => {
       ),
     ).rejects.toThrow(/must be read-only/);
   });
+
+  it('runs against the requested database when input.database is given', async () => {
+    const { factory, client } = fakeClientFactory();
+    await connector(baseConnection, factory).executeQuery(
+      { connectionId: 'mongo-prod', collection: 'orders', database: 'analytics', pipeline: [], limit: 5 },
+      { runId: 't' },
+    );
+    expect(client.aggregate).toHaveBeenCalledWith('analytics', 'orders', [], { limit: 5 });
+  });
+
+  it('returns an empty result with no headers when the pipeline matches no documents', async () => {
+    const { factory, client } = fakeClientFactory();
+    (client.aggregate as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    const result = await connector(baseConnection, factory).executeQuery(
+      { connectionId: 'mongo-prod', collection: 'users', pipeline: [{ $match: { age: { $gte: 999 } } }], limit: 50 },
+      { runId: 't' },
+    );
+    expect(result).toEqual({ headers: [], rows: [], rowCount: 0 });
+  });
 });

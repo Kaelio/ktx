@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runKtxMongoQuery } from '../src/mongo-query.js';
 import { KtxMongoDbScanConnector } from '../src/connectors/mongodb/connector.js';
 import type { KtxCliIo } from '../src/cli-runtime.js';
@@ -65,5 +65,38 @@ describe('runKtxMongoQuery', () => {
     });
     expect(code).toBe(1);
     expect(err().length).toBeGreaterThan(0);
+  });
+});
+
+describe('runKtxMongoQuery telemetry', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('emits mongo_query_completed with outcome ok and the pipeline stage count on success', async () => {
+    vi.stubEnv('KTX_TELEMETRY_DEBUG', '1');
+    vi.stubEnv('CI', '');
+    const { io, err } = captureIo();
+    const code = await runKtxMongoQuery({ ...baseArgs, output: 'plain' }, io, {
+      loadProject: async () => project,
+      createScanConnector: (async () => mongoConnector()) as never,
+    });
+    expect(code).toBe(0);
+    expect(err()).toContain('"event":"mongo_query_completed"');
+    expect(err()).toContain('"outcome":"ok"');
+    expect(err()).toContain('"stageCount":1');
+  });
+
+  it('emits mongo_query_completed with outcome error on failure', async () => {
+    vi.stubEnv('KTX_TELEMETRY_DEBUG', '1');
+    vi.stubEnv('CI', '');
+    const { io, err } = captureIo();
+    const code = await runKtxMongoQuery({ ...baseArgs, connectionId: 'nope' }, io, {
+      loadProject: async () => project,
+      createScanConnector: (async () => mongoConnector()) as never,
+    });
+    expect(code).toBe(1);
+    expect(err()).toContain('"event":"mongo_query_completed"');
+    expect(err()).toContain('"outcome":"error"');
   });
 });

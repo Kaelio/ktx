@@ -15,7 +15,6 @@ import { KtxDaemonComputeError, type KtxSemanticLayerComputePort } from '../../c
 import type { KtxLocalProject } from '../../context/project/project.js';
 import { createKtxEntityDetailsService } from '../../context/scan/entity-details.js';
 import type { LocalScanMcpOptions } from '../../context/scan/local-scan.js';
-import type { KtxScanConnector } from '../../context/scan/types.js';
 import { createKtxDiscoverDataService } from '../../context/search/discover.js';
 import { sqlAnalysisDialectForDriver } from '../../context/sql-analysis/dialect.js';
 import type { SqlAnalysisPort } from '../../context/sql-analysis/ports.js';
@@ -26,7 +25,7 @@ import { assertSafeConnectionId } from '../../context/sl/source-files.js';
 import { assertConfiguredConnectionId } from '../../context/connections/configured-connections.js';
 import { readLocalKnowledgePage, searchLocalKnowledgePages } from '../wiki/local-knowledge.js';
 import { runMongoQuery } from './mongo-query-runner.js';
-import type { KtxMcpContextPorts, KtxMcpProgressCallback, KtxMongoQueryResponse, KtxSqlExecutionResponse } from './types.js';
+import type { KtxMcpContextPorts, KtxMcpProgressCallback, KtxSqlExecutionResponse } from './types.js';
 
 interface CreateLocalProjectMcpContextPortsOptions {
   semanticLayerCompute?: KtxSemanticLayerComputePort;
@@ -60,13 +59,6 @@ function projectHasMongoConnection(project: KtxLocalProject): boolean {
   return Object.values(project.config.connections).some(
     (connection) => normalizeConnectionDriver(connection) === 'mongodb',
   );
-}
-
-async function executeMongoQuery(
-  createConnector: (connectionId: string) => Promise<KtxScanConnector> | KtxScanConnector,
-  input: { connectionId: string; collection: string; database?: string; pipeline: Record<string, unknown>[]; limit: number },
-): Promise<KtxMongoQueryResponse> {
-  return runMongoQuery(createConnector, input);
 }
 
 async function executeValidatedReadOnlySql(
@@ -259,7 +251,7 @@ export function createLocalProjectMcpContextPorts(
     ports.mongoQuery = {
       async execute(input) {
         try {
-          return await executeMongoQuery(mongoCreateConnector, input);
+          return await runMongoQuery(mongoCreateConnector, input);
         } catch (error) {
           throwClassifiedQueryError(error);
         }

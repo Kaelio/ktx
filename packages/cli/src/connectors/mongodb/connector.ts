@@ -6,6 +6,8 @@ import {
   type KtxColumnSampleInput,
   type KtxColumnSampleResult,
   type KtxConnectorTestResult,
+  type KtxMongoQueryInput,
+  type KtxMongoQueryResult,
   type KtxScanConnector,
   type KtxScanContext,
   type KtxScanInput,
@@ -39,20 +41,6 @@ export interface KtxMongoListedCollection {
   type?: string;
 }
 
-export interface KtxMongoQueryInput {
-  connectionId: string;
-  collection: string;
-  database?: string;
-  pipeline: Record<string, unknown>[];
-  limit: number;
-}
-
-export interface KtxMongoQueryResult {
-  headers: string[];
-  rows: unknown[][];
-  rowCount: number;
-}
-
 interface KtxMongoFindOptions {
   sort: Record<string, 1 | -1>;
   limit: number;
@@ -67,7 +55,7 @@ export interface KtxMongoClient {
   aggregate(
     databaseName: string,
     collectionName: string,
-    pipeline: Record<string, unknown>[],
+    pipeline: readonly Record<string, unknown>[],
     options: { limit: number },
   ): Promise<KtxMongoDocument[]>;
   ping(databaseName: string): Promise<void>;
@@ -129,7 +117,7 @@ class DefaultMongoClient implements KtxMongoClient {
   async aggregate(
     databaseName: string,
     collectionName: string,
-    pipeline: Record<string, unknown>[],
+    pipeline: readonly Record<string, unknown>[],
     options: { limit: number },
   ): Promise<KtxMongoDocument[]> {
     const client = await this.connectedClient();
@@ -223,7 +211,7 @@ function unionDocumentKeys(documents: readonly KtxMongoDocument[]): string[] {
 }
 
 // MongoDB aggregation write stages ($out/$merge) persist results; mongo_query is read-only.
-function assertReadOnlyPipeline(pipeline: Record<string, unknown>[]): void {
+function assertReadOnlyPipeline(pipeline: readonly Record<string, unknown>[]): void {
   for (const stage of pipeline) {
     if ('$out' in stage || '$merge' in stage) {
       throw new Error('mongo_query pipelines must be read-only; $out and $merge stages are not allowed.');

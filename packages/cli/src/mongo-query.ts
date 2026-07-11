@@ -1,6 +1,7 @@
 import { runMongoQuery } from './context/mcp/mongo-query-runner.js';
 import { resolveConfiguredConnection } from './context/connections/resolve-connection.js';
 import { loadKtxProject, type KtxLocalProject } from './context/project/project.js';
+import type { KtxMongoQueryInput } from './context/scan/types.js';
 import type { KtxCliIo } from './cli-runtime.js';
 import { type KtxOutputMode, resolveOutputMode } from './io/mode.js';
 import { type KtxResultTable, printResultTable } from './io/result-table.js';
@@ -13,13 +14,8 @@ import { scrubErrorClass } from './telemetry/scrubber.js';
 
 profileMark('module:mongo-query');
 
-export type KtxMongoQueryArgs = {
+export type KtxMongoQueryArgs = KtxMongoQueryInput & {
   projectDir: string;
-  connectionId: string;
-  collection: string;
-  database?: string;
-  pipeline: Record<string, unknown>[];
-  limit: number;
   output?: KtxOutputMode;
   json?: boolean;
   cliVersion: string;

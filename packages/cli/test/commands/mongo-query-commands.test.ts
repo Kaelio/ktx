@@ -1,6 +1,6 @@
 import { InvalidArgumentError } from '@commander-js/extra-typings';
 import { describe, expect, it } from 'vitest';
-import { parsePipelineArgument } from '../../src/commands/mongo-query-commands.js';
+import { parseLimitOption, parsePipelineArgument } from '../../src/commands/mongo-query-commands.js';
 
 describe('parsePipelineArgument', () => {
   it('parses a valid JSON array of pipeline-stage objects', () => {
@@ -32,5 +32,28 @@ describe('parsePipelineArgument', () => {
 
   it('throws InvalidArgumentError when the array contains null', () => {
     expect(() => parsePipelineArgument('[null]')).toThrow(InvalidArgumentError);
+  });
+});
+
+describe('parseLimitOption', () => {
+  it('accepts the boundary values 1 and 10000', () => {
+    expect(parseLimitOption('1')).toBe(1);
+    expect(parseLimitOption('10000')).toBe(10000);
+  });
+
+  it('rejects a non-numeric value', () => {
+    expect(() => parseLimitOption('abc')).toThrow(InvalidArgumentError);
+  });
+
+  it('rejects a non-integer value', () => {
+    expect(() => parseLimitOption('1.5')).toThrow(InvalidArgumentError);
+  });
+
+  it('rejects a value below 1', () => {
+    expect(() => parseLimitOption('0')).toThrow(InvalidArgumentError);
+  });
+
+  it('rejects a value above the cap', () => {
+    expect(() => parseLimitOption('10001')).toThrow(InvalidArgumentError);
   });
 });

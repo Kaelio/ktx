@@ -293,6 +293,20 @@ export interface KtxReadOnlyQueryInput {
   maxRows?: number;
 }
 
+export interface KtxMongoQueryInput {
+  connectionId: string;
+  collection: string;
+  database?: string;
+  pipeline: readonly Record<string, unknown>[];
+  limit: number;
+}
+
+export interface KtxMongoQueryResult {
+  headers: string[];
+  rows: unknown[][];
+  rowCount: number;
+}
+
 export interface KtxQueryResult {
   headers: string[];
   headerTypes?: string[];
@@ -346,6 +360,7 @@ export interface KtxScanConnector {
   sampleTable?(input: KtxTableSampleInput, ctx: KtxScanContext): Promise<KtxTableSampleResult>;
   columnStats?(input: KtxColumnStatsInput, ctx: KtxScanContext): Promise<KtxColumnStatsResult | null>;
   executeReadOnly?(input: KtxReadOnlyQueryInput, ctx: KtxScanContext): Promise<KtxQueryResult>;
+  executeQuery?(input: KtxMongoQueryInput, ctx: KtxScanContext): Promise<KtxMongoQueryResult>;
   cleanup?(): Promise<void>;
 }
 

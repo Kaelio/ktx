@@ -5,7 +5,7 @@ import type { KtxEntityDetailsInput, KtxEntityDetailsResponse } from '../scan/en
 import type { KtxDiscoverDataInput, KtxDiscoverDataResponse } from '../../context/search/discover.js';
 import type { KtxDictionarySearchInput, KtxDictionarySearchResponse } from '../../context/sl/dictionary-search.js';
 import type { SemanticLayerQueryInput } from '../../context/sl/types.js';
-import type { KtxMongoQueryResult } from '../../connectors/mongodb/connector.js';
+import type { KtxMongoQueryInput, KtxMongoQueryResult } from '../scan/types.js';
 import type { WikiSearchLaneSummary, WikiSearchMatchReason } from '../../context/wiki/types.js';
 
 interface KtxMcpTextContent {
@@ -181,14 +181,9 @@ export interface KtxSqlExecutionMcpPort {
   ): Promise<KtxSqlExecutionResponse>;
 }
 
-export type KtxMongoQueryResponse = KtxMongoQueryResult;
-
 /** @internal */
 export interface KtxMongoQueryMcpPort {
-  execute(
-    input: { connectionId: string; collection: string; database?: string; pipeline: Record<string, unknown>[]; limit: number },
-    options?: { onProgress?: KtxMcpProgressCallback },
-  ): Promise<KtxMongoQueryResponse>;
+  execute(input: KtxMongoQueryInput, options?: { onProgress?: KtxMcpProgressCallback }): Promise<KtxMongoQueryResult>;
 }
 
 /** @internal */

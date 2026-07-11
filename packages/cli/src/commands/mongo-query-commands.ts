@@ -7,7 +7,8 @@ profileMark('module:commands/mongo-query-commands');
 const DEFAULT_LIMIT = 1000;
 const LIMIT_CAP = 10_000;
 
-function parseLimitOption(value: string): number {
+/** @internal exported only for unit testing */
+export function parseLimitOption(value: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > LIMIT_CAP) {
     throw new InvalidArgumentError(`must be an integer between 1 and ${LIMIT_CAP}`);
