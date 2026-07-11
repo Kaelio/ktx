@@ -16,7 +16,7 @@ export async function runMongoQuery(
         `Connection "${connectionId}" driver "${connector.driver}" is not a MongoDB connection; mongo_query serves mongodb connections only.`,
       );
     }
-    return await connector.executeQuery({ ...input, connectionId }, { runId: 'mongo-query' });
+    return await connector.executeQuery(input, { runId: 'mongo-query' });
   } finally {
     await connector?.cleanup?.();
   }

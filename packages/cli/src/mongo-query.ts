@@ -42,13 +42,7 @@ export async function runKtxMongoQuery(
     demoConnection = isDemoConnection(args.connectionId, connection);
 
     const createScanConnector = deps.createScanConnector ?? createKtxCliScanConnector;
-    const result = await runMongoQuery((connectionId) => createScanConnector(project!, connectionId), {
-      connectionId: args.connectionId,
-      collection: args.collection,
-      database: args.database,
-      pipeline: args.pipeline,
-      limit: args.limit,
-    });
+    const result = await runMongoQuery((connectionId) => createScanConnector(project!, connectionId), args);
 
     const output: KtxResultTable = {
       connectionId: args.connectionId,
