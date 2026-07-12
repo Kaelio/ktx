@@ -99,13 +99,25 @@ export interface KtxRelationshipsStageHashInput {
   llmIdentity: KtxScanLlmIdentity;
 }
 
+/**
+ * Snapshot content that identifies a schema for stage hashing. `extractedAt`
+ * is a fresh wall-clock timestamp on every scan and `warnings` are per-run
+ * diagnostics; hashing either would re-key every stage on each scan of an
+ * unchanged schema (see `stableLiveDatabaseHashContent` for the ingest-side
+ * equivalent).
+ */
+function stableSnapshotHashContent(snapshot: KtxSchemaSnapshot): Omit<KtxSchemaSnapshot, 'extractedAt' | 'warnings'> {
+  const { extractedAt: _extractedAt, warnings: _warnings, ...stable } = snapshot;
+  return stable;
+}
+
 export function computeKtxDescriptionsStageHash(input: KtxDescriptionsStageHashInput): string {
-  return stableContentHash({ snapshot: input.snapshot, llmIdentity: input.llmIdentity });
+  return stableContentHash({ snapshot: stableSnapshotHashContent(input.snapshot), llmIdentity: input.llmIdentity });
 }
 
 export function computeKtxEmbeddingsStageHash(input: KtxEmbeddingsStageHashInput): string {
   return stableContentHash({
-    snapshot: input.snapshot,
+    snapshot: stableSnapshotHashContent(input.snapshot),
     embeddingIdentity: input.embeddingIdentity,
     descriptionDigest: input.descriptionDigest,
   });
@@ -113,7 +125,7 @@ export function computeKtxEmbeddingsStageHash(input: KtxEmbeddingsStageHashInput
 
 export function computeKtxRelationshipsStageHash(input: KtxRelationshipsStageHashInput): string {
   return stableContentHash({
-    snapshot: input.snapshot,
+    snapshot: stableSnapshotHashContent(input.snapshot),
     relationshipSettings: input.relationshipSettings,
     llmIdentity: input.llmIdentity,
   });

@@ -84,6 +84,53 @@ describe('scan enrichment state', () => {
     expect(changed).not.toBe(first);
   });
 
+  // Regression for #347: a rescan of an unchanged schema stamps a fresh
+  // extractedAt (and may carry per-run warnings); stage hashes must not move,
+  // or every scan re-runs all enrichment LLM calls.
+  it('ignores per-scan extractedAt and warnings so an unchanged schema hashes equal across scans', () => {
+    const rescanned: KtxSchemaSnapshot = {
+      ...snapshot,
+      extractedAt: '2026-04-29T13:30:00.000Z',
+      warnings: [{ code: 'sampling_failed', message: 'transient sampling failure', recoverable: true }],
+    };
+    const descriptionDigest = computeKtxScanDescriptionDigest(['orders.id (integer)']);
+
+    expect(computeKtxDescriptionsStageHash({ snapshot: rescanned, llmIdentity })).toBe(
+      computeKtxDescriptionsStageHash({ snapshot, llmIdentity }),
+    );
+    expect(computeKtxEmbeddingsStageHash({ snapshot: rescanned, embeddingIdentity, descriptionDigest })).toBe(
+      computeKtxEmbeddingsStageHash({ snapshot, embeddingIdentity, descriptionDigest }),
+    );
+    expect(computeKtxRelationshipsStageHash({ snapshot: rescanned, relationshipSettings, llmIdentity })).toBe(
+      computeKtxRelationshipsStageHash({ snapshot, relationshipSettings, llmIdentity }),
+    );
+
+    // A real schema change must still re-key every stage.
+    const firstTable = snapshot.tables[0];
+    const firstColumn = firstTable?.columns[0];
+    if (!firstTable || !firstColumn) {
+      throw new Error('Expected test snapshot table with a column');
+    }
+    const changedColumn: KtxSchemaSnapshot = {
+      ...rescanned,
+      tables: [
+        {
+          ...firstTable,
+          columns: [...firstTable.columns, { ...firstColumn, name: 'status', primaryKey: false }],
+        },
+      ],
+    };
+    expect(computeKtxDescriptionsStageHash({ snapshot: changedColumn, llmIdentity })).not.toBe(
+      computeKtxDescriptionsStageHash({ snapshot, llmIdentity }),
+    );
+    expect(computeKtxEmbeddingsStageHash({ snapshot: changedColumn, embeddingIdentity, descriptionDigest })).not.toBe(
+      computeKtxEmbeddingsStageHash({ snapshot, embeddingIdentity, descriptionDigest }),
+    );
+    expect(computeKtxRelationshipsStageHash({ snapshot: changedColumn, relationshipSettings, llmIdentity })).not.toBe(
+      computeKtxRelationshipsStageHash({ snapshot, relationshipSettings, llmIdentity }),
+    );
+  });
+
   it('isolates per-stage invalidation: one input changes only its own stage', () => {
     const descriptionDigest = computeKtxScanDescriptionDigest(['orders.id (integer)']);
     const descriptions = computeKtxDescriptionsStageHash({ snapshot, llmIdentity });
