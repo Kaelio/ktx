@@ -40,6 +40,7 @@ describe('analytics SKILL.md SQL craft', () => {
       'Default by additivity', // COALESCE 0 for additive, NULL otherwise
       'Keep the inputs to a derived value', // inputs alongside ratio
       'Project BOTH identity and label', // entity identifier
+      'Return stored values verbatim', // copy source strings character-for-character, no cleanup
       'Diagnose empty results', // relax filters one at a time
       'Cumulative / running total', // explicit unbounded-preceding frame (spec 11)
       'Rolling window over calendar time', // calendar range, not row count (spec 11)
