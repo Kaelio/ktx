@@ -11,6 +11,7 @@ import {
   ConflictingExcludeAndOverrideError,
   enrichColumnsFromManifest,
   findDanglingSegmentRefs,
+  manifestIdentifierQuoterForConnectionType,
   projectManifestEntry,
   SemanticLayerService,
   toResolvedWire,
@@ -589,19 +590,23 @@ describe('toResolvedWire', () => {
 
 describe('projectManifestEntry', () => {
   it('projects manifest usage onto the semantic-layer source', () => {
-    const source = projectManifestEntry('orders', {
-      table: 'public.orders',
-      usage: {
-        narrative: 'Orders are frequently filtered by status.',
-        frequencyTier: 'high',
-        commonFilters: ['status'],
-        commonJoins: [{ table: 'public.customers', on: ['customer_id'] }],
+    const source = projectManifestEntry(
+      'orders',
+      {
+        table: 'public.orders',
+        usage: {
+          narrative: 'Orders are frequently filtered by status.',
+          frequencyTier: 'high',
+          commonFilters: ['status'],
+          commonJoins: [{ table: 'public.customers', on: ['customer_id'] }],
+        },
+        columns: [
+          { name: 'id', type: 'string', pk: true },
+          { name: 'status', type: 'string' },
+        ],
       },
-      columns: [
-        { name: 'id', type: 'string', pk: true },
-        { name: 'status', type: 'string' },
-      ],
-    });
+      null,
+    );
 
     expect(source.usage).toEqual({
       narrative: 'Orders are frequently filtered by status.',
@@ -609,6 +614,84 @@ describe('projectManifestEntry', () => {
       commonFilters: ['status'],
       commonJoins: [{ table: 'public.customers', on: ['customer_id'] }],
     });
+  });
+
+  // Regression for #337: physical column names may contain '.' (quoted
+  // warehouse identifiers, MongoDB fields). Projection must emit
+  // contract-valid output names or the source hard-fails on every query.
+  it('aliases dotted physical columns and threads the quoted physical reference through expr', () => {
+    const quoteIdentifier = manifestIdentifierQuoterForConnectionType('SNOWFLAKE');
+    if (!quoteIdentifier) {
+      throw new Error('Expected a quoter for SNOWFLAKE');
+    }
+    const source = projectManifestEntry(
+      'sales',
+      {
+        table: 'analytics.sales',
+        columns: [
+          { name: 'id', type: 'string', pk: true },
+          { name: '注文.金額', type: 'number' },
+          { name: 'net.amount', type: 'number' },
+        ],
+      },
+      quoteIdentifier,
+    );
+
+    expect(source.columns.map((c) => c.name)).toEqual(['id', '注文_金額', 'net_amount']);
+    expect(source.columns[1]?.expr).toBe('"注文.金額"');
+    expect(source.columns[2]?.expr).toBe('"net.amount"');
+    expect(source.columns[0]?.expr).toBeUndefined();
+    expect(source.grain).toEqual(['id']);
+    // The projected source must satisfy the very contract that #337 tripped.
+    expect(() => toResolvedWire(source)).not.toThrow();
+  });
+
+  it('quotes the physical reference with the connection dialect identifier character', () => {
+    const mysqlQuoter = manifestIdentifierQuoterForConnectionType('MYSQL');
+    expect(mysqlQuoter?.('net.amount')).toBe('`net.amount`');
+    const postgresQuoter = manifestIdentifierQuoterForConnectionType('POSTGRESQL');
+    expect(postgresQuoter?.('net.amount')).toBe('"net.amount"');
+    // Driver-form input (local project config) resolves the same quoter.
+    expect(manifestIdentifierQuoterForConnectionType('postgres')?.('net.amount')).toBe('"net.amount"');
+    // Non-SQL connections have no dialect to quote for.
+    expect(manifestIdentifierQuoterForConnectionType('mongodb')).toBeNull();
+    expect(manifestIdentifierQuoterForConnectionType(undefined)).toBeNull();
+  });
+
+  it('keeps aliases deterministic and collision-free, and aliases dotted grain columns', () => {
+    const source = projectManifestEntry(
+      'events',
+      {
+        table: 'main.events',
+        columns: [
+          { name: 'a_b', type: 'string' },
+          { name: 'a.b', type: 'string', pk: true },
+        ],
+      },
+      manifestIdentifierQuoterForConnectionType('POSTGRESQL'),
+    );
+
+    expect(source.columns.map((c) => c.name)).toEqual(['a_b', 'a_b_2']);
+    expect(source.grain).toEqual(['a_b_2']);
+    expect(() => toResolvedWire(source)).not.toThrow();
+  });
+
+  it('aliases dotted columns without expr for non-SQL connections', () => {
+    const source = projectManifestEntry(
+      'people',
+      {
+        table: 'crm.people',
+        columns: [
+          { name: '_id', type: 'string', pk: true },
+          { name: 'address.city', type: 'string' },
+        ],
+      },
+      manifestIdentifierQuoterForConnectionType('mongodb'),
+    );
+
+    expect(source.columns.map((c) => c.name)).toEqual(['_id', 'address_city']);
+    expect(source.columns[1]?.expr).toBeUndefined();
+    expect(() => toResolvedWire(source)).not.toThrow();
   });
 });
 
