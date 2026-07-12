@@ -9,8 +9,10 @@ import type { SearchCandidateGenerator } from '../../context/search/types.js';
 import { DEFAULT_PRIORITY, resolveDescription } from './descriptions.js';
 import { normalizeSemanticLayerDescriptions } from './description-normalization.js';
 import { sourceDefinitionSchema, sourceOverlaySchema } from './schemas.js';
+import { localConnectionInfoFromConfig } from '../connections/local-warehouse-descriptor.js';
 import {
   composeOverlay,
+  manifestIdentifierQuoterForConnectionType,
   type ManifestTableEntry,
   projectManifestEntry,
   SemanticLayerService,
@@ -207,6 +209,9 @@ async function loadSingleConnectionSourceRecords(
   const listed = await project.fileStore.listFiles(dir);
   const paths = listed.files.filter(isSlYamlPath).sort();
   const sources = new Map<string, LocalSlSourceRecord>();
+  const quoteIdentifier = manifestIdentifierQuoterForConnectionType(
+    localConnectionInfoFromConfig(connectionId, project.config.connections[connectionId])?.connectionType,
+  );
 
   for (const path of paths.filter((file) => file.startsWith(`${schemaDir}/`))) {
     const raw = await project.fileStore.readFile(path);
@@ -220,7 +225,7 @@ async function loadSingleConnectionSourceRecords(
       continue;
     }
     for (const [name, entry] of Object.entries(tables)) {
-      const source = projectManifestEntry(name, entry);
+      const source = projectManifestEntry(name, entry, quoteIdentifier);
       const projectedPath = `${path}#${name}`;
       sources.set(name, {
         ...summarizeSemanticSource({ connectionId, path: projectedPath, source }),

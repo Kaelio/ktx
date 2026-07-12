@@ -3,6 +3,8 @@ import type { KtxFileStorePort } from '../../context/core/file-store.js';
 import type { KtxLogger } from '../../context/core/config.js';
 import { noopLogger } from '../../context/core/config.js';
 import { dialectForConnectionType } from '../connections/connection-type-dialect.js';
+import { getSqlDialectForDriver, isSqlQueryableDriver } from '../connections/dialects.js';
+import { driverForConnectionType } from '../connections/local-warehouse-descriptor.js';
 import type { TableUsageOutput } from '../ingest/adapters/historic-sql/skill-schemas.js';
 import type { SlConnectionCatalogPort, SlPythonPort } from './ports.js';
 import { normalizeSemanticLayerDescriptions } from './description-normalization.js';
@@ -92,12 +94,32 @@ export function toResolvedWire(source: SemanticLayerSource): ResolvedSemanticLay
 }
 
 export class SemanticLayerService {
+  private readonly manifestQuoters = new Map<string, ManifestIdentifierQuoter | null>();
+
   constructor(
     private readonly configService: KtxFileStorePort,
     private readonly connections: SlConnectionCatalogPort,
     private readonly python: SlPythonPort,
     private readonly logger: KtxLogger = noopLogger,
   ) {}
+
+  // An unknown or unresolvable connection projects without a quoter: its
+  // sources stay searchable, and querying it fails earlier at executeQuery.
+  private async manifestQuoterFor(connectionId: string): Promise<ManifestIdentifierQuoter | null> {
+    const cached = this.manifestQuoters.get(connectionId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let connectionType: string | undefined;
+    try {
+      connectionType = (await this.connections.getConnectionById(connectionId))?.connectionType;
+    } catch {
+      connectionType = undefined;
+    }
+    const quoter = manifestIdentifierQuoterForConnectionType(connectionType);
+    this.manifestQuoters.set(connectionId, quoter);
+    return quoter;
+  }
 
   /**
    * Return a clone of this service whose disk reads/writes go through a worktree-scoped
@@ -269,6 +291,7 @@ export class SemanticLayerService {
     // 1. Load manifest shards from _schema/*.yaml → project to sources
     const sources = new Map<string, SemanticLayerSource>();
     const schemaFiles = allFiles.filter((f) => f.startsWith(`${schemaDir}/`));
+    const quoteIdentifier = await this.manifestQuoterFor(connectionId);
 
     for (const filePath of schemaFiles) {
       try {
@@ -276,7 +299,7 @@ export class SemanticLayerService {
         const shard = YAML.parse(content) as { tables?: Record<string, ManifestTableEntry> };
         if (shard?.tables) {
           for (const [name, entry] of Object.entries(shard.tables)) {
-            sources.set(name, projectManifestEntry(name, entry));
+            sources.set(name, projectManifestEntry(name, entry, quoteIdentifier));
           }
         }
       } catch (e) {
@@ -442,7 +465,7 @@ export class SemanticLayerService {
           const shard = YAML.parse(content) as { tables?: Record<string, ManifestTableEntry> };
           const entry = shard?.tables?.[sourceName];
           if (entry) {
-            return projectManifestEntry(sourceName, entry);
+            return projectManifestEntry(sourceName, entry, await this.manifestQuoterFor(connectionId));
           }
         } catch {
           // skip unparseable shards
@@ -491,7 +514,7 @@ export class SemanticLayerService {
         for (const [name, entry] of Object.entries(shard.tables)) {
           const tablePath = entry.table?.toLowerCase() ?? '';
           if (tablePath === lowered || tablePath.endsWith(dotSuffix)) {
-            return projectManifestEntry(name, entry);
+            return projectManifestEntry(name, entry, await this.manifestQuoterFor(connectionId));
           }
         }
       } catch {
@@ -854,8 +877,9 @@ export class SemanticLayerService {
       try {
         const { content } = await this.configService.readFile(filePath);
         const shard = YAML.parse(content) as { tables?: Record<string, ManifestTableEntry> };
+        const quoteIdentifier = await this.manifestQuoterFor(connectionId);
         for (const [name, entry] of Object.entries(shard?.tables ?? {})) {
-          entries.push({ connectionId, source: projectManifestEntry(name, entry) });
+          entries.push({ connectionId, source: projectManifestEntry(name, entry, quoteIdentifier) });
         }
       } catch {
         // skip unparseable shards
@@ -1195,19 +1219,66 @@ export interface ManifestTableEntry {
   usage?: TableUsageOutput;
 }
 
-export function projectManifestEntry(name: string, entry: ManifestTableEntry): SemanticLayerSource {
+export type ManifestIdentifierQuoter = (identifier: string) => string;
+
+/**
+ * Native-dialect identifier quoter for manifest projection, or null for
+ * non-SQL connections (their sources are searchable but never SQL-queried).
+ * The Python planner parses column `expr` in the connection's dialect, so the
+ * physical reference must be quoted with that dialect's identifier character.
+ */
+export function manifestIdentifierQuoterForConnectionType(
+  connectionType: string | undefined,
+): ManifestIdentifierQuoter | null {
+  const driver = driverForConnectionType(connectionType);
+  if (!driver || !isSqlQueryableDriver(driver)) {
+    return null;
+  }
+  const dialect = getSqlDialectForDriver(driver);
+  return (identifier) => dialect.quoteIdentifier(identifier);
+}
+
+// Physical column names may legally contain '.' (quoted warehouse identifiers,
+// MongoDB field names), but the contract requires unqualified output names — a
+// dot in `name` reads as a table qualification (#337). Dotted physical names
+// get a deterministic '_' alias; the physical reference survives in `expr`.
+function manifestColumnRenames(physicalNames: readonly string[]): Map<string, string> {
+  const renames = new Map<string, string>();
+  const taken = new Set(physicalNames.filter((name) => !name.includes('.')));
+  for (const name of physicalNames) {
+    if (!name.includes('.') || renames.has(name)) {
+      continue;
+    }
+    const base = name.replace(/\./g, '_');
+    let candidate = base;
+    for (let suffix = 2; taken.has(candidate); suffix += 1) {
+      candidate = `${base}_${suffix}`;
+    }
+    taken.add(candidate);
+    renames.set(name, candidate);
+  }
+  return renames;
+}
+
+export function projectManifestEntry(
+  name: string,
+  entry: ManifestTableEntry,
+  quoteIdentifier: ManifestIdentifierQuoter | null,
+): SemanticLayerSource {
+  const renames = manifestColumnRenames(entry.columns.map((c) => c.name));
   const columns = entry.columns.map((c) => ({
-    name: c.name,
+    name: renames.get(c.name) ?? c.name,
     type: c.type,
     role: c.type === 'time' ? 'time' : undefined,
     descriptions: c.descriptions,
     constraints: c.constraints,
     enum_values: c.enum_values,
     tests: c.tests,
+    ...(renames.has(c.name) && quoteIdentifier ? { expr: quoteIdentifier(c.name) } : {}),
   }));
 
-  const pkColumns = entry.columns.filter((c) => c.pk).map((c) => c.name);
-  const grain = pkColumns.length > 0 ? pkColumns : entry.columns.map((c) => c.name);
+  const pkColumns = entry.columns.filter((c) => c.pk).map((c) => renames.get(c.name) ?? c.name);
+  const grain = pkColumns.length > 0 ? pkColumns : columns.map((c) => c.name);
 
   // Table-level dbt config from manifest shards is surfaced on the source for search / tools.
   const source: SemanticLayerSource = {

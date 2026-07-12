@@ -34,6 +34,22 @@ const DRIVER_TO_CONNECTION_TYPE: Record<string, ConnectionType> = {
   athena: 'ATHENA',
 };
 
+const CONNECTION_TYPE_TO_DRIVER: Record<string, string> = Object.fromEntries(
+  Object.entries(DRIVER_TO_CONNECTION_TYPE).map(([driver, connectionType]) => [connectionType, driver]),
+);
+
+/**
+ * Scan-driver name for a catalog `connectionType`. Accepts both the descriptor
+ * form (`POSTGRESQL`) and the driver form (`postgres`) — non-warehouse
+ * connections fall back to their driver string in `connectionType`.
+ */
+export function driverForConnectionType(connectionType: string | undefined): string | null {
+  if (!connectionType) {
+    return null;
+  }
+  return CONNECTION_TYPE_TO_DRIVER[connectionType.toUpperCase()] ?? connectionType.toLowerCase();
+}
+
 export function localConnectionToWarehouseDescriptor(
   id: string,
   connection: KtxProjectConnectionConfig | undefined,
