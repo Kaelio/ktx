@@ -669,7 +669,6 @@ class TestMeasureNoSourceRef:
             planner.plan(
                 SemanticQuery(
                     measures=["sum(1)"],
-                    dimensions=["orders.status"],
                 )
             )
 
