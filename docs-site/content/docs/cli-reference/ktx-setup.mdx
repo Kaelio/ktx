@@ -60,18 +60,26 @@ prompts.
 
 | Flag | Description |
 |------|-------------|
-| `--llm-backend <backend>` | LLM backend: `anthropic`, `vertex`, `claude-code`, or `codex` |
+| `--llm-backend <backend>` | LLM backend: `anthropic`, `vertex`, `gateway`, `openai-compatible`, `claude-code`, or `codex` |
 | `--llm-backend claude-code` | Use the local Claude Code session for **ktx** LLM calls |
 | `--llm-backend codex` | Use local Codex authentication for **ktx** LLM calls |
 | `--anthropic-api-key-env <name>` | Environment variable containing the Anthropic API key |
 | `--anthropic-api-key-file <path>` | File containing the Anthropic API key |
 | `--vertex-project <project>` | Vertex AI project ID, `env:NAME`, or `file:/path` reference |
 | `--vertex-location <location>` | Vertex AI location, `env:NAME`, or `file:/path` reference |
+| `--llm-base-url <url>` | OpenAI-compatible base URL, `env:NAME`, or `file:/path` reference |
+| `--llm-model <model>` | OpenAI-compatible model id applied to every ktx role |
+| `--llm-api-key-env <name>` | Environment variable containing the OpenAI-compatible API key |
+| `--llm-api-key-file <path>` | File containing the OpenAI-compatible API key |
 | `--skip-llm` | Leave LLM setup incomplete |
 
 Choose only one Anthropic credential source. Anthropic credential flags are only
 valid with the Anthropic backend; Vertex flags are only valid with the Vertex
-backend. The `claude-code` and `codex` backends use local authentication instead
+backend; the `--llm-base-url`, `--llm-model`, and `--llm-api-key-*` flags are only
+valid with `--llm-backend openai-compatible` (and `--llm-api-key-*` are mutually
+exclusive). The `openai-compatible` backend needs `--llm-base-url` and
+`--llm-model`; the API key flags are optional for keyless endpoints. The
+`claude-code` and `codex` backends use local authentication instead
 of Anthropic API key or Vertex flags. After you choose a backend, `ktx setup`
 writes that backend's per-role model preset to `ktx.yaml`. To change a model,
 edit the matching `llm.models.<role>` value in `ktx.yaml`.
@@ -90,10 +98,16 @@ calls.
 | `--embedding-backend <backend>` | Embedding backend: `openai` or `sentence-transformers` |
 | `--embedding-api-key-env <name>` | Environment variable containing the embedding provider API key |
 | `--embedding-api-key-file <path>` | File containing the embedding provider API key |
+| `--embedding-base-url <url>` | OpenAI-compatible embeddings base URL, `env:NAME`, or `file:/path` reference |
+| `--embedding-model <model>` | Embedding model id (default `text-embedding-3-small`) |
+| `--embedding-dimensions <n>` | Embedding vector dimensionality (default `1536`) |
 | `--skip-embeddings` | Leave embedding setup incomplete |
 
 `sentence-transformers` uses the **ktx**-managed Python runtime. Choose only one
-embedding credential source.
+embedding credential source. The `openai` backend can target any
+OpenAI-compatible embeddings endpoint: set `--embedding-base-url` and pick the
+`--embedding-model` and `--embedding-dimensions` your endpoint expects (for
+example `text-embedding-v4` at `1024` dimensions on Alibaba Bailian/DashScope).
 
 ### Runtime
 
@@ -314,7 +328,7 @@ Use `ktx status` for repeatable readiness checks after setup exits.
 |-------|-------|----------|
 | Setup resumes an unexpected project | `KTX_PROJECT_DIR` or nearest `ktx.yaml` points to another directory | Pass `--project-dir <path>` explicitly |
 | Setup cannot run in CI | Required values are missing and `--no-input` disables prompts | Provide the relevant automation flags or create a fixture `ktx.yaml` |
-| `Missing LLM backend: pass --llm-backend …` | `--no-input` setup ran without an LLM backend; `--target` does not select one | Pass `--llm-backend claude-code`, `codex`, `anthropic`, or `vertex` (with that backend's credential flags) |
+| `Missing LLM backend: pass --llm-backend …` | `--no-input` setup ran without an LLM backend; `--target` does not select one | Pass `--llm-backend claude-code`, `codex`, `anthropic`, `vertex`, or `openai-compatible` (with that backend's credential flags; `openai-compatible` also needs `--llm-base-url` and `--llm-model`) |
 | Provider health check fails | Provider key, model id, Vertex project, or Vertex location is invalid | Fix the `env:` or `file:` reference and rerun setup |
 | Python runtime is missing | The selected setup needs runtime-backed agent, query-history, Looker, or local embedding features | Accept the interactive prompt, rerun with `--yes`, or run the suggested `ktx admin runtime install` command |
 | `--enable-query-history` is rejected | The selected database driver does not support query history | Use Postgres, BigQuery, or Snowflake, or rerun without query-history flags |
