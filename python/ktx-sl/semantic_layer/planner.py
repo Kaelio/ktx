@@ -60,7 +60,7 @@ class QueryPlanner:
         dimensions = self._resolve_dimensions(query.dimensions)
 
         # 2. Resolve measures (parse, look up pre-defined, classify)
-        raw_measures = self._resolve_measures(query.measures)
+        raw_measures = self._resolve_measures(query.measures, dimensions)
 
         if query.predefined_measures_only:
             self._reject_composed_measures(raw_measures)
@@ -212,7 +212,11 @@ class QueryPlanner:
             )
         return field  # not found — leave as-is, downstream will error
 
-    def _resolve_measures(self, raw: list[str | dict]) -> list[ResolvedMeasure]:
+    def _resolve_measures(
+        self,
+        raw: list[str | dict],
+        dimensions: list[QueryDimension],
+    ) -> list[ResolvedMeasure]:
         measures: list[ResolvedMeasure] = []
         # Collect all named measures for dependency detection
         named: set[str] = set()
@@ -221,10 +225,26 @@ class QueryPlanner:
                 named.add(m["name"])
         colliding_predefined_names = self._collect_colliding_predefined_names(raw)
 
+        # Collect candidate sources from dimensions and other measures in the query
+        candidate_sources: set[str] = set()
+        for d in dimensions:
+            candidate_sources.update(self.parser.extract_source_refs(d.field))
+
+        for m in raw:
+            candidate_sources.update(
+                self._extract_sources_from_raw_measure(
+                    m, colliding_predefined_names, named
+                )
+            )
+
         for m in raw:
             if isinstance(m, str):
                 measures.append(
-                    self._resolve_measure_str(m, colliding_predefined_names)
+                    self._resolve_measure_str(
+                        m,
+                        colliding_predefined_names,
+                        candidate_sources=candidate_sources,
+                    )
                 )
             elif isinstance(m, dict):
                 measures.append(
@@ -232,6 +252,7 @@ class QueryPlanner:
                         m,
                         named,
                         colliding_predefined_names,
+                        candidate_sources=candidate_sources,
                     )
                 )
 
@@ -570,6 +591,7 @@ class QueryPlanner:
         self,
         s: str,
         colliding_predefined_names: set[str],
+        candidate_sources: set[str] | None = None,
     ) -> ResolvedMeasure:
         """
         "orders.revenue" → pre-defined lookup
@@ -601,7 +623,7 @@ class QueryPlanner:
                         qualified,
                     )
                     return self._resolve_measure_str(
-                        qualified, colliding_predefined_names
+                        qualified, colliding_predefined_names, candidate_sources
                     )
 
         if predefined_ref:
@@ -639,13 +661,21 @@ class QueryPlanner:
             raise ValueError(f"Measure '{s}' does not reference any source")
 
         # Runtime expression
+        inferred_source = None
         if not parsed.source_refs:
-            raise ValueError(f"Measure '{s}' does not reference any source")
+            if candidate_sources and len(candidate_sources) == 1:
+                inferred_source = next(iter(candidate_sources))
+                s = self._qualify_bare_columns(s, inferred_source)
+                parsed = self.parser.parse(s)
+            else:
+                self._raise_sourceless_measure_error(s, candidate_sources)
 
         # Reject nested aggregation (e.g., avg(sum(orders.amount)))
         self._check_nested_aggregation(s)
 
-        source_name = sorted(parsed.source_refs)[0]
+        source_name = (
+            inferred_source if inferred_source else sorted(parsed.source_refs)[0]
+        )
         name = self._auto_measure_name(s)
         return ResolvedMeasure(
             name=name,
@@ -660,6 +690,7 @@ class QueryPlanner:
         d: dict,
         named: set[str],
         colliding_predefined_names: set[str],
+        candidate_sources: set[str] | None = None,
     ) -> ResolvedMeasure:
         expr = d.get("expr", "")
         name = d.get("name", expr)
@@ -720,13 +751,24 @@ class QueryPlanner:
                 depends_on=sorted(all_dep_names),
             )
 
+        inferred_source = None
         if not parsed.source_refs:
-            raise ValueError(f"Measure expr '{expr}' does not reference any source")
+            if parsed.is_aggregate:
+                if candidate_sources and len(candidate_sources) == 1:
+                    inferred_source = next(iter(candidate_sources))
+                    expr = self._qualify_bare_columns(expr, inferred_source)
+                    parsed = self.parser.parse(expr, known_measure_names=named)
+                else:
+                    self._raise_sourceless_measure_error(expr, candidate_sources)
+            else:
+                raise ValueError(f"Measure expr '{expr}' does not reference any source")
 
         # Reject nested aggregation (e.g., avg(sum(orders.amount)))
         self._check_nested_aggregation(expr)
 
-        source_name = sorted(parsed.source_refs)[0]
+        source_name = (
+            inferred_source if inferred_source else sorted(parsed.source_refs)[0]
+        )
         return ResolvedMeasure(
             name=name,
             original_name=name,
@@ -734,6 +776,94 @@ class QueryPlanner:
             source_name=source_name,
             provenance=Provenance.COMPOSED,
         )
+
+    def _extract_sources_from_raw_measure(
+        self,
+        m: str | dict,
+        colliding_predefined_names: set[str],
+        known_measure_names: set[str],
+    ) -> set[str]:
+        sources = set()
+        if isinstance(m, str):
+            predefined_ref = self._match_predefined_ref(m)
+            if predefined_ref:
+                sources.add(predefined_ref[0])
+                return sources
+
+            # Try unqualified resolution for bare identifiers (e.g. "revenue" → "orders.revenue")
+            parsed = self.parser.parse(m)
+            if not parsed.is_aggregate:
+                bare = m.strip()
+                if bare.isidentifier():
+                    unqualified = self._resolve_unqualified_measure(bare)
+                    if unqualified:
+                        sources.add(unqualified[0])
+                        return sources
+
+            if parsed.source_refs:
+                sources.update(parsed.source_refs)
+        elif isinstance(m, dict):
+            expr = m.get("expr", "")
+            parsed = self.parser.parse(expr, known_measure_names=known_measure_names)
+            for src_name, _ in self._extract_predefined_refs(expr):
+                sources.add(src_name)
+            if parsed.source_refs:
+                sources.update(parsed.source_refs)
+        return sources
+
+    def _qualify_bare_columns(self, expr: str, source_name: str) -> str:
+        """Qualify bare column references in an aggregate expression with the inferred source name."""
+        try:
+            quoted = quote_reserved_identifiers(expr, self.dialect)
+            tree = sqlglot.parse_one(f"SELECT {quoted}", read=self.dialect)
+
+            def _qualify(node: exp.Expression) -> exp.Expression:
+                if isinstance(node, exp.Column) and not node.table:
+                    return exp.Column(
+                        this=node.this.copy(),
+                        table=exp.to_identifier(source_name),
+                    )
+                return node
+
+            transformed = tree.transform(_qualify)
+            return transformed.expressions[0].sql(dialect=self.dialect)
+        except Exception as e:
+            logger.debug(
+                "Failed to qualify bare columns in expression '%s' for source '%s': %s",
+                expr,
+                source_name,
+                e,
+            )
+            return expr
+
+    def _raise_sourceless_measure_error(
+        self, expr: str, candidate_sources: set[str] | None
+    ) -> None:
+        candidate_sources = candidate_sources or set()
+        if candidate_sources:
+            src_list = sorted(list(candidate_sources))
+            msg_prefix = f"is ambiguous. The query references multiple sources: {', '.join(src_list)}"
+        else:
+            src_list = sorted(list(self.sources.keys()))
+            msg_prefix = "does not reference any source"
+            if src_list:
+                msg_prefix += f". The model has multiple sources: {', '.join(src_list)}"
+            else:
+                msg_prefix += ". The model has no sources defined"
+
+        suggestions = []
+        for src_name in src_list:
+            source = self.sources.get(src_name)
+            if source:
+                pk_col = source.grain[0] if source.grain else "id"
+                suggestions.append(f"count({src_name}.{pk_col})")
+                for mdef in source.measures[:2]:
+                    suggestions.append(f"{src_name}.{mdef.name}")
+
+        msg = f"Measure expr '{expr}' {msg_prefix}."
+        if suggestions:
+            msg += f" Suggest using one of: {', '.join(suggestions)}"
+        raise ValueError(msg)
 
     def _check_nested_aggregation(self, expr: str) -> None:
         """Reject expressions with nested aggregate functions (e.g., avg(sum(x)))."""

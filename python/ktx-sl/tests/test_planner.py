@@ -1507,3 +1507,123 @@ def test_derived_measure_with_bigquery_native_dependency(make_engine_factory):
     assert "APPROX_COUNT_DISTINCT" in result.sql.upper(), (
         f"APPROX_COUNT_DISTINCT was rewritten away:\n{result.sql}"
     )
+
+
+class TestSourcelessAggregates:
+    def test_count_star_unambiguous(self, planner):
+        query = SemanticQuery(
+            measures=["count(*)"],
+            dimensions=["orders.status"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 1
+        assert plan.measures[0].source_name == "orders"
+        assert "count" in plan.measures[0].expr.lower()
+
+    def test_count_one_unambiguous(self, planner):
+        query = SemanticQuery(
+            measures=["count(1)"],
+            dimensions=["orders.status"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 1
+        assert plan.measures[0].source_name == "orders"
+        assert "count" in plan.measures[0].expr.lower()
+
+    def test_sum_amount_unambiguous(self, planner):
+        query = SemanticQuery(
+            measures=["sum(amount)"],
+            dimensions=["orders.status"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 1
+        assert plan.measures[0].source_name == "orders"
+        assert "sum" in plan.measures[0].expr.lower()
+        assert "orders.amount" in plan.measures[0].expr.lower()
+
+    def test_mixed_measures_unambiguous(self, planner):
+        query = SemanticQuery(
+            measures=["sum(amount)", "count(*)"],
+            dimensions=["orders.status"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 2
+        assert all(m.source_name == "orders" for m in plan.measures)
+        exprs_lower = {m.expr.lower() for m in plan.measures}
+        assert any("orders.amount" in e for e in exprs_lower)
+        assert any("count" in e for e in exprs_lower)
+
+    def test_unambiguous_via_other_measures(self, planner):
+        query = SemanticQuery(
+            measures=["count(*)", "sum(orders.amount)"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 2
+        assert all(m.source_name == "orders" for m in plan.measures)
+
+    def test_measure_only_infer_via_other_qualified_measure(self, planner):
+        query = SemanticQuery(
+            measures=["sum(amount)", "count(orders.id)"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 2
+        assert all(m.source_name == "orders" for m in plan.measures)
+        exprs_lower = {m.expr.lower() for m in plan.measures}
+        assert any("orders.amount" in e for e in exprs_lower)
+        assert any("orders.id" in e for e in exprs_lower)
+
+    def test_unambiguous_dict_format(self, planner):
+        query = SemanticQuery(
+            measures=[{"expr": "sum(amount)", "name": "total_amount"}],
+            dimensions=["orders.status"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 1
+        assert plan.measures[0].source_name == "orders"
+        assert "sum" in plan.measures[0].expr.lower()
+        assert "orders.amount" in plan.measures[0].expr.lower()
+
+    def test_unambiguous_dict_format_count_star(self, planner):
+        query = SemanticQuery(
+            measures=[{"expr": "count(*)", "name": "total_count"}],
+            dimensions=["orders.status"],
+        )
+        plan = planner.plan(query)
+        assert "orders" in plan.sources_used
+        assert len(plan.measures) == 1
+        assert plan.measures[0].source_name == "orders"
+        assert "count" in plan.measures[0].expr.lower()
+
+    def test_ambiguous_raises(self, planner):
+        query = SemanticQuery(
+            measures=["count(*)"],
+            dimensions=["orders.status", "customers.segment"],
+        )
+        with pytest.raises(ValueError) as exc:
+            planner.plan(query)
+        err_msg = str(exc.value).lower()
+        assert "ambiguous" in err_msg
+        assert "customers" in err_msg
+        assert "orders" in err_msg
+        assert "count(customers.id)" in err_msg
+        assert "count(orders.id)" in err_msg
+
+    def test_zero_sources_raises(self, planner):
+        query = SemanticQuery(
+            measures=["count(*)"],
+        )
+        with pytest.raises(ValueError) as exc:
+            planner.plan(query)
+        err_msg = str(exc.value).lower()
+        assert "does not reference any source" in err_msg
+        assert "customers" in err_msg
+        assert "orders" in err_msg
+        assert "count(customers.id)" in err_msg
+        assert "count(orders.id)" in err_msg
