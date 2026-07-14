@@ -482,6 +482,7 @@ describe('setup embeddings step', () => {
         embeddingBaseUrl: 'https://maas.example/compatible-mode/v1',
         embeddingModel: 'text-embedding-v4',
         embeddingDimensions: 1024,
+        embeddingBatchSize: 10,
         cliVersion: '0.2.0',
         runtimeInstallPolicy: 'auto',
         skipEmbeddings: false,
@@ -502,16 +503,20 @@ describe('setup embeddings step', () => {
       backend: 'openai',
       model: 'text-embedding-v4',
       dimensions: 1024,
+      batchSize: 10,
       openai: { api_key: 'env:KTX_MAAS_KEY', base_url: 'https://maas.example/compatible-mode/v1' }, // pragma: allowlist secret
     });
+    // persistEmbeddingConfig mirrors the same config into the scan enrichment block,
+    // so the schema scan's embedding requests honor the endpoint's batch cap too.
+    expect(config.scan.enrichment.embeddings?.batchSize).toBe(10);
   });
 
-  it('prompts for base URL, model, and dimensions in the interactive OpenAI flow', async () => {
+  it('prompts for base URL, model, dimensions, and batch size in the interactive OpenAI flow', async () => {
     const io = makeIo();
     const healthCheck = vi.fn(async () => ({ ok: true as const }));
     const prompts = makePromptAdapter({
       selectValues: ['openai', 'env'],
-      textValues: ['https://maas.example/v1', 'text-embedding-v4', '1024'],
+      textValues: ['https://maas.example/v1', 'text-embedding-v4', '1024', '10'],
     });
 
     const result = await runKtxSetupEmbeddingsStep(
@@ -532,6 +537,7 @@ describe('setup embeddings step', () => {
       backend: 'openai',
       model: 'text-embedding-v4',
       dimensions: 1024,
+      batchSize: 10,
       openai: { api_key: 'env:OPENAI_API_KEY', base_url: 'https://maas.example/v1' }, // pragma: allowlist secret
     });
   });

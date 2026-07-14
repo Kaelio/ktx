@@ -112,6 +112,7 @@ function shouldShowSetupEntryMenu(
     embeddingBaseUrl?: string;
     embeddingModel?: string;
     embeddingDimensions?: number;
+    embeddingBatchSize?: number;
     skipEmbeddings?: boolean;
     database?: KtxSetupDatabaseDriver[];
     databaseConnectionId?: string[];
@@ -193,6 +194,7 @@ function shouldShowSetupEntryMenu(
     'embeddingBaseUrl',
     'embeddingModel',
     'embeddingDimensions',
+    'embeddingBatchSize',
     'skipEmbeddings',
     'databaseUrl',
     'enableQueryHistory',
@@ -285,6 +287,11 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
     .addOption(new Option('--embedding-model <model>', 'Embedding model id').hideHelp())
     .addOption(
       new Option('--embedding-dimensions <n>', 'Embedding vector dimensionality')
+        .argParser(positiveInteger)
+        .hideHelp(),
+    )
+    .addOption(
+      new Option('--embedding-batch-size <n>', 'Max texts per embedding request (some endpoints cap this, e.g. 10)')
         .argParser(positiveInteger)
         .hideHelp(),
     )
@@ -516,6 +523,7 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
       ...(options.embeddingBaseUrl ? { embeddingBaseUrl: options.embeddingBaseUrl } : {}),
       ...(options.embeddingModel ? { embeddingModel: options.embeddingModel } : {}),
       ...(options.embeddingDimensions !== undefined ? { embeddingDimensions: options.embeddingDimensions } : {}),
+      ...(options.embeddingBatchSize !== undefined ? { embeddingBatchSize: options.embeddingBatchSize } : {}),
       skipEmbeddings: options.skipEmbeddings === true,
       ...(options.database.length > 0 ? { databaseDrivers: options.database } : {}),
       ...(options.databaseConnectionId.length > 0 && creatingDatabaseConnection

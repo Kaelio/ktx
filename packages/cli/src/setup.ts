@@ -102,6 +102,7 @@ export type KtxSetupArgs =
       embeddingBaseUrl?: string;
       embeddingModel?: string;
       embeddingDimensions?: number;
+      embeddingBatchSize?: number;
       skipEmbeddings: boolean;
       databaseDrivers?: KtxSetupDatabaseDriver[];
       databaseConnectionIds?: string[];
@@ -824,6 +825,7 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
             ...(args.embeddingBaseUrl ? { embeddingBaseUrl: args.embeddingBaseUrl } : {}),
             ...(args.embeddingModel ? { embeddingModel: args.embeddingModel } : {}),
             ...(args.embeddingDimensions !== undefined ? { embeddingDimensions: args.embeddingDimensions } : {}),
+            ...(args.embeddingBatchSize !== undefined ? { embeddingBatchSize: args.embeddingBatchSize } : {}),
             forcePrompt: forcePromptSteps.has('embeddings') || runOnly === 'embeddings',
             showPromptInstructions,
             skipEmbeddings: args.skipEmbeddings || !shouldRunEmbeddings,

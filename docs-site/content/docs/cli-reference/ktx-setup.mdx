@@ -101,6 +101,7 @@ calls.
 | `--embedding-base-url <url>` | OpenAI-compatible embeddings base URL, `env:NAME`, or `file:/path` reference |
 | `--embedding-model <model>` | Embedding model id (default `text-embedding-3-small`) |
 | `--embedding-dimensions <n>` | Embedding vector dimensionality (default `1536`) |
+| `--embedding-batch-size <n>` | Max texts per embedding request; set this when the endpoint caps batch size |
 | `--skip-embeddings` | Leave embedding setup incomplete |
 
 `sentence-transformers` uses the **ktx**-managed Python runtime. Choose only one
@@ -108,6 +109,9 @@ embedding credential source. The `openai` backend can target any
 OpenAI-compatible embeddings endpoint: set `--embedding-base-url` and pick the
 `--embedding-model` and `--embedding-dimensions` your endpoint expects (for
 example `text-embedding-v4` at `1024` dimensions on Alibaba Bailian/DashScope).
+Some endpoints reject large embedding batches (DashScope `text-embedding-v4`
+caps a request at 10 inputs); set `--embedding-batch-size 10` so schema-scan and
+ingest embedding requests stay within the limit.
 
 ### Runtime
 
