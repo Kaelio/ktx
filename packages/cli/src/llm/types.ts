@@ -3,7 +3,7 @@ import type { LanguageModel, TelemetrySettings, ToolCallRepairFunction, ToolSet 
 export const KTX_MODEL_ROLES = ['default', 'triage', 'candidateExtraction', 'curator', 'reconcile', 'repair'] as const;
 
 export type KtxModelRole = (typeof KTX_MODEL_ROLES)[number];
-type KtxLlmBackend = 'anthropic' | 'vertex' | 'gateway' | 'claude-code' | 'codex';
+type KtxLlmBackend = 'anthropic' | 'vertex' | 'gateway' | 'openai-compatible' | 'claude-code' | 'codex';
 export type KtxPromptCacheTtl = '5m' | '1h';
 
 type KtxJsonValue =
@@ -40,6 +40,7 @@ export interface KtxLlmConfig {
   vertex?: { project?: string; location: string };
   anthropic?: { apiKey?: string; baseURL?: string };
   gateway?: { baseURL?: string; apiKey?: string };
+  openaiCompatible?: { apiKey?: string; baseURL?: string };
   modelSlots: { default: string } & Partial<Record<KtxModelRole, string>>;
   promptCaching?: Partial<KtxPromptCachingConfig>;
   telemetry?: {

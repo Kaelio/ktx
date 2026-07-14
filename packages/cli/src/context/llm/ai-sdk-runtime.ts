@@ -49,9 +49,16 @@ function hasTools(tools: Record<string, unknown>): boolean {
   return Object.keys(tools).length > 0;
 }
 
-function modelProviderName(model: unknown): RateLimitProvider {
+/** @internal */
+export function modelProviderName(model: unknown): RateLimitProvider {
   const provider = (model as { provider?: string }).provider ?? '';
-  return provider.includes('vertex') || provider.includes('google') ? 'vertex' : 'anthropic-api';
+  if (provider.includes('vertex') || provider.includes('google')) {
+    return 'vertex';
+  }
+  if (provider.includes('openai')) {
+    return 'openai-compatible';
+  }
+  return 'anthropic-api';
 }
 
 interface HeaderLimitPair {

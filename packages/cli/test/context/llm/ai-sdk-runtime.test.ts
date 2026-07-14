@@ -7,7 +7,7 @@ vi.mock('ai', () => ({
 }));
 
 import { generateText } from 'ai';
-import { AiSdkKtxLlmRuntime } from '../../../src/context/llm/ai-sdk-runtime.js';
+import { AiSdkKtxLlmRuntime, modelProviderName } from '../../../src/context/llm/ai-sdk-runtime.js';
 
 describe('AiSdkKtxLlmRuntime.runAgentLoop', () => {
   let runtime: AiSdkKtxLlmRuntime;
@@ -564,5 +564,22 @@ describe('AiSdkKtxLlmRuntime.runAgentLoop', () => {
     expect(serialized).not.toContain('SECRET SYSTEM PROMPT');
     expect(serialized).not.toContain('SECRET USER PROMPT');
     expect(serialized).not.toContain('SECRET TOOL DESCRIPTION');
+  });
+});
+
+describe('modelProviderName', () => {
+  it('classifies OpenAI-compatible providers for rate limiting', () => {
+    expect(modelProviderName({ provider: 'openai-compatible.chat' })).toBe('openai-compatible');
+    expect(modelProviderName({ provider: 'openai' })).toBe('openai-compatible');
+  });
+
+  it('classifies Vertex and Google providers as vertex', () => {
+    expect(modelProviderName({ provider: 'google-vertex' })).toBe('vertex');
+    expect(modelProviderName({ provider: 'google.generative-ai' })).toBe('vertex');
+  });
+
+  it('defaults unknown or Anthropic providers to anthropic-api', () => {
+    expect(modelProviderName({ provider: 'anthropic' })).toBe('anthropic-api');
+    expect(modelProviderName({})).toBe('anthropic-api');
   });
 });

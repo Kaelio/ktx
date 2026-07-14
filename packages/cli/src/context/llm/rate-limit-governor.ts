@@ -1,6 +1,6 @@
 import { createAbortError, throwIfAborted } from '../core/abort.js';
 
-export type RateLimitProvider = 'claude-subscription' | 'anthropic-api' | 'vertex' | 'codex';
+export type RateLimitProvider = 'claude-subscription' | 'anthropic-api' | 'vertex' | 'codex' | 'openai-compatible';
 type RateLimitSignalStatus = 'allowed' | 'warning' | 'rejected';
 
 export interface RateLimitSignal {

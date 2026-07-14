@@ -102,11 +102,13 @@ export function resolveLocalKtxLlmConfig(config: KtxProjectLlmConfig, env: NodeJ
   const vertex = config.provider.backend === 'vertex' ? resolvedVertexConfig(config.provider.vertex, env) : undefined;
   const anthropic = resolvedProviderConfig(config.provider.anthropic, env);
   const gateway = resolvedProviderConfig(config.provider.gateway, env);
+  const openaiCompatible = resolvedProviderConfig(config.provider.openaiCompatible, env);
   return {
     backend: config.provider.backend,
     ...(vertex ? { vertex } : {}),
     ...(anthropic ? { anthropic } : {}),
     ...(gateway ? { gateway } : {}),
+    ...(openaiCompatible ? { openaiCompatible } : {}),
     modelSlots,
     promptCaching: config.promptCaching,
   };

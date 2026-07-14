@@ -134,6 +134,9 @@ importers:
       '@ai-sdk/google-vertex':
         specifier: ^4.0.134
         version: 4.0.134(zod@4.4.3)
+      '@ai-sdk/openai-compatible':
+        specifier: ^2.0.47
+        version: 2.0.47(zod@4.4.3)
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.146
         version: 0.3.146(@anthropic-ai/sdk@0.97.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)

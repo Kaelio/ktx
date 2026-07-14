@@ -82,6 +82,72 @@ describe('local ktx LLM config', () => {
     });
   });
 
+  it('resolves openai-compatible env references into a KtxLlmConfig', () => {
+    const config: KtxProjectLlmConfig = {
+      provider: {
+        backend: 'openai-compatible',
+        openaiCompatible: { api_key: 'env:MAAS_KEY', base_url: 'https://maas.example/compatible-mode/v1' }, // pragma: allowlist secret
+      },
+      models: { default: 'qwen3.7-max' },
+      promptCaching: { enabled: false },
+    };
+
+    expect(
+      resolveLocalKtxLlmConfig(config, { MAAS_KEY: 'sk-maas' }), // pragma: allowlist secret
+    ).toEqual({
+      backend: 'openai-compatible',
+      openaiCompatible: { apiKey: 'sk-maas', baseURL: 'https://maas.example/compatible-mode/v1' }, // pragma: allowlist secret
+      modelSlots: { default: 'qwen3.7-max' },
+      promptCaching: { enabled: false },
+    });
+  });
+
+  it('creates a non-null provider for the openai-compatible backend', () => {
+    const createKtxLlmProvider = vi.fn(() => ({ getModel: vi.fn() }) as never);
+    const provider = createLocalKtxLlmProviderFromConfig(
+      {
+        provider: { backend: 'openai-compatible', openaiCompatible: { base_url: 'https://maas.example/v1' } },
+        models: { default: 'qwen3.7-max' },
+      },
+      { createKtxLlmProvider },
+    );
+
+    expect(provider).not.toBeNull();
+    expect(createKtxLlmProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: 'openai-compatible', openaiCompatible: { baseURL: 'https://maas.example/v1' } }),
+    );
+  });
+
+  it('routes the openai-compatible backend through the AI SDK runtime', () => {
+    const createAiSdkRuntime = vi.fn(() => ({
+      generateText: vi.fn(),
+      generateObject: vi.fn(),
+      runAgentLoop: vi.fn(),
+      subprocessForkSpec: vi.fn(() => null),
+    }));
+    const createKtxLlmProvider = vi.fn(() => ({ getModel: vi.fn() }) as never);
+
+    const runtime = createLocalKtxLlmRuntimeFromConfig(
+      {
+        provider: {
+          backend: 'openai-compatible',
+          openaiCompatible: { api_key: 'env:MAAS_KEY', base_url: 'https://maas.example/v1' }, // pragma: allowlist secret
+        },
+        models: { default: 'qwen3.7-max' },
+      },
+      { env: { MAAS_KEY: 'sk-maas' }, createAiSdkRuntime, createKtxLlmProvider }, // pragma: allowlist secret
+    );
+
+    expect(runtime).not.toBeNull();
+    expect(createAiSdkRuntime).toHaveBeenCalledTimes(1);
+    expect(createKtxLlmProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: 'openai-compatible',
+        openaiCompatible: { apiKey: 'sk-maas', baseURL: 'https://maas.example/v1' }, // pragma: allowlist secret
+      }),
+    );
+  });
+
   it('returns null when the local LLM backend is disabled', () => {
     expect(
       createLocalKtxLlmProviderFromConfig({
