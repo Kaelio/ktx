@@ -1377,6 +1377,73 @@ describe('runKtxCli', () => {
     );
   });
 
+  it('dispatches OpenAI-compatible embedding customization flags to the setup runner', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        [
+          '--project-dir',
+          tempDir,
+          'setup',
+          '--no-input',
+          '--skip-llm',
+          '--embedding-backend',
+          'openai',
+          '--embedding-api-key-env',
+          'KTX_MAAS_KEY',
+          '--embedding-base-url',
+          'https://maas.example/compatible-mode/v1',
+          '--embedding-model',
+          'text-embedding-v4',
+          '--embedding-dimensions',
+          '1024',
+        ],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(0);
+
+    expect(setup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'run',
+        embeddingBackend: 'openai',
+        embeddingApiKeyEnv: 'KTX_MAAS_KEY',
+        embeddingBaseUrl: 'https://maas.example/compatible-mode/v1',
+        embeddingModel: 'text-embedding-v4',
+        embeddingDimensions: 1024,
+        skipEmbeddings: false,
+      }),
+      setupIo.io,
+    );
+  });
+
+  it('rejects a non-positive --embedding-dimensions value', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        [
+          '--project-dir',
+          tempDir,
+          'setup',
+          '--no-input',
+          '--embedding-backend',
+          'openai',
+          '--embedding-dimensions',
+          '0',
+        ],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(1);
+
+    expect(setup).not.toHaveBeenCalled();
+    expect(setupIo.stderr()).toContain('Expected a positive integer');
+  });
+
   it('dispatches database setup flags to the setup runner', async () => {
     const setup = vi.fn(async () => 0);
     const setupIo = makeIo();

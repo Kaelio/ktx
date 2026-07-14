@@ -109,6 +109,9 @@ function shouldShowSetupEntryMenu(
     embeddingBackend?: string;
     embeddingApiKeyEnv?: string;
     embeddingApiKeyFile?: string;
+    embeddingBaseUrl?: string;
+    embeddingModel?: string;
+    embeddingDimensions?: number;
     skipEmbeddings?: boolean;
     database?: KtxSetupDatabaseDriver[];
     databaseConnectionId?: string[];
@@ -187,6 +190,9 @@ function shouldShowSetupEntryMenu(
     'embeddingBackend',
     'embeddingApiKeyEnv',
     'embeddingApiKeyFile',
+    'embeddingBaseUrl',
+    'embeddingModel',
+    'embeddingDimensions',
     'skipEmbeddings',
     'databaseUrl',
     'enableQueryHistory',
@@ -272,6 +278,15 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
     )
     .addOption(
       new Option('--embedding-api-key-file <path>', 'File containing the embedding provider API key').hideHelp(),
+    )
+    .addOption(
+      new Option('--embedding-base-url <url>', 'OpenAI-compatible embeddings base URL, env:NAME, or file:/path').hideHelp(),
+    )
+    .addOption(new Option('--embedding-model <model>', 'Embedding model id').hideHelp())
+    .addOption(
+      new Option('--embedding-dimensions <n>', 'Embedding vector dimensionality')
+        .argParser(positiveInteger)
+        .hideHelp(),
     )
     .addOption(new Option('--skip-embeddings', 'Leave embedding setup incomplete for now').hideHelp().default(false))
     .addOption(
@@ -498,6 +513,9 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
       ...(options.embeddingBackend ? { embeddingBackend: options.embeddingBackend } : {}),
       ...(options.embeddingApiKeyEnv ? { embeddingApiKeyEnv: options.embeddingApiKeyEnv } : {}),
       ...(options.embeddingApiKeyFile ? { embeddingApiKeyFile: options.embeddingApiKeyFile } : {}),
+      ...(options.embeddingBaseUrl ? { embeddingBaseUrl: options.embeddingBaseUrl } : {}),
+      ...(options.embeddingModel ? { embeddingModel: options.embeddingModel } : {}),
+      ...(options.embeddingDimensions !== undefined ? { embeddingDimensions: options.embeddingDimensions } : {}),
       skipEmbeddings: options.skipEmbeddings === true,
       ...(options.database.length > 0 ? { databaseDrivers: options.database } : {}),
       ...(options.databaseConnectionId.length > 0 && creatingDatabaseConnection

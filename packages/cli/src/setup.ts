@@ -99,6 +99,9 @@ export type KtxSetupArgs =
       embeddingBackend?: 'openai' | 'sentence-transformers';
       embeddingApiKeyEnv?: string;
       embeddingApiKeyFile?: string;
+      embeddingBaseUrl?: string;
+      embeddingModel?: string;
+      embeddingDimensions?: number;
       skipEmbeddings: boolean;
       databaseDrivers?: KtxSetupDatabaseDriver[];
       databaseConnectionIds?: string[];
@@ -818,6 +821,9 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
             ...(args.embeddingBackend ? { embeddingBackend: args.embeddingBackend } : {}),
             ...(args.embeddingApiKeyEnv ? { embeddingApiKeyEnv: args.embeddingApiKeyEnv } : {}),
             ...(args.embeddingApiKeyFile ? { embeddingApiKeyFile: args.embeddingApiKeyFile } : {}),
+            ...(args.embeddingBaseUrl ? { embeddingBaseUrl: args.embeddingBaseUrl } : {}),
+            ...(args.embeddingModel ? { embeddingModel: args.embeddingModel } : {}),
+            ...(args.embeddingDimensions !== undefined ? { embeddingDimensions: args.embeddingDimensions } : {}),
             forcePrompt: forcePromptSteps.has('embeddings') || runOnly === 'embeddings',
             showPromptInstructions,
             skipEmbeddings: args.skipEmbeddings || !shouldRunEmbeddings,

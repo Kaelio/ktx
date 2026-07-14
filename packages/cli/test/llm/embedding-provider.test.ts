@@ -55,6 +55,49 @@ describe('createKtxEmbeddingProvider', () => {
     });
   });
 
+  it('sends the configured model and dimensions to the OpenAI embeddings API', async () => {
+    const create = vi.fn().mockResolvedValue({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] });
+    const createOpenAIClient = vi.fn(() => ({ embeddings: { create } }));
+
+    const provider = createKtxEmbeddingProvider(
+      {
+        backend: 'openai',
+        model: 'text-embedding-v4',
+        dimensions: 3,
+        openai: { apiKey: 'sk-maas', baseURL: 'https://maas.example/compatible-mode/v1' }, // pragma: allowlist secret
+      },
+      { createOpenAIClient },
+    );
+
+    await expect(provider.embed('hello')).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(create).toHaveBeenCalledWith({
+      model: 'text-embedding-v4',
+      input: 'hello',
+      dimensions: 3,
+      encoding_format: 'float',
+    });
+  });
+
+  it('caps OpenAI embedding batches at the configured batch size', async () => {
+    const create = vi.fn();
+    const createOpenAIClient = vi.fn(() => ({ embeddings: { create } }));
+
+    const provider = createKtxEmbeddingProvider(
+      {
+        backend: 'openai',
+        model: 'text-embedding-v4',
+        dimensions: 3,
+        openai: { apiKey: 'sk-maas' }, // pragma: allowlist secret
+        batchSize: 2,
+      },
+      { createOpenAIClient },
+    );
+
+    expect(provider.maxBatchSize).toBe(2);
+    await expect(provider.embedMany(['a', 'b', 'c'])).rejects.toThrow('Embedding batch size 3 exceeds maximum 2');
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('supports sentence-transformers pathPrefix defaults and explicit empty prefix', async () => {
     const fetch = vi
       .fn()
