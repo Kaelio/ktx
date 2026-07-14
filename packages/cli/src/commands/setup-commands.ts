@@ -101,6 +101,10 @@ function shouldShowSetupEntryMenu(
     anthropicApiKeyFile?: string;
     vertexProject?: string;
     vertexLocation?: string;
+    llmBaseUrl?: string;
+    llmModel?: string;
+    llmApiKeyEnv?: string;
+    llmApiKeyFile?: string;
     skipLlm?: boolean;
     embeddingBackend?: string;
     embeddingApiKeyEnv?: string;
@@ -175,6 +179,10 @@ function shouldShowSetupEntryMenu(
     'anthropicApiKeyFile',
     'vertexProject',
     'vertexLocation',
+    'llmBaseUrl',
+    'llmModel',
+    'llmApiKeyEnv',
+    'llmApiKeyFile',
     'skipLlm',
     'embeddingBackend',
     'embeddingApiKeyEnv',
@@ -244,6 +252,16 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
     )
     .addOption(new Option('--vertex-project <project>', 'Google Vertex AI project ID, env:NAME, or file:/path').hideHelp())
     .addOption(new Option('--vertex-location <location>', 'Google Vertex AI location, env:NAME, or file:/path').hideHelp())
+    .addOption(
+      new Option('--llm-base-url <url>', 'OpenAI-compatible LLM base URL, env:NAME, or file:/path').hideHelp(),
+    )
+    .addOption(new Option('--llm-model <model>', 'OpenAI-compatible model id used for every ktx role').hideHelp())
+    .addOption(
+      new Option('--llm-api-key-env <name>', 'Environment variable containing the OpenAI-compatible API key').hideHelp(),
+    )
+    .addOption(
+      new Option('--llm-api-key-file <path>', 'File containing the OpenAI-compatible API key').hideHelp(),
+    )
     .addOption(new Option('--skip-llm', 'Leave LLM setup incomplete for now').hideHelp().default(false))
     .addOption(new Option('--embedding-backend <backend>', 'Embedding backend').argParser(embeddingBackend).hideHelp())
     .addOption(
@@ -381,6 +399,24 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
       context.setExitCode(1);
       return;
     }
+    if (
+      options.llmBackend &&
+      options.llmBackend !== 'openai-compatible' &&
+      (options.llmBaseUrl || options.llmModel || options.llmApiKeyEnv || options.llmApiKeyFile)
+    ) {
+      context.io.stderr.write(
+        'OpenAI-compatible flags (--llm-base-url, --llm-model, --llm-api-key-env, --llm-api-key-file) are only valid with --llm-backend openai-compatible.\n',
+      );
+      context.setExitCode(1);
+      return;
+    }
+    if (options.llmApiKeyEnv && options.llmApiKeyFile) {
+      context.io.stderr.write(
+        'Choose only one OpenAI-compatible credential source: --llm-api-key-env or --llm-api-key-file.\n',
+      );
+      context.setExitCode(1);
+      return;
+    }
     if (options.embeddingApiKeyEnv && options.embeddingApiKeyFile) {
       context.io.stderr.write(
         'Choose only one embedding credential source: --embedding-api-key-env or --embedding-api-key-file.\n',
@@ -454,6 +490,10 @@ export function registerSetupCommands(program: Command, context: KtxCliCommandCo
       ...(options.anthropicApiKeyFile ? { anthropicApiKeyFile: options.anthropicApiKeyFile } : {}),
       ...(options.vertexProject ? { vertexProject: options.vertexProject } : {}),
       ...(options.vertexLocation ? { vertexLocation: options.vertexLocation } : {}),
+      ...(options.llmBaseUrl ? { llmBaseUrl: options.llmBaseUrl } : {}),
+      ...(options.llmModel ? { llmModel: options.llmModel } : {}),
+      ...(options.llmApiKeyEnv ? { llmApiKeyEnv: options.llmApiKeyEnv } : {}),
+      ...(options.llmApiKeyFile ? { llmApiKeyFile: options.llmApiKeyFile } : {}),
       skipLlm: options.skipLlm === true,
       ...(options.embeddingBackend ? { embeddingBackend: options.embeddingBackend } : {}),
       ...(options.embeddingApiKeyEnv ? { embeddingApiKeyEnv: options.embeddingApiKeyEnv } : {}),

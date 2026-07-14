@@ -39,6 +39,10 @@ export interface KtxSetupModelArgs {
   anthropicApiKeyFile?: string;
   vertexProject?: string;
   vertexLocation?: string;
+  llmBaseUrl?: string;
+  llmModel?: string;
+  llmApiKeyEnv?: string;
+  llmApiKeyFile?: string;
   forcePrompt?: boolean;
   showPromptInstructions?: boolean;
   skipLlm: boolean;
@@ -55,7 +59,7 @@ export type KtxSetupModelResult =
 // The CLI arg parser, the interactive prompt, and the missing-backend error all
 // derive from this list, so adding a backend is one edit. Order is the prompt's
 // preference order (subscription backends first).
-const KTX_SETUP_LLM_BACKENDS = ['claude-code', 'codex', 'anthropic', 'vertex'] as const;
+const KTX_SETUP_LLM_BACKENDS = ['claude-code', 'codex', 'openai-compatible', 'anthropic', 'vertex'] as const;
 export type KtxSetupLlmBackend = (typeof KTX_SETUP_LLM_BACKENDS)[number];
 
 /** Validates a raw CLI or prompt value against the setup-selectable LLM backends. */
@@ -69,6 +73,7 @@ export function isKtxSetupLlmBackend(value: string): value is KtxSetupLlmBackend
 const KTX_SETUP_LLM_BACKEND_LABELS: Record<KtxSetupLlmBackend, string> = {
   'claude-code': 'Claude subscription (Pro/Max)',
   codex: 'Codex subscription',
+  'openai-compatible': 'OpenAI-compatible endpoint (base URL + API key)',
   anthropic: 'Anthropic API key',
   vertex: 'Google Vertex AI for Anthropic Claude',
 };
@@ -145,10 +150,20 @@ const MODEL_PRESETS = {
   vertex: ANTHROPIC_PRESET,
   'claude-code': CLAUDE_CODE_PRESET,
   codex: CODEX_PRESET,
-} satisfies Record<KtxSetupLlmBackend, KtxSetupModelPreset>;
+} satisfies Record<Exclude<KtxSetupLlmBackend, 'openai-compatible'>, KtxSetupModelPreset>;
 
-function presetForBackend(backend: KtxSetupLlmBackend): KtxSetupModelPreset {
+function presetForBackend(backend: Exclude<KtxSetupLlmBackend, 'openai-compatible'>): KtxSetupModelPreset {
   return MODEL_PRESETS[backend];
+}
+
+// OpenAI-compatible endpoints expose arbitrary model ids, so the user names one
+// model and every role points at it. Per-role overrides remain hand-editable in
+// ktx.yaml.
+function singleModelPreset(model: string): KtxSetupModelPreset {
+  return KTX_MODEL_ROLES.reduce((preset, role) => {
+    preset[role] = model;
+    return preset;
+  }, {} as KtxSetupModelPreset);
 }
 
 const execFileAsync = promisify(execFile);
@@ -166,7 +181,8 @@ type ChooseBackendResult =
 const MISSING_LLM_BACKEND_MESSAGE =
   `Missing LLM backend: pass --llm-backend with one of ${KTX_SETUP_LLM_BACKENDS.join(', ')}. ` +
   'claude-code and codex use local CLI authentication; anthropic also needs --anthropic-api-key-env or ' +
-  '--anthropic-api-key-file, and vertex also needs --vertex-project.';
+  '--anthropic-api-key-file, vertex also needs --vertex-project, and openai-compatible also needs --llm-base-url ' +
+  'and --llm-model (add --llm-api-key-env or --llm-api-key-file when the endpoint requires a key).';
 
 type VertexConfigChoice =
   | {
@@ -237,6 +253,10 @@ export function isKtxSetupLlmConfigReady(config: KtxProjectLlmConfig): boolean {
     return typeof resolved.vertex?.location === 'string' && resolved.vertex.location.trim().length > 0;
   }
 
+  if (resolved.backend === 'openai-compatible') {
+    return typeof resolved.openaiCompatible?.baseURL === 'string' && resolved.openaiCompatible.baseURL.trim().length > 0;
+  }
+
   return (
     resolved.backend === 'anthropic' ||
     resolved.backend === 'gateway' ||
@@ -254,6 +274,7 @@ function buildProjectLlmConfig(
   provider:
     | { backend: 'anthropic'; credentialRef: string }
     | { backend: 'vertex'; vertex: { project?: string; location: string } }
+    | { backend: 'openai-compatible'; credentialRef?: string; baseUrl: string }
     | { backend: 'claude-code' }
     | { backend: 'codex' },
   models: KtxSetupModelPreset,
@@ -285,6 +306,20 @@ function buildProjectLlmConfig(
     };
   }
 
+  if (provider.backend === 'openai-compatible') {
+    return {
+      provider: {
+        backend: 'openai-compatible',
+        openaiCompatible: {
+          ...(provider.credentialRef ? { api_key: provider.credentialRef } : {}),
+          base_url: provider.baseUrl,
+        },
+      },
+      models,
+      promptCaching: existing.promptCaching,
+    };
+  }
+
   return {
     provider: {
       backend: 'anthropic',
@@ -313,7 +348,16 @@ function buildVertexHealthConfig(vertex: { project?: string; location: string },
   };
 }
 
-type LlmCheckProvider = 'Anthropic API' | 'Vertex AI' | 'Claude subscription' | 'Codex';
+function buildOpenAiCompatibleHealthConfig(baseUrl: string, apiKeyValue: string | undefined, model: string): KtxLlmConfig {
+  return {
+    backend: 'openai-compatible',
+    openaiCompatible: { baseURL: baseUrl, ...(apiKeyValue ? { apiKey: apiKeyValue } : {}) },
+    modelSlots: { default: model },
+    promptCaching: { enabled: false },
+  };
+}
+
+type LlmCheckProvider = 'Anthropic API' | 'Vertex AI' | 'Claude subscription' | 'Codex' | 'OpenAI-compatible';
 
 function llmCheckStartText(provider: LlmCheckProvider, model: string): string {
   return `Checking ${provider} LLM (${model}).`;
@@ -450,6 +494,171 @@ async function chooseCredentialRef(
   }
 }
 
+const OPENAI_COMPATIBLE_PROMPT_CONTEXT =
+  'ktx sends chat/completions requests to this OpenAI-compatible endpoint to verify model access now and to run ' +
+  'ingest agents that turn schemas, SQL, BI metadata, and docs into semantic-layer sources and wiki context. ' +
+  'ktx.yaml stores the base URL and an env: or file: reference for the key, not the raw key.';
+
+async function chooseOpenAiCompatibleBaseUrl(
+  args: KtxSetupModelArgs,
+  io: KtxCliIo,
+  deps: KtxSetupModelDeps,
+): Promise<{ status: 'ready'; ref: string; value: string } | { status: 'back' | 'missing-input' }> {
+  const env = deps.env ?? process.env;
+  if (args.llmBaseUrl) {
+    let value: string | undefined;
+    try {
+      value = resolveKtxConfigReference(args.llmBaseUrl, env);
+    } catch {
+      value = undefined;
+    }
+    if (!value) {
+      io.stderr.write(`Missing OpenAI-compatible base URL: ${args.llmBaseUrl} could not be resolved.\n`);
+      return { status: 'missing-input' };
+    }
+    return { status: 'ready', ref: args.llmBaseUrl, value };
+  }
+  if (args.inputMode === 'disabled') {
+    io.stderr.write('Missing OpenAI-compatible base URL: pass --llm-base-url.\n');
+    return { status: 'missing-input' };
+  }
+
+  const prompts = deps.prompts ?? createPromptAdapter();
+  const url = await prompts.text({
+    message: withTextInputNavigation('OpenAI-compatible base URL (for example https://host/v1)'),
+  });
+  if (url === undefined) {
+    return { status: 'back' };
+  }
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return { status: 'missing-input' };
+  }
+  return { status: 'ready', ref: trimmed, value: trimmed };
+}
+
+async function chooseOpenAiCompatibleCredentialRef(
+  args: KtxSetupModelArgs,
+  io: KtxCliIo,
+  deps: KtxSetupModelDeps,
+): Promise<{ status: 'ready'; ref?: string; value?: string } | { status: 'back' | 'missing-input' }> {
+  const env = deps.env ?? process.env;
+  if (args.llmApiKeyEnv) {
+    const ref = envCredentialReference(args.llmApiKeyEnv);
+    const value = resolveKtxConfigReference(ref, env);
+    if (!value) {
+      io.stderr.write(`Missing OpenAI-compatible API key: ${args.llmApiKeyEnv} is not set.\n`);
+      return { status: 'missing-input' };
+    }
+    return { status: 'ready', ref, value };
+  }
+  if (args.llmApiKeyFile) {
+    const ref = `file:${args.llmApiKeyFile}`;
+    let value: string | undefined;
+    try {
+      value = resolveKtxConfigReference(ref, env);
+    } catch {
+      value = undefined;
+    }
+    if (!value) {
+      io.stderr.write(`Missing OpenAI-compatible API key file: ${args.llmApiKeyFile}\n`);
+      return { status: 'missing-input' };
+    }
+    return { status: 'ready', ref, value };
+  }
+  if (args.inputMode === 'disabled') {
+    // Endpoints that need no key are valid; a scripted run without a key flag proceeds keyless.
+    return { status: 'ready' };
+  }
+
+  const prompts = deps.prompts ?? createPromptAdapter();
+  while (true) {
+    const choice = await prompts.select({
+      message: `How should ktx authenticate to the OpenAI-compatible endpoint?\n\n${OPENAI_COMPATIBLE_PROMPT_CONTEXT}`,
+      options: [
+        { value: 'paste', label: 'Paste an API key and save it as a local secret file' },
+        { value: 'env', label: 'Use an API key from an environment variable' },
+        { value: 'none', label: 'No API key required' },
+        { value: 'back', label: 'Back' },
+      ],
+    });
+    if (choice === 'back') {
+      return { status: 'back' };
+    }
+    if (choice === 'none') {
+      return { status: 'ready' };
+    }
+    if (choice === 'paste') {
+      io.stdout.write(
+        '│  ktx will save the key in .ktx/secrets/openai-compatible-api-key with local file permissions, then write a file: reference in ktx.yaml.\n',
+      );
+      const value = await prompts.password({ message: withTextInputNavigation('OpenAI-compatible API key') });
+      if (value === undefined) {
+        continue;
+      }
+      if (!value.trim()) {
+        return { status: 'missing-input' };
+      }
+      const ref = await writeProjectLocalSecretReference({
+        projectDir: args.projectDir,
+        fileName: 'openai-compatible-api-key',
+        value,
+      });
+      return { status: 'ready', ref, value: value.trim() };
+    }
+
+    const envName = await prompts.text({
+      message: withTextInputNavigation('Environment variable holding the API key (for example DASHSCOPE_API_KEY)'),
+    });
+    if (envName === undefined) {
+      continue;
+    }
+    const trimmedName = envName.trim();
+    if (!trimmedName) {
+      return { status: 'missing-input' };
+    }
+    const ref = envCredentialReference(trimmedName);
+    const value = resolveKtxConfigReference(ref, env);
+    if (!value) {
+      io.stderr.write(`Missing OpenAI-compatible API key: ${trimmedName} is not set.\n`);
+      return { status: 'missing-input' };
+    }
+    return { status: 'ready', ref, value };
+  }
+}
+
+async function chooseOpenAiCompatibleModel(
+  args: KtxSetupModelArgs,
+  io: KtxCliIo,
+  deps: KtxSetupModelDeps,
+): Promise<{ status: 'ready'; model: string } | { status: 'back' | 'missing-input' }> {
+  if (args.llmModel) {
+    const trimmed = args.llmModel.trim();
+    if (!trimmed) {
+      io.stderr.write('Missing OpenAI-compatible model: --llm-model was empty.\n');
+      return { status: 'missing-input' };
+    }
+    return { status: 'ready', model: trimmed };
+  }
+  if (args.inputMode === 'disabled') {
+    io.stderr.write('Missing OpenAI-compatible model: pass --llm-model.\n');
+    return { status: 'missing-input' };
+  }
+
+  const prompts = deps.prompts ?? createPromptAdapter();
+  const model = await prompts.text({
+    message: withTextInputNavigation('Model id used for every ktx role (for example qwen3.7-max)'),
+  });
+  if (model === undefined) {
+    return { status: 'back' };
+  }
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return { status: 'missing-input' };
+  }
+  return { status: 'ready', model: trimmed };
+}
+
 function requestedBackend(args: KtxSetupModelArgs): KtxSetupLlmBackend | undefined {
   if (args.llmBackend) {
     return args.llmBackend;
@@ -459,6 +668,9 @@ function requestedBackend(args: KtxSetupModelArgs): KtxSetupLlmBackend | undefin
   }
   if (args.anthropicApiKeyEnv || args.anthropicApiKeyFile) {
     return 'anthropic';
+  }
+  if (args.llmBaseUrl || args.llmModel || args.llmApiKeyEnv || args.llmApiKeyFile) {
+    return 'openai-compatible';
   }
   return undefined;
 }
@@ -718,6 +930,7 @@ async function persistLlmConfig(
   provider:
     | { backend: 'anthropic'; credentialRef: string }
     | { backend: 'vertex'; vertex: { project?: string; location: string } }
+    | { backend: 'openai-compatible'; credentialRef?: string; baseUrl: string }
     | { backend: 'claude-code' }
     | { backend: 'codex' },
   models: KtxSetupModelPreset,
@@ -919,6 +1132,66 @@ export async function runKtxSetupAnthropicModelStep(
       io.stderr.write(`│  ${formatCodexIsolationWarning()}\n`);
       await persistLlmConfig(args.projectDir, { backend: 'codex' }, validation.models);
       io.stdout.write(`│  LLM ready: yes (codex, ${validation.models.default})\n`);
+      return { status: 'ready', projectDir: args.projectDir };
+    }
+
+    if (backendChoice.backend === 'openai-compatible') {
+      const baseUrl = await chooseOpenAiCompatibleBaseUrl(backendArgs, io, deps);
+      if (baseUrl.status === 'back' && backendChoice.prompted) {
+        attemptArgs = buildInteractiveRetryArgs(args);
+        continue;
+      }
+      if (baseUrl.status !== 'ready') {
+        return { status: baseUrl.status, projectDir: args.projectDir };
+      }
+
+      const credential = await chooseOpenAiCompatibleCredentialRef(backendArgs, io, deps);
+      if (credential.status === 'back' && backendChoice.prompted) {
+        attemptArgs = buildInteractiveRetryArgs(args, backendChoice.backend);
+        continue;
+      }
+      if (credential.status !== 'ready') {
+        return { status: credential.status, projectDir: args.projectDir };
+      }
+
+      const modelChoice = await chooseOpenAiCompatibleModel(backendArgs, io, deps);
+      if (modelChoice.status === 'back' && backendChoice.prompted) {
+        attemptArgs = buildInteractiveRetryArgs(args, backendChoice.backend);
+        continue;
+      }
+      if (modelChoice.status !== 'ready') {
+        return { status: modelChoice.status, projectDir: args.projectDir };
+      }
+
+      const preset = singleModelPreset(modelChoice.model);
+      const validation = await validatePresetModels(
+        preset,
+        (model) =>
+          validateModelWithProgress('OpenAI-compatible', model, deps, () =>
+            healthCheck(buildOpenAiCompatibleHealthConfig(baseUrl.value, credential.value, model)),
+          ),
+        io,
+      );
+      if (validation.status !== 'ready') {
+        io.stderr.write(`OpenAI-compatible model health check failed: ${validation.message}\n`);
+        if (args.inputMode === 'disabled') {
+          return { status: 'failed', projectDir: args.projectDir };
+        }
+        io.stderr.write('Choose a different base URL, credential, or model, or Back.\n');
+        attemptArgs = buildInteractiveRetryArgs(args, backendChoice.backend);
+        continue;
+      }
+
+      await persistLlmConfig(
+        args.projectDir,
+        {
+          backend: 'openai-compatible',
+          baseUrl: baseUrl.ref,
+          ...(credential.ref ? { credentialRef: credential.ref } : {}),
+        },
+        validation.models,
+      );
+      io.stdout.write(`│  LLM ready: yes (openai-compatible, ${validation.models.default})\n`);
       return { status: 'ready', projectDir: args.projectDir };
     }
 

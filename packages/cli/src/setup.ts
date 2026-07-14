@@ -91,6 +91,10 @@ export type KtxSetupArgs =
       anthropicApiKeyFile?: string;
       vertexProject?: string;
       vertexLocation?: string;
+      llmBaseUrl?: string;
+      llmModel?: string;
+      llmApiKeyEnv?: string;
+      llmApiKeyFile?: string;
       skipLlm: boolean;
       embeddingBackend?: 'openai' | 'sentence-transformers';
       embeddingApiKeyEnv?: string;
@@ -791,6 +795,10 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
             ...(args.anthropicApiKeyFile ? { anthropicApiKeyFile: args.anthropicApiKeyFile } : {}),
             ...(args.vertexProject ? { vertexProject: args.vertexProject } : {}),
             ...(args.vertexLocation ? { vertexLocation: args.vertexLocation } : {}),
+            ...(args.llmBaseUrl ? { llmBaseUrl: args.llmBaseUrl } : {}),
+            ...(args.llmModel ? { llmModel: args.llmModel } : {}),
+            ...(args.llmApiKeyEnv ? { llmApiKeyEnv: args.llmApiKeyEnv } : {}),
+            ...(args.llmApiKeyFile ? { llmApiKeyFile: args.llmApiKeyFile } : {}),
             forcePrompt: forcePromptSteps.has('models') || runOnly === 'models',
             showPromptInstructions,
             skipLlm: args.skipLlm || !shouldRunModels,

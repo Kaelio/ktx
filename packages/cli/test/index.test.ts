@@ -1221,7 +1221,7 @@ describe('runKtxCli', () => {
     );
   });
 
-  it('rejects the removed --llm-model setup flag', async () => {
+  it('rejects the --llm-model setup flag for non-openai-compatible backends', async () => {
     const setup = vi.fn(async () => 0);
     const setupIo = makeIo();
 
@@ -1243,7 +1243,78 @@ describe('runKtxCli', () => {
     ).resolves.toBe(1);
 
     expect(setup).not.toHaveBeenCalled();
-    expect(setupIo.stderr()).toContain("unknown option '--llm-model'");
+    expect(setupIo.stderr()).toContain('only valid with --llm-backend openai-compatible');
+  });
+
+  it('dispatches openai-compatible setup flags to the setup runner', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        [
+          '--project-dir',
+          tempDir,
+          'setup',
+          '--no-input',
+          '--llm-backend',
+          'openai-compatible',
+          '--llm-base-url',
+          'https://maas.example/compatible-mode/v1',
+          '--llm-model',
+          'qwen3.7-max',
+          '--llm-api-key-env',
+          'KTX_MAAS_KEY',
+        ],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(0);
+
+    expect(setup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'run',
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        cliVersion,
+        llmBackend: 'openai-compatible',
+        llmBaseUrl: 'https://maas.example/compatible-mode/v1',
+        llmModel: 'qwen3.7-max',
+        llmApiKeyEnv: 'KTX_MAAS_KEY',
+        skipLlm: false,
+      }),
+      setupIo.io,
+    );
+  });
+
+  it('rejects conflicting openai-compatible credential setup flags', async () => {
+    const setup = vi.fn(async () => 0);
+    const setupIo = makeIo();
+
+    await expect(
+      runKtxCli(
+        [
+          '--project-dir',
+          tempDir,
+          'setup',
+          '--llm-backend',
+          'openai-compatible',
+          '--llm-base-url',
+          'https://maas.example/v1',
+          '--llm-model',
+          'qwen3.7-max',
+          '--llm-api-key-env',
+          'KTX_MAAS_KEY',
+          '--llm-api-key-file',
+          '/tmp/openai-compatible-key',
+        ],
+        setupIo.io,
+        { setup },
+      ),
+    ).resolves.toBe(1);
+
+    expect(setup).not.toHaveBeenCalled();
+    expect(setupIo.stderr()).toContain('Choose only one OpenAI-compatible credential source');
   });
 
   it('rejects conflicting Anthropic credential setup flags', async () => {
