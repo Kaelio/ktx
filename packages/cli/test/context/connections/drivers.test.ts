@@ -83,7 +83,7 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
 };
 
 const allowedScopeKeys = new Set(['dataset_ids', 'databases', 'schemas', 'schema_names']);
-const historicSqlReaderDrivers = new Set<KtxConnectionDriver>(['postgres', 'bigquery', 'snowflake']);
+const historicSqlReaderDrivers = new Set<KtxConnectionDriver>(['postgres', 'hologres', 'bigquery', 'snowflake']);
 
 function assertExportedRegistryBoundaryTypes(input: {
   scopeConfigKey: KtxScopeConfigKey;

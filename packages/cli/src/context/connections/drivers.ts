@@ -172,7 +172,7 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
   hologres: {
     driver: 'hologres',
     scopeConfigKey: 'schemas',
-    hasHistoricSqlReader: false,
+    hasHistoricSqlReader: true,
     load: async () => {
       const m = await import('../../connectors/hologres/connector.js');
       return {

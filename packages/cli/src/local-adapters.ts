@@ -10,7 +10,8 @@ import { createPostgresLiveDatabaseIntrospection } from './connectors/postgres/l
 import { isKtxPostgresConnectionConfig, type KtxPostgresConnectionConfig } from './connectors/postgres/connector.js';
 import { KtxPostgresHistoricSqlQueryClient } from './connectors/postgres/historic-sql-query-client.js';
 import { createHologresLiveDatabaseIntrospection } from './connectors/hologres/live-database-introspection.js';
-import { isKtxHologresConnectionConfig } from './connectors/hologres/connector.js';
+import { isKtxHologresConnectionConfig, type KtxHologresConnectionConfig } from './connectors/hologres/connector.js';
+import { KtxHologresHistoricSqlQueryClient } from './connectors/hologres/historic-sql-query-client.js';
 import { createSqliteLiveDatabaseIntrospection } from './connectors/sqlite/live-database-introspection.js';
 import { isKtxSqliteConnectionConfig } from './connectors/sqlite/connector.js';
 import { createDuckDbLiveDatabaseIntrospection } from './connectors/duckdb/live-database-introspection.js';
@@ -28,6 +29,7 @@ import type {
 } from './context/ingest/adapters/live-database/types.js';
 import { LiveDatabaseSourceAdapter } from './context/ingest/adapters/live-database/live-database.adapter.js';
 import { PostgresPgssReader } from './context/ingest/adapters/historic-sql/postgres-pgss-reader.js';
+import { HologresQueryLogReader } from './context/ingest/adapters/historic-sql/hologres-query-log-reader.js';
 import { SnowflakeHistoricSqlQueryHistoryReader } from './context/ingest/adapters/historic-sql/snowflake-query-history-reader.js';
 import type { SourceAdapter } from './context/ingest/types.js';
 import type { KtxLocalProject } from './context/project/project.js';
@@ -229,6 +231,27 @@ function createEphemeralPostgresHistoricSqlClient(project: KtxLocalProject, conn
   };
 }
 
+function createEphemeralHologresHistoricSqlClient(project: KtxLocalProject, connectionId: string) {
+  const connection = project.config.connections[connectionId] as KtxHologresConnectionConfig | undefined;
+  const inputDriver = connection?.driver ?? 'unknown';
+  if (!isKtxHologresConnectionConfig(connection)) {
+    throw new Error(`Query history ingest requires a Hologres connection, got ${String(inputDriver)}`);
+  }
+  return {
+    async executeQuery(sql: string, params?: unknown[]) {
+      const client = new KtxHologresHistoricSqlQueryClient({
+        connectionId,
+        connection,
+      });
+      try {
+        return await client.executeQuery(sql, params);
+      } finally {
+        await client.cleanup();
+      }
+    },
+  };
+}
+
 function createEphemeralBigQueryHistoricSqlClient(project: KtxLocalProject, connectionId: string) {
   const connection = project.config.connections[connectionId] as KtxBigQueryConnectionConfig | undefined;
   const inputDriver = connection?.driver ?? 'unknown';
@@ -334,6 +357,15 @@ function historicSqlOptionsForLocalRun(
       dialect,
       reader: new PostgresPgssReader() satisfies HistoricSqlReader,
       queryClient: createEphemeralPostgresHistoricSqlClient(project, connectionId),
+    };
+  }
+
+  if (dialect === 'hologres') {
+    return {
+      ...base,
+      dialect,
+      reader: new HologresQueryLogReader() satisfies HistoricSqlReader,
+      queryClient: createEphemeralHologresHistoricSqlClient(project, connectionId),
     };
   }
 

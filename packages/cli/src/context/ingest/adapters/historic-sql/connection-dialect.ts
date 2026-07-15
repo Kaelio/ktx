@@ -2,7 +2,7 @@ import { getDriverRegistration } from '../../../connections/drivers.js';
 import type { KtxConnectionDriver } from '../../../scan/types.js';
 import type { HistoricSqlDialect } from './types.js';
 
-const historicSqlDialects: readonly HistoricSqlDialect[] = ['postgres', 'bigquery', 'snowflake'];
+const historicSqlDialects: readonly HistoricSqlDialect[] = ['postgres', 'bigquery', 'snowflake', 'hologres'];
 
 function recordOrNull(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
