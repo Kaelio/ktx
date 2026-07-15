@@ -426,7 +426,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     estimatedRowCounts: true,
   });
 
-  private readonly connectionId: string;
+  protected readonly connectionId: string;
   private readonly connection: KtxPostgresConnectionConfig;
   private readonly poolConfig: KtxPostgresPoolConfig;
   private readonly poolFactory: KtxPostgresPoolFactory;

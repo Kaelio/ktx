@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { KtxExpectedError } from '../../../src/errors.js';
 import {
   KtxHologresScanConnector,
   isKtxHologresConnectionConfig,
@@ -46,6 +47,13 @@ const connection: KtxHologresConnectionConfig = {
   password: 'test-password', // pragma: allowlist secret
   schema: 'public',
 };
+
+function hologresVersionResult(version: string): FakeQueryResult {
+  return {
+    fields: [{ name: 'hg_version', dataTypeID: 25 }],
+    rows: [{ hg_version: `Hologres ${version} (tag: -abc build: Release), compatible with PostgreSQL 11.3 on x86_64-linux` }],
+  };
+}
 
 describe('isKtxHologresConnectionConfig', () => {
   it('accepts hologres connections and rejects everything else', () => {
@@ -96,6 +104,7 @@ describe('KtxHologresScanConnector', () => {
 
   it('introspects a schema and stamps the snapshot driver as hologres', async () => {
     const results = new Map<string, FakeQueryResponse>([
+      ['hg_version()', hologresVersionResult('4.2.10')],
       [
         'c.reltuples::bigint AS row_count',
         { rows: [{ table_name: 'orders', table_kind: 'r', row_count: '5', table_comment: 'order facts' }] },
@@ -124,5 +133,47 @@ describe('KtxHologresScanConnector', () => {
       ['public', 'orders', 'table', 5],
     ]);
     expect(snapshot.tables[0]?.columns.map((column) => [column.name, column.primaryKey])).toEqual([['id', true]]);
+  });
+
+  it('passes the connection test on Hologres 4.0 or newer', async () => {
+    const connector = new KtxHologresScanConnector({
+      connectionId: 'wh',
+      connection,
+      poolFactory: fakePoolFactory(
+        new Map<string, FakeQueryResponse>([
+          ['SELECT 1', { rows: [] }],
+          ['hg_version()', hologresVersionResult('4.0.1')],
+        ]),
+      ),
+    });
+    await expect(connector.testConnection()).resolves.toEqual({ success: true });
+  });
+
+  it('rejects introspection against Hologres older than 4.0', async () => {
+    const connector = new KtxHologresScanConnector({
+      connectionId: 'wh',
+      connection,
+      poolFactory: fakePoolFactory(new Map<string, FakeQueryResponse>([['hg_version()', hologresVersionResult('3.9.5')]])),
+    });
+    await expect(
+      connector.introspect({ connectionId: 'wh', driver: 'hologres' }, { runId: 'r' }),
+    ).rejects.toBeInstanceOf(KtxExpectedError);
+    await expect(
+      connector.introspect({ connectionId: 'wh', driver: 'hologres' }, { runId: 'r' }),
+    ).rejects.toThrow(/Hologres 4\.0 or newer/);
+  });
+
+  it('fails the connection test on Hologres older than 4.0', async () => {
+    const connector = new KtxHologresScanConnector({
+      connectionId: 'wh',
+      connection,
+      poolFactory: fakePoolFactory(
+        new Map<string, FakeQueryResponse>([
+          ['SELECT 1', { rows: [] }],
+          ['hg_version()', hologresVersionResult('3.9.5')],
+        ]),
+      ),
+    });
+    expect((await connector.testConnection()).success).toBe(false);
   });
 });
