@@ -238,6 +238,7 @@ describe('setup databases step', () => {
         'Up/Down to move, Tab to select or unselect, Enter to confirm, Escape to go back, Ctrl+C to exit.',
       options: [
         { value: 'postgres', label: 'PostgreSQL' },
+        { value: 'hologres', label: 'Hologres' },
         { value: 'bigquery', label: 'BigQuery' },
         { value: 'snowflake', label: 'Snowflake' },
         { value: 'mysql', label: 'MySQL' },
@@ -283,6 +284,7 @@ describe('setup databases step', () => {
   it('offers connection URL paste first for URL-capable databases', async () => {
     const cases: Array<{ driver: KtxSetupDatabaseDriver; label: string }> = [
       { driver: 'postgres', label: 'PostgreSQL' },
+      { driver: 'hologres', label: 'Hologres' },
       { driver: 'mysql', label: 'MySQL' },
       { driver: 'clickhouse', label: 'ClickHouse' },
       { driver: 'sqlserver', label: 'SQL Server' },

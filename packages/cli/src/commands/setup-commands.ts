@@ -40,6 +40,7 @@ function databaseDriver(value: string): KtxSetupDatabaseDriver {
     value === 'sqlite' ||
     value === 'duckdb' ||
     value === 'postgres' ||
+    value === 'hologres' ||
     value === 'mysql' ||
     value === 'clickhouse' ||
     value === 'sqlserver' ||

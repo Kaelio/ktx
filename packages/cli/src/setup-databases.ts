@@ -66,6 +66,7 @@ export type KtxSetupDatabaseDriver =
   | 'sqlite'
   | 'duckdb'
   | 'postgres'
+  | 'hologres'
   | 'mysql'
   | 'clickhouse'
   | 'sqlserver'
@@ -154,6 +155,7 @@ export interface KtxSetupDatabasesDeps {
 
 const DRIVER_OPTIONS: Array<{ value: KtxSetupDatabaseDriver; label: string }> = [
   { value: 'postgres', label: 'PostgreSQL' },
+  { value: 'hologres', label: 'Hologres' },
   { value: 'bigquery', label: 'BigQuery' },
   { value: 'snowflake', label: 'Snowflake' },
   { value: 'mysql', label: 'MySQL' },
@@ -180,6 +182,7 @@ const DEFAULT_CONNECTION_IDS: Record<KtxSetupDatabaseDriver, string> = {
   sqlite: 'sqlite-local',
   duckdb: 'duckdb-local',
   postgres: 'postgres-warehouse',
+  hologres: 'hologres-warehouse',
   mysql: 'mysql-warehouse',
   clickhouse: 'clickhouse-warehouse',
   sqlserver: 'sqlserver-warehouse',
@@ -221,6 +224,14 @@ const SCOPE_DISCOVERY_SPECS: Partial<Record<KtxSetupDatabaseDriver, ScopeDiscove
     noun: 'schema',
     nounPlural: 'schemas',
     promptLabel: 'PostgreSQL schemas',
+    configArrayField: 'schemas',
+    configSingleField: 'schema',
+    suggest: defaultSuggest,
+  },
+  hologres: {
+    noun: 'schema',
+    nounPlural: 'schemas',
+    promptLabel: 'Hologres schemas',
     configArrayField: 'schemas',
     configSingleField: 'schema',
     suggest: defaultSuggest,
@@ -280,10 +291,11 @@ const SCOPE_DISCOVERY_SPECS: Partial<Record<KtxSetupDatabaseDriver, ScopeDiscove
   },
 };
 
-type UrlDriverType = Extract<KtxSetupDatabaseDriver, 'postgres' | 'mysql' | 'clickhouse' | 'sqlserver'>;
+type UrlDriverType = Extract<KtxSetupDatabaseDriver, 'postgres' | 'hologres' | 'mysql' | 'clickhouse' | 'sqlserver'>;
 
 const DRIVER_CONNECTION_DEFAULTS: Record<UrlDriverType, { port: string }> = {
   postgres: { port: '5432' },
+  hologres: { port: '80' },
   mysql: { port: '3306' },
   clickhouse: { port: '8123' },
   sqlserver: { port: '1433' },
@@ -838,7 +850,7 @@ async function buildConnectionConfig(input: {
     if (path === undefined) return 'back';
     return path ? { driver: 'duckdb', path } : null;
   }
-  if (driver === 'postgres' || driver === 'mysql' || driver === 'clickhouse' || driver === 'sqlserver') {
+  if (driver === 'postgres' || driver === 'hologres' || driver === 'mysql' || driver === 'clickhouse' || driver === 'sqlserver') {
     return await buildUrlConnectionConfig({
       driver,
       connectionId: input.connectionId,
