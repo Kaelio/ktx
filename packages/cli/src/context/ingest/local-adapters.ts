@@ -176,8 +176,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const historicSqlDialectByDriver = new Map<string, 'postgres' | 'bigquery' | 'snowflake'>([
+const historicSqlDialectByDriver = new Map<string, 'postgres' | 'bigquery' | 'snowflake' | 'hologres'>([
   ['postgres', 'postgres'],
+  ['hologres', 'hologres'],
   ['bigquery', 'bigquery'],
   ['snowflake', 'snowflake'],
 ]);

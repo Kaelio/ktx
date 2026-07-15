@@ -33,7 +33,7 @@ type KtxPublicIngestStepName = 'database-schema' | 'query-history' | 'source-ing
 type KtxPublicIngestStepStatus = 'done' | 'skipped' | 'failed' | 'not-run';
 type KtxPublicIngestInputMode = 'auto' | 'disabled';
 type KtxPublicIngestQueryHistoryFlag = 'default' | 'enabled' | 'disabled';
-type HistoricSqlDialect = 'postgres' | 'bigquery' | 'snowflake';
+type HistoricSqlDialect = 'postgres' | 'bigquery' | 'snowflake' | 'hologres';
 
 export type KtxPublicIngestArgs =
   {
@@ -155,6 +155,7 @@ export function publicProgressMessage(message: string, target: KtxPublicIngestPl
 
 const queryHistoryDialectByDriver = new Map<string, HistoricSqlDialect>([
   ['postgres', 'postgres'],
+  ['hologres', 'hologres'],
   ['bigquery', 'bigquery'],
   ['snowflake', 'snowflake'],
 ]);

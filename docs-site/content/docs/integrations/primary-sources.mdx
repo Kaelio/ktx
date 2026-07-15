@@ -1,6 +1,6 @@
 ---
 title: Primary Sources
-description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, MongoDB, or Amazon Athena.
+description: Connect ktx to PostgreSQL, Hologres, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, MongoDB, or Amazon Athena.
 ---
 
 **ktx** connects to your data warehouse or database to build schema context,
@@ -26,13 +26,13 @@ Agents should prefer environment or file references over literal secrets.
 
 | Field | Required | Applies to | Description |
 |-------|----------|------------|-------------|
-| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, `mongodb`, or `athena` |
+| `driver` | Yes | all connections | Connector driver such as `postgres`, `hologres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, `mongodb`, or `athena` |
 | `url` | One of the connection methods | URL-style connectors | Database URL, `env:NAME`, or `file:/path/to/secret` |
-| `host`, `port`, `database`, `username`, `password` | One of the connection methods | PostgreSQL, MySQL, SQL Server | Field-by-field connection values |
+| `host`, `port`, `database`, `username`, `password` | One of the connection methods | PostgreSQL, Hologres, MySQL, SQL Server | Field-by-field connection values |
 | `schema` or `schemas` | No | schema-aware warehouses | Single schema or list of schemas to scan |
 | `databases` | No | ClickHouse, MongoDB, Athena | List of databases to scan |
 | `sample_size`, `order_by` | No | MongoDB | Schema-inference sampling controls (recent documents, sort field) |
-| `context.queryHistory` | No | PostgreSQL, Snowflake, BigQuery | Enables query-history ingestion when the warehouse supports it |
+| `context.queryHistory` | No | PostgreSQL, Hologres, Snowflake, BigQuery | Enables query-history ingestion when the warehouse supports it |
 | `path` | Yes for path-style SQLite/DuckDB | SQLite, DuckDB | Local SQLite or DuckDB database path or `env:NAME` reference |
 | `max_bytes_billed` | No | BigQuery | Maximum bytes billed per query job |
 | `query_timeout_ms` | No | all warehouses | Maximum execution time for a single read-only query, in milliseconds (default 30000). A query exceeding it is cancelled server-side (or, for SQLite, by terminating the off-process executor) and returns a `query exceeded Ns` error so the agent can revise. |
@@ -121,6 +121,106 @@ This helps **ktx** understand how your team actually queries the data.
 - Named parameters converted to positional (`$1`, `$2`, ...)
 - Supports `COUNT(*) FILTER (WHERE ...)` for null analysis
 - Full support for PostgreSQL types: `uuid`, `jsonb`, `timestamptz`, `numeric`, `text[]`, etc.
+
+---
+
+## Hologres
+
+Alibaba Cloud Hologres is PostgreSQL-wire-compatible, so **ktx** reuses the
+PostgreSQL connector for connection, schema introspection, foreign key
+detection, sampling, and column statistics. Query history comes from Hologres's
+own `hologres.hg_query_log` system table rather than `pg_stat_statements`.
+
+**ktx** requires Hologres 4.0 or newer — the first release to support ktx — and
+verifies the version with `hg_version()` when testing a connection or scanning.
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  my-hologres:
+    driver: hologres
+    url: env:HOLOGRES_URL
+    schemas:
+      - my_schema
+```
+
+Or with individual fields:
+
+```yaml title="ktx.yaml"
+connections:
+  my-hologres:
+    driver: hologres
+    host: hgpostcn-xxxx-cn-hangzhou.hologres.aliyuncs.com
+    port: 80
+    database: my_db
+    username: env:HOLOGRES_ACCESS_ID
+    password: env:HOLOGRES_ACCESS_KEY
+    schemas:
+      - my_schema
+```
+
+Hologres endpoints commonly use port `80`, which `ktx setup` offers as the
+default. Authentication mirrors PostgreSQL (`password`, `url`, and `ssl`
+references).
+
+### System schemas
+
+**ktx** automatically excludes the Hologres engine-internal schemas that never
+hold user data — `hologres`, `hologres_streaming_mv`, `hologres_statistic`,
+`hologres_sample`, `hologres_object_table`, `hg_recyclebin`, and `hg_internal` —
+the same way it drops `pg_catalog`. Exclusion is by exact name, so user schemas
+that share the `hologres_` prefix (such as a `hologres_dataset_*` sample dataset)
+are still scanned.
+
+### Features
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Tables & views | Yes | Via `pg_catalog` |
+| Primary keys | Yes | Via `information_schema.table_constraints` |
+| Foreign keys | Yes | When declared |
+| Row count estimates | Yes | Via `pg_class.reltuples` |
+| Column statistics | Yes | Via `pg_stats` (`n_distinct`; the `correlation` column is not used) |
+| Query history | Yes | Via `hologres.hg_query_log` |
+| Table sampling | Yes | `SELECT ... LIMIT n` |
+
+### Query history
+
+Hologres query history aggregates `hologres.hg_query_log` by its `digest`
+column — a SQL fingerprint Hologres computes for `SELECT`, `INSERT`, `UPDATE`,
+and `DELETE` — over a `query_start` time window, feeding the same unified staged
+artifact shape as Postgres, Snowflake, and BigQuery.
+
+```yaml
+    context:
+      queryHistory:
+        enabled: true
+        windowDays: 90
+        minExecutions: 5
+        filters:
+          dropTrivialProbes: true
+```
+
+**Requirements and caveats:**
+
+- A superuser or a member of `pg_read_all_stats` sees every database's log; a
+  `db_admin` (via SPM/SLPM) sees the current database. Without `pg_read_all_stats`
+  ingest still runs but sees only the current user's queries, and **ktx** records
+  a warning noting the partial coverage.
+- `hg_query_log` is a slow-query log: by default it records only queries slower
+  than `log_min_duration_statement` (100ms), so query history is biased toward
+  the expensive query patterns worth optimizing.
+- Hologres retains slow query logs for roughly 30 days, so the effective window
+  is capped regardless of a larger `windowDays`.
+
+### Dialect notes
+
+- SQL compilation reuses the PostgreSQL dialect (`LIMIT/OFFSET`, `$1`/`$2`
+  positional parameters, `COUNT(*) FILTER (WHERE ...)`).
+- All ingest and query-history reads run as single read-only statements; **ktx**
+  never wraps them in a transaction, honoring Hologres's restriction against
+  multi-statement DML and mixed DDL/DML transactions.
 
 ---
 

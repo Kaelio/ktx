@@ -8,6 +8,7 @@ import type { SqlAnalysisDialect } from './ports.js';
 const SQLGLOT_DIALECTS: Record<string, SqlAnalysisDialect> = {
   postgres: 'postgres',
   postgresql: 'postgres',
+  hologres: 'postgres',
   bigquery: 'bigquery',
   snowflake: 'snowflake',
   mysql: 'mysql',

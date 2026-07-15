@@ -53,6 +53,7 @@ const SUPPORTED_TEST_DRIVERS = [
   'sqlite',
   'duckdb',
   'postgres',
+  'hologres',
   'mysql',
   'clickhouse',
   'sqlserver',

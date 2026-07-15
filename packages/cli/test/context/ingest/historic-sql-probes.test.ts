@@ -45,6 +45,7 @@ function factories(
     fakeRunner('snowflake', 'SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY');
   const bigquery =
     overrides.bigquery ?? fakeRunner('bigquery', 'INFORMATION_SCHEMA.JOBS_BY_PROJECT');
+  const hologres = overrides.hologres ?? fakeRunner('hologres', 'hologres.hg_query_log');
 
   return {
     postgres: {
@@ -58,6 +59,10 @@ function factories(
     bigquery: {
       catalogName: 'INFORMATION_SCHEMA.JOBS_BY_PROJECT',
       load: vi.fn(async () => bigquery),
+    },
+    hologres: {
+      catalogName: 'hologres.hg_query_log',
+      load: vi.fn(async () => hologres),
     },
   };
 }
