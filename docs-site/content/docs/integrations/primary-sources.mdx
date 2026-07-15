@@ -131,6 +131,9 @@ PostgreSQL connector for connection, schema introspection, foreign key
 detection, sampling, and column statistics. Query history comes from Hologres's
 own `hologres.hg_query_log` system table rather than `pg_stat_statements`.
 
+**ktx** requires Hologres 4.0 or newer — the first release to support ktx — and
+verifies the version with `hg_version()` when testing a connection or scanning.
+
 ### Connection config
 
 ```yaml title="ktx.yaml"
