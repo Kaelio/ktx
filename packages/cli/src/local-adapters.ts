@@ -9,6 +9,8 @@ import { isKtxMysqlConnectionConfig } from './connectors/mysql/connector.js';
 import { createPostgresLiveDatabaseIntrospection } from './connectors/postgres/live-database-introspection.js';
 import { isKtxPostgresConnectionConfig, type KtxPostgresConnectionConfig } from './connectors/postgres/connector.js';
 import { KtxPostgresHistoricSqlQueryClient } from './connectors/postgres/historic-sql-query-client.js';
+import { createHologresLiveDatabaseIntrospection } from './connectors/hologres/live-database-introspection.js';
+import { isKtxHologresConnectionConfig } from './connectors/hologres/connector.js';
 import { createSqliteLiveDatabaseIntrospection } from './connectors/sqlite/live-database-introspection.js';
 import { isKtxSqliteConnectionConfig } from './connectors/sqlite/connector.js';
 import { createDuckDbLiveDatabaseIntrospection } from './connectors/duckdb/live-database-introspection.js';
@@ -118,6 +120,9 @@ function createKtxCliLiveDatabaseIntrospection(
   const postgres = createPostgresLiveDatabaseIntrospection({
     connections: project.config.connections,
   });
+  const hologres = createHologresLiveDatabaseIntrospection({
+    connections: project.config.connections,
+  });
   const clickhouse = createClickHouseLiveDatabaseIntrospection({
     connections: project.config.connections,
   });
@@ -146,6 +151,9 @@ function createKtxCliLiveDatabaseIntrospection(
       }
       if (isKtxPostgresConnectionConfig(connection)) {
         return postgres.extractSchema(connectionId, options);
+      }
+      if (isKtxHologresConnectionConfig(connection)) {
+        return hologres.extractSchema(connectionId, options);
       }
       if (isKtxSqliteConnectionConfig(connection)) {
         return sqlite.extractSchema(connectionId, options);

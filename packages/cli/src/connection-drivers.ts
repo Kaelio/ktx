@@ -5,6 +5,7 @@ export const KTX_DATABASE_DRIVER_IDS = [
   'sqlite',
   'duckdb',
   'postgres',
+  'hologres',
   'mysql',
   'clickhouse',
   'sqlserver',

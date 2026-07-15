@@ -61,6 +61,7 @@ const sqlDialectFactories: Record<KtxSqlDriver, () => KtxSqlDialect> = {
   duckdb: () => new KtxDuckDbDialect(),
   mysql: () => new KtxMysqlDialect(),
   postgres: () => new KtxPostgresDialect(),
+  hologres: () => new KtxPostgresDialect(),
   sqlite: () => new KtxSqliteDialect(),
   snowflake: () => new KtxSnowflakeDialect(),
   sqlserver: () => new KtxSqlServerDialect(),

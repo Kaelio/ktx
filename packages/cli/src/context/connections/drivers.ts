@@ -169,6 +169,27 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
       };
     },
   },
+  hologres: {
+    driver: 'hologres',
+    scopeConfigKey: 'schemas',
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/hologres/connector.js');
+      return {
+        isConnectionConfig: (connection) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxHologresConnectionConfig>[0];
+          return m.isKtxHologresConnectionConfig(typedConnection);
+        },
+        createScanConnector: ({ connectionId, connection }) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxHologresConnectionConfig>[0];
+          if (!m.isKtxHologresConnectionConfig(typedConnection)) {
+            throw invalidConnectionConfig('hologres');
+          }
+          return new m.KtxHologresScanConnector({ connectionId, connection: typedConnection });
+        },
+      };
+    },
+  },
   sqlite: {
     driver: 'sqlite',
     scopeConfigKey: null,
