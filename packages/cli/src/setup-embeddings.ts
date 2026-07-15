@@ -31,6 +31,10 @@ export interface KtxSetupEmbeddingsArgs {
   embeddingBackend?: KtxSetupEmbeddingBackend;
   embeddingApiKeyEnv?: string;
   embeddingApiKeyFile?: string;
+  embeddingBaseUrl?: string;
+  embeddingModel?: string;
+  embeddingDimensions?: number;
+  embeddingBatchSize?: number;
   forcePrompt?: boolean;
   showPromptInstructions?: boolean;
   skipEmbeddings: boolean;
@@ -46,6 +50,7 @@ export type KtxSetupEmbeddingsResult =
 /** @internal */
 export interface KtxSetupEmbeddingsPromptAdapter {
   select(options: { message: string; options: KtxSetupPromptOption[] }): Promise<string>;
+  text(options: { message: string; placeholder?: string }): Promise<string | undefined>;
   password(options: { message: string }): Promise<string | undefined>;
   cancel(message: string): void;
 }
@@ -104,6 +109,8 @@ function buildProjectEmbeddingConfig(input: {
   model: string;
   dimensions: number;
   credentialRef?: string;
+  baseUrlRef?: string;
+  batchSize?: number;
 }): KtxProjectEmbeddingConfig {
   if (input.backend === 'openai') {
     return {
@@ -112,7 +119,9 @@ function buildProjectEmbeddingConfig(input: {
       dimensions: input.dimensions,
       openai: {
         ...(input.credentialRef ? { api_key: input.credentialRef } : {}),
+        ...(input.baseUrlRef ? { base_url: input.baseUrlRef } : {}),
       },
+      ...(input.batchSize !== undefined ? { batchSize: input.batchSize } : {}),
     };
   }
   const defaults = DEFAULTS[input.backend];
@@ -132,6 +141,7 @@ function buildHealthConfig(input: {
   model: string;
   dimensions: number;
   credentialValue?: string;
+  baseUrl?: string;
 }): KtxEmbeddingConfig {
   if (input.backend === 'openai') {
     return {
@@ -140,6 +150,7 @@ function buildHealthConfig(input: {
       dimensions: input.dimensions,
       openai: {
         ...(input.credentialValue ? { apiKey: input.credentialValue } : {}),
+        ...(input.baseUrl ? { baseURL: input.baseUrl } : {}),
       },
     };
   }
@@ -353,6 +364,114 @@ function startHealthCheckProgress(
   };
 }
 
+async function resolveOpenAiEmbeddingParams(
+  args: KtxSetupEmbeddingsArgs,
+  io: KtxCliIo,
+  deps: KtxSetupEmbeddingsDeps,
+): Promise<
+  | { status: 'ready'; model: string; dimensions: number; baseUrlRef?: string; baseUrlValue?: string; batchSize?: number }
+  | { status: 'back' | 'missing-input' }
+> {
+  const env = deps.env ?? process.env;
+  const defaults = DEFAULTS.openai;
+
+  let baseUrlRef: string | undefined;
+  let baseUrlValue: string | undefined;
+  if (args.embeddingBaseUrl) {
+    let value: string | undefined;
+    try {
+      value = resolveKtxConfigReference(args.embeddingBaseUrl, env);
+    } catch {
+      value = undefined;
+    }
+    if (!value) {
+      io.stderr.write(`Missing embedding base URL: ${args.embeddingBaseUrl} could not be resolved.\n`);
+      return { status: 'missing-input' };
+    }
+    baseUrlRef = args.embeddingBaseUrl;
+    baseUrlValue = value;
+  }
+
+  let model = args.embeddingModel?.trim() || undefined;
+  let dimensions = args.embeddingDimensions;
+  let batchSize = args.embeddingBatchSize;
+
+  if (args.inputMode !== 'disabled') {
+    const prompts = deps.prompts ?? createPromptAdapter();
+    if (!args.embeddingBaseUrl) {
+      const url = await prompts.text({
+        message: withTextInputNavigation(
+          'OpenAI-compatible embeddings base URL (leave empty for the default OpenAI endpoint)',
+        ),
+      });
+      if (url === undefined) {
+        return { status: 'back' };
+      }
+      const trimmed = url.trim();
+      if (trimmed) {
+        baseUrlRef = trimmed;
+        baseUrlValue = trimmed;
+      }
+    }
+    if (model === undefined) {
+      const value = await prompts.text({
+        message: withTextInputNavigation(`Embedding model (default ${defaults.model})`),
+      });
+      if (value === undefined) {
+        return { status: 'back' };
+      }
+      model = value.trim() || defaults.model;
+    }
+    if (dimensions === undefined) {
+      const value = await prompts.text({
+        message: withTextInputNavigation(`Embedding dimensions (default ${defaults.dimensions})`),
+      });
+      if (value === undefined) {
+        return { status: 'back' };
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        dimensions = defaults.dimensions;
+      } else {
+        const parsed = Number.parseInt(trimmed, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          io.stderr.write(`Invalid embedding dimensions: ${trimmed} must be a positive integer.\n`);
+          return { status: 'missing-input' };
+        }
+        dimensions = parsed;
+      }
+    }
+    if (batchSize === undefined) {
+      const value = await prompts.text({
+        message: withTextInputNavigation(
+          'Embedding batch size (max texts per request; leave empty for the provider default; some endpoints cap this, e.g. 10)',
+        ),
+      });
+      if (value === undefined) {
+        return { status: 'back' };
+      }
+      const trimmed = value.trim();
+      if (trimmed) {
+        const parsed = Number.parseInt(trimmed, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          io.stderr.write(`Invalid embedding batch size: ${trimmed} must be a positive integer.\n`);
+          return { status: 'missing-input' };
+        }
+        batchSize = parsed;
+      }
+    }
+  }
+
+  return {
+    status: 'ready',
+    model: model ?? defaults.model,
+    dimensions: dimensions ?? defaults.dimensions,
+    ...(baseUrlRef ? { baseUrlRef } : {}),
+    ...(baseUrlValue ? { baseUrlValue } : {}),
+    ...(batchSize !== undefined ? { batchSize } : {}),
+  };
+}
+
 export async function runKtxSetupEmbeddingsStep(
   args: KtxSetupEmbeddingsArgs,
   io: KtxCliIo,
@@ -391,10 +510,13 @@ export async function runKtxSetupEmbeddingsStep(
     }
 
     const defaults = DEFAULTS[selectedBackend];
-    const model = defaults.model;
-    const dimensions = defaults.dimensions;
+    let model = defaults.model;
+    let dimensions = defaults.dimensions;
     let credentialRef: string | undefined;
     let credentialValue: string | undefined;
+    let baseUrlRef: string | undefined;
+    let baseUrlValue: string | undefined;
+    let embeddingBatchSize: number | undefined;
 
     if (selectedBackend === 'openai') {
       const credential = await chooseCredentialRef(selectedBackend, args, io, deps);
@@ -407,6 +529,20 @@ export async function runKtxSetupEmbeddingsStep(
       }
       credentialRef = credential.ref;
       credentialValue = credential.value;
+
+      const params = await resolveOpenAiEmbeddingParams(args, io, deps);
+      if (params.status === 'back' && !args.embeddingBackend && args.inputMode !== 'disabled') {
+        selectedBackend = undefined;
+        continue;
+      }
+      if (params.status !== 'ready') {
+        return { status: params.status, projectDir: args.projectDir };
+      }
+      model = params.model;
+      dimensions = params.dimensions;
+      baseUrlRef = params.baseUrlRef;
+      baseUrlValue = params.baseUrlValue;
+      embeddingBatchSize = params.batchSize;
     }
 
     let managedLocalEmbeddings: ManagedLocalEmbeddingsDaemon | undefined;
@@ -443,6 +579,7 @@ export async function runKtxSetupEmbeddingsStep(
             model,
             dimensions,
             credentialValue,
+            baseUrl: baseUrlValue,
           });
     const healthSpinner = (deps.spinner ?? (() => createCliSpinner(io)))();
     const progress = startHealthCheckProgress(healthSpinner, healthCheckStartText(selectedBackend, model, dimensions));
@@ -468,6 +605,8 @@ export async function runKtxSetupEmbeddingsStep(
               model,
               dimensions,
               credentialRef,
+              baseUrlRef,
+              batchSize: embeddingBatchSize,
             }),
       );
       io.stdout.write(`│  Embeddings ready: yes (${model}, ${dimensions} dimensions)\n`);

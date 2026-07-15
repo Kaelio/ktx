@@ -150,12 +150,193 @@ describe('setup Anthropic model step', () => {
         options: [
           { value: 'claude-code', label: 'Claude subscription (Pro/Max)' },
           { value: 'codex', label: 'Codex subscription' },
+          { value: 'openai-compatible', label: 'OpenAI-compatible endpoint (base URL + API key)' },
           { value: 'anthropic', label: 'Anthropic API key' },
           { value: 'vertex', label: 'Google Vertex AI for Anthropic Claude' },
           { value: 'back', label: 'Back' },
         ],
       }),
     );
+  });
+
+  it('configures the openai-compatible backend from flags and persists the provider block', async () => {
+    const io = makeIo();
+    const healthCheck = vi.fn(async () => ({ ok: true as const }));
+    const { spinner } = makeSpinnerEvents();
+
+    const result = await runKtxSetupAnthropicModelStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        llmBackend: 'openai-compatible',
+        llmBaseUrl: 'https://maas.example/compatible-mode/v1',
+        llmModel: 'qwen3.7-max',
+        llmApiKeyEnv: 'KTX_MAAS_KEY',
+        skipLlm: false,
+      },
+      io.io,
+      { env: { KTX_MAAS_KEY: 'sk-maas' }, healthCheck, spinner }, // pragma: allowlist secret
+    );
+
+    expect(result.status).toBe('ready');
+    expect(healthCheck).toHaveBeenCalledTimes(1);
+    expect(healthCheck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: 'openai-compatible',
+        openaiCompatible: { baseURL: 'https://maas.example/compatible-mode/v1', apiKey: 'sk-maas' }, // pragma: allowlist secret
+        modelSlots: { default: 'qwen3.7-max' },
+      }),
+    );
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.llm.provider).toMatchObject({
+      backend: 'openai-compatible',
+      openaiCompatible: { api_key: 'env:KTX_MAAS_KEY', base_url: 'https://maas.example/compatible-mode/v1' }, // pragma: allowlist secret
+    });
+    expect(config.llm.models.default).toBe('qwen3.7-max');
+    expect(config.llm.models.curator).toBe('qwen3.7-max');
+    expect(config.scan.enrichment.mode).toBe('llm');
+  });
+
+  it('requires the openai-compatible base URL in non-interactive mode', async () => {
+    const io = makeIo();
+    const result = await runKtxSetupAnthropicModelStep(
+      { projectDir: tempDir, inputMode: 'disabled', llmBackend: 'openai-compatible', llmModel: 'qwen3.7-max', skipLlm: false },
+      io.io,
+      { env: {} },
+    );
+    expect(result.status).toBe('missing-input');
+    expect(io.stderr()).toContain('Missing OpenAI-compatible base URL');
+  });
+
+  it('requires the openai-compatible model in non-interactive mode', async () => {
+    const io = makeIo();
+    const result = await runKtxSetupAnthropicModelStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        llmBackend: 'openai-compatible',
+        llmBaseUrl: 'https://maas.example/v1',
+        skipLlm: false,
+      },
+      io.io,
+      { env: {} },
+    );
+    expect(result.status).toBe('missing-input');
+    expect(io.stderr()).toContain('Missing OpenAI-compatible model');
+  });
+
+  it('reports missing-input when the openai-compatible api key env var is unset', async () => {
+    const io = makeIo();
+    const result = await runKtxSetupAnthropicModelStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        llmBackend: 'openai-compatible',
+        llmBaseUrl: 'https://maas.example/v1',
+        llmModel: 'qwen3.7-max',
+        llmApiKeyEnv: 'KTX_MAAS_KEY',
+        skipLlm: false,
+      },
+      io.io,
+      { env: {} },
+    );
+    expect(result.status).toBe('missing-input');
+    expect(io.stderr()).toContain('KTX_MAAS_KEY is not set');
+  });
+
+  it('allows a keyless openai-compatible endpoint and omits api_key', async () => {
+    const io = makeIo();
+    const healthCheck = vi.fn(async () => ({ ok: true as const }));
+    const { spinner } = makeSpinnerEvents();
+    const result = await runKtxSetupAnthropicModelStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        llmBackend: 'openai-compatible',
+        llmBaseUrl: 'http://localhost:8000/v1',
+        llmModel: 'local-model',
+        skipLlm: false,
+      },
+      io.io,
+      { env: {}, healthCheck, spinner },
+    );
+    expect(result.status).toBe('ready');
+    expect(healthCheck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: 'openai-compatible',
+        openaiCompatible: { baseURL: 'http://localhost:8000/v1' },
+        modelSlots: { default: 'local-model' },
+      }),
+    );
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.llm.provider).toMatchObject({
+      backend: 'openai-compatible',
+      openaiCompatible: { base_url: 'http://localhost:8000/v1' },
+    });
+    expect((config.llm.provider as { openaiCompatible?: { api_key?: string } }).openaiCompatible?.api_key).toBeUndefined();
+  });
+
+  it('fails when the openai-compatible health check fails in non-interactive mode', async () => {
+    const io = makeIo();
+    const healthCheck = vi.fn(async () => ({ ok: false as const, message: 'model not found' }));
+    const { spinner } = makeSpinnerEvents();
+    const result = await runKtxSetupAnthropicModelStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        llmBackend: 'openai-compatible',
+        llmBaseUrl: 'https://maas.example/v1',
+        llmModel: 'bad-model',
+        llmApiKeyEnv: 'KTX_MAAS_KEY',
+        skipLlm: false,
+      },
+      io.io,
+      { env: { KTX_MAAS_KEY: 'sk-maas' }, healthCheck, spinner }, // pragma: allowlist secret
+    );
+    expect(result.status).toBe('failed');
+    expect(io.stderr()).toContain('OpenAI-compatible model health check failed');
+  });
+
+  it('walks the interactive openai-compatible flow and persists provider config', async () => {
+    const io = makeIo();
+    const healthCheck = vi.fn(async () => ({ ok: true as const }));
+    const { spinner } = makeSpinnerEvents();
+    const textValues = ['https://maas.example/v1', 'DASHSCOPE_API_KEY', 'qwen3.7-max'];
+    const prompts: KtxSetupModelPromptAdapter = {
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message.includes('Which LLM provider')) {
+          return 'openai-compatible';
+        }
+        if (message.includes('authenticate to the OpenAI-compatible endpoint')) {
+          return 'env';
+        }
+        return 'back';
+      }),
+      autocomplete: vi.fn(async () => 'back'),
+      text: vi.fn(async () => textValues.shift() ?? ''),
+      password: vi.fn(async () => undefined),
+      cancel: vi.fn(),
+    };
+
+    const result = await runKtxSetupAnthropicModelStep(
+      { projectDir: tempDir, inputMode: 'auto', skipLlm: false },
+      io.io,
+      { prompts, healthCheck, spinner, env: { DASHSCOPE_API_KEY: 'sk-dash' } }, // pragma: allowlist secret
+    );
+
+    expect(result.status).toBe('ready');
+    expect(healthCheck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: 'openai-compatible',
+        openaiCompatible: { baseURL: 'https://maas.example/v1', apiKey: 'sk-dash' }, // pragma: allowlist secret
+        modelSlots: { default: 'qwen3.7-max' },
+      }),
+    );
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.llm.provider).toMatchObject({
+      backend: 'openai-compatible',
+      openaiCompatible: { api_key: 'env:DASHSCOPE_API_KEY', base_url: 'https://maas.example/v1' }, // pragma: allowlist secret
+    });
   });
 
   it('configures Claude Code backend and validates local auth', async () => {

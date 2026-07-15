@@ -62,6 +62,32 @@ describe('ktx LLM health check', () => {
     });
   });
 
+  it('redacts the openai-compatible api key from failed health-check messages', async () => {
+    const openaiModel = { modelId: 'qwen3.7-max', provider: 'openai-compatible.chat' } as never;
+    const generateText = vi.fn(async () => {
+      throw new Error('401 Unauthorized bearer sk-maas-secret');
+    });
+
+    await expect(
+      runKtxLlmHealthCheck(
+        {
+          backend: 'openai-compatible',
+          openaiCompatible: { apiKey: 'sk-maas-secret', baseURL: 'https://maas.example/v1' }, // pragma: allowlist secret
+          modelSlots: { default: 'qwen3.7-max' },
+        },
+        {
+          deps: {
+            createOpenAICompatible: vi.fn(() => vi.fn(() => openaiModel)),
+            generateText,
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      message: '401 Unauthorized bearer [redacted]',
+    });
+  });
+
   it('reports claude-code as unsupported by the AI SDK health check', async () => {
     const result = await runKtxLlmHealthCheck({
       backend: 'claude-code',

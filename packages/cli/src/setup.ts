@@ -91,10 +91,18 @@ export type KtxSetupArgs =
       anthropicApiKeyFile?: string;
       vertexProject?: string;
       vertexLocation?: string;
+      llmBaseUrl?: string;
+      llmModel?: string;
+      llmApiKeyEnv?: string;
+      llmApiKeyFile?: string;
       skipLlm: boolean;
       embeddingBackend?: 'openai' | 'sentence-transformers';
       embeddingApiKeyEnv?: string;
       embeddingApiKeyFile?: string;
+      embeddingBaseUrl?: string;
+      embeddingModel?: string;
+      embeddingDimensions?: number;
+      embeddingBatchSize?: number;
       skipEmbeddings: boolean;
       databaseDrivers?: KtxSetupDatabaseDriver[];
       databaseConnectionIds?: string[];
@@ -791,6 +799,10 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
             ...(args.anthropicApiKeyFile ? { anthropicApiKeyFile: args.anthropicApiKeyFile } : {}),
             ...(args.vertexProject ? { vertexProject: args.vertexProject } : {}),
             ...(args.vertexLocation ? { vertexLocation: args.vertexLocation } : {}),
+            ...(args.llmBaseUrl ? { llmBaseUrl: args.llmBaseUrl } : {}),
+            ...(args.llmModel ? { llmModel: args.llmModel } : {}),
+            ...(args.llmApiKeyEnv ? { llmApiKeyEnv: args.llmApiKeyEnv } : {}),
+            ...(args.llmApiKeyFile ? { llmApiKeyFile: args.llmApiKeyFile } : {}),
             forcePrompt: forcePromptSteps.has('models') || runOnly === 'models',
             showPromptInstructions,
             skipLlm: args.skipLlm || !shouldRunModels,
@@ -810,6 +822,10 @@ async function runKtxSetupInner(args: KtxSetupArgs, io: KtxCliIo, deps: KtxSetup
             ...(args.embeddingBackend ? { embeddingBackend: args.embeddingBackend } : {}),
             ...(args.embeddingApiKeyEnv ? { embeddingApiKeyEnv: args.embeddingApiKeyEnv } : {}),
             ...(args.embeddingApiKeyFile ? { embeddingApiKeyFile: args.embeddingApiKeyFile } : {}),
+            ...(args.embeddingBaseUrl ? { embeddingBaseUrl: args.embeddingBaseUrl } : {}),
+            ...(args.embeddingModel ? { embeddingModel: args.embeddingModel } : {}),
+            ...(args.embeddingDimensions !== undefined ? { embeddingDimensions: args.embeddingDimensions } : {}),
+            ...(args.embeddingBatchSize !== undefined ? { embeddingBatchSize: args.embeddingBatchSize } : {}),
             forcePrompt: forcePromptSteps.has('embeddings') || runOnly === 'embeddings',
             showPromptInstructions,
             skipEmbeddings: args.skipEmbeddings || !shouldRunEmbeddings,

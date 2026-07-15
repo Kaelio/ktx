@@ -413,6 +413,28 @@ scan:
     expect(config.scan.enrichment.embeddings?.dimensions).toBe(1536);
   });
 
+  it('parses and round-trips an openai-compatible LLM provider block', () => {
+    const yaml = `
+llm:
+  provider:
+    backend: openai-compatible
+    openaiCompatible:
+      api_key: env:MAAS_KEY
+      base_url: https://maas.example/compatible-mode/v1
+  models:
+    default: qwen3.7-max
+`;
+    const config = parseKtxProjectConfig(yaml);
+    expect(config.llm.provider).toMatchObject({
+      backend: 'openai-compatible',
+      openaiCompatible: { api_key: 'env:MAAS_KEY', base_url: 'https://maas.example/compatible-mode/v1' },
+    });
+    expect(config.llm.models.default).toBe('qwen3.7-max');
+
+    const roundTripped = parseKtxProjectConfig(serializeKtxProjectConfig(config));
+    expect(roundTripped.llm.provider).toEqual(config.llm.provider);
+  });
+
   it('parses scan relationship settings', () => {
     const config = parseKtxProjectConfig(`
 scan:
@@ -689,7 +711,7 @@ describe('generateKtxProjectConfigJsonSchema', () => {
     const llm = (schema.properties as Record<string, { properties?: Record<string, unknown> }>).llm;
     const provider = llm?.properties?.provider as { properties?: Record<string, unknown> };
     const backend = provider?.properties?.backend as { enum?: readonly string[] };
-    expect(backend?.enum).toEqual(['none', 'anthropic', 'vertex', 'gateway', 'claude-code', 'codex']);
+    expect(backend?.enum).toEqual(['none', 'anthropic', 'vertex', 'gateway', 'openai-compatible', 'claude-code', 'codex']);
 
     const storage = (schema.properties as Record<string, { properties?: Record<string, unknown> }>).storage;
     const state = storage?.properties?.state as { enum?: readonly string[] };

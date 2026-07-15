@@ -50,6 +50,7 @@
     "@ai-sdk/anthropic": "3.0.78",
     "@ai-sdk/devtools": "0.0.18",
     "@ai-sdk/google-vertex": "^4.0.134",
+    "@ai-sdk/openai-compatible": "^2.0.47",
     "@anthropic-ai/claude-agent-sdk": "0.3.146",
     "@aws-sdk/client-athena": "^3.1068.0",
     "@aws-sdk/client-glue": "^3.1068.0",

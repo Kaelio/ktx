@@ -473,10 +473,12 @@ llm:
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `provider.backend` | `none` \| `anthropic` \| `vertex` \| `gateway` \| `claude-code` \| `codex` | `none` | Selected backend. `none` disables LLM features. `claude-code` uses the local Claude Code session and needs no API key. `codex` uses local Codex authentication and needs no API key. |
+| `provider.backend` | `none` \| `anthropic` \| `vertex` \| `gateway` \| `openai-compatible` \| `claude-code` \| `codex` | `none` | Selected backend. `none` disables LLM features. `claude-code` uses the local Claude Code session and needs no API key. `codex` uses local Codex authentication and needs no API key. |
 | `provider.anthropic.api_key` | `string` | - | Anthropic API key. Required when `backend: anthropic`. Accepts `env:` or `file:` references. |
 | `provider.anthropic.base_url` | `string` | - | Override the Anthropic API base URL (proxy, self-hosted gateway). |
 | `provider.gateway.api_key` / `base_url` | `string` | - | Credentials for an AI Gateway provider. Required when `backend: gateway`. |
+| `provider.openaiCompatible.base_url` | `string` | - | Base URL of an OpenAI-compatible chat completions endpoint. Required when `backend: openai-compatible`. Accepts `env:` or `file:` references. |
+| `provider.openaiCompatible.api_key` | `string` | - | API key for the OpenAI-compatible endpoint. Optional for keyless endpoints. Accepts `env:` or `file:` references. |
 | `provider.vertex.project` | `string` | - | Google Cloud project ID hosting the Vertex AI endpoint. |
 | `provider.vertex.location` | `string` | - | Vertex AI region (for example `us-east5`). Required when the `vertex` block is present. |
 
