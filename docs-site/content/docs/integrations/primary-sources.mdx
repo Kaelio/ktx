@@ -126,7 +126,7 @@ This helps **ktx** understand how your team actually queries the data.
 
 ## Snowflake
 
-Connects via the Snowflake SDK. Supports multi-schema scanning, RSA key authentication, and query-history configuration for Snowflake query history.
+Connects via the Snowflake SDK. Supports multi-schema scanning, password, RSA key pair, OAuth token, programmatic access token, and browser-based SSO authentication, and query-history configuration for Snowflake query history.
 
 ### Connection config
 
@@ -154,8 +154,29 @@ single schema, `schema_name: PUBLIC` is accepted as an equivalent shorthand.
 
 | Method | Config |
 |--------|--------|
-| Password | `password: env:SNOWFLAKE_PASSWORD` |
+| Password (default) | `password: env:SNOWFLAKE_PASSWORD` |
 | RSA key pair | `authMethod: rsa`, `privateKey: file:~/.ssh/snowflake_key.pem`, optional `passphrase` |
+| OAuth token | `authMethod: oauth`, `token: env:SNOWFLAKE_OAUTH_TOKEN` |
+| Programmatic access token | `authMethod: pat`, `token: env:SNOWFLAKE_PAT` |
+| Browser SSO | `authMethod: externalbrowser` — opens a browser window for SSO/MFA login |
+
+For `oauth`, `pat`, and `externalbrowser`, `username` is optional — identity is carried by the token or resolved by the IDP.
+
+```yaml title="ktx.yaml — OAuth example"
+connections:
+  my-snowflake:
+    driver: snowflake
+    authMethod: oauth
+    account: xy12345
+    warehouse: ANALYTICS_WH
+    database: PROD
+    token: env:SNOWFLAKE_OAUTH_TOKEN
+    role: ANALYST
+```
+
+`token` follows the same reference syntax as other secrets: `env:VAR` reads from an environment variable, `file:/path/to/token` reads from a file, or a literal value can be supplied directly. <!-- pragma: allowlist secret -->
+
+Browser SSO authentication is interactive — running `ktx connection test` or `ktx setup` will open a browser window to complete the Snowflake SSO flow. Not suitable for headless or CI environments. `ktx setup`'s Snowflake wizard supports all five auth methods, both when creating a new connection and when editing an existing one.
 
 ### Features
 

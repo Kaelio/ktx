@@ -34,7 +34,7 @@ import { configureSnowflakeSdkLogger } from './sdk-logger.js';
 
 export interface KtxSnowflakeConnectionConfig {
   driver?: string;
-  authMethod?: 'password' | 'rsa';
+  authMethod?: 'password' | 'rsa' | 'oauth' | 'pat' | 'externalbrowser';
   account?: string;
   warehouse?: string;
   database?: string;
@@ -44,21 +44,25 @@ export interface KtxSnowflakeConnectionConfig {
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  token?: string;
   role?: string;
   maxConnections?: number;
   [key: string]: unknown;
 }
 
 export interface KtxSnowflakeResolvedConnectionConfig {
-  authMethod: 'password' | 'rsa';
+  authMethod: 'password' | 'rsa' | 'oauth' | 'pat' | 'externalbrowser';
   account: string;
   warehouse: string;
   database: string;
   schemas: string[];
-  username: string;
+  username?: string;
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  token?: string;
+  /** Re-reads the token source (env var or file) so a rotated short-lived token is picked up on each new pooled connection. */
+  refreshToken?: () => string;
   role?: string;
   maxConnections: number;
   deadlineMs: number;
@@ -265,6 +269,12 @@ export function snowflakeConnectionConfigFromConfig(input: {
   }
   const env = input.env ?? process.env;
   const authMethod = input.connection?.authMethod ?? 'password';
+  const knownAuthMethods = ['password', 'rsa', 'oauth', 'pat', 'externalbrowser'];
+  if (!knownAuthMethods.includes(authMethod)) {
+    throw new Error(
+      `connections.${input.connectionId}.authMethod "${authMethod}" is not supported; use one of ${knownAuthMethods.join(', ')}`,
+    );
+  }
   const account = stringConfigValue(input.connection, 'account', env);
   const warehouse = stringConfigValue(input.connection, 'warehouse', env);
   const database = stringConfigValue(input.connection, 'database', env);
@@ -278,8 +288,11 @@ export function snowflakeConnectionConfigFromConfig(input: {
   if (!database) {
     throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.database`);
   }
-  if (!username) {
-    throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.username`);
+  // username is required for password/rsa; optional for oauth/pat/externalbrowser.
+  if (authMethod === 'password' || authMethod === 'rsa') {
+    if (!username) {
+      throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.username`);
+    }
   }
   assertSafeSnowflakeIdentifier(warehouse, 'warehouse');
   assertSafeSnowflakeIdentifier(database, 'database');
@@ -293,7 +306,7 @@ export function snowflakeConnectionConfigFromConfig(input: {
     warehouse,
     database,
     schemas: resolvedSchemas,
-    username,
+    ...(username ? { username } : {}),
     maxConnections: positiveIntegerConfigValue({
       connection: input.connection,
       key: 'maxConnections',
@@ -316,7 +329,19 @@ export function snowflakeConnectionConfigFromConfig(input: {
     if (!resolved.privateKey) {
       throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.privateKey for RSA auth`);
     }
-  } else {
+  } else if (authMethod === 'oauth' || authMethod === 'pat') {
+    const connection = input.connection;
+    const connectionId = input.connectionId;
+    const refreshToken = (): string => {
+      const token = stringConfigValue(connection, 'token', env);
+      if (!token) {
+        throw new Error(`Native Snowflake connector requires connections.${connectionId}.token for ${authMethod} auth`);
+      }
+      return token;
+    };
+    resolved.token = refreshToken();
+    resolved.refreshToken = refreshToken;
+  } else if (authMethod !== 'externalbrowser') {
     resolved.password = stringConfigValue(input.connection, 'password', env);
     if (!resolved.password) {
       throw new Error(`Native Snowflake connector requires connections.${input.connectionId}.password`);
@@ -487,14 +512,25 @@ class SnowflakeSdkDriver implements KtxSnowflakeDriver {
 
   private async getPool(): Promise<ReturnType<typeof snowflake.createPool>> {
     if (!this.pool) {
-      this.pool = snowflake.createPool(await this.resolveConnectionOptions(), {
-        min: 0,
-        max: this.resolved.maxConnections,
-        evictionRunIntervalMillis: 30_000,
-        acquireTimeoutMillis: 60_000,
-      });
+      this.pool = snowflake.createPool(await this.resolveConnectionOptions(), this.poolPolicy());
     }
     return this.pool;
+  }
+
+  private poolPolicy(): { min: number; max: number; evictionRunIntervalMillis: number; idleTimeoutMillis?: number; acquireTimeoutMillis: number } {
+    if (this.resolved.authMethod !== 'externalbrowser') {
+      return { min: 0, max: this.resolved.maxConnections, evictionRunIntervalMillis: 30_000, acquireTimeoutMillis: 60_000 };
+    }
+    // externalbrowser opens a system browser for SSO/MFA (default 120s per attempt, see
+    // WAIT_FOR_BROWSER_ACTION_TIMEOUT in the SDK). Keep at least one connection warm and
+    // avoid idle eviction so a scan doesn't force a repeat login mid-run, and give acquire
+    // more headroom than the SDK's own browser timeout so the pool never gives up first.
+    return {
+      min: 1,
+      max: this.resolved.maxConnections,
+      evictionRunIntervalMillis: 0,
+      acquireTimeoutMillis: 150_000,
+    };
   }
 
   private async resolveConnectionOptions(): Promise<snowflake.ConnectionOptions> {
@@ -517,9 +553,28 @@ class SnowflakeSdkDriver implements KtxSnowflakeDriver {
       clientSessionKeepAliveHeartbeatFrequency: 900,
       ...patch?.sdkOptions,
     };
-    return this.resolved.authMethod === 'rsa'
-      ? { ...baseConfig, authenticator: 'SNOWFLAKE_JWT', privateKey: this.decryptPrivateKey() }
-      : { ...baseConfig, password: this.resolved.password };
+    if (this.resolved.authMethod === 'rsa') {
+      return { ...baseConfig, authenticator: 'SNOWFLAKE_JWT', privateKey: this.decryptPrivateKey() };
+    }
+    if (this.resolved.authMethod === 'oauth' || this.resolved.authMethod === 'pat') {
+      const authenticator = this.resolved.authMethod === 'oauth' ? 'OAUTH' : 'PROGRAMMATIC_ACCESS_TOKEN';
+      const refreshToken = this.resolved.refreshToken;
+      const fallbackToken = this.resolved.token;
+      return {
+        ...baseConfig,
+        authenticator,
+        // The pool reuses this options object for every new physical connection it opens
+        // (min: 0 plus idle eviction means that can happen well after construction), so
+        // re-read a short-lived token each time rather than baking in the value from setup.
+        get token() {
+          return refreshToken ? refreshToken() : fallbackToken;
+        },
+      };
+    }
+    if (this.resolved.authMethod === 'externalbrowser') {
+      return { ...baseConfig, authenticator: 'EXTERNALBROWSER' };
+    }
+    return { ...baseConfig, password: this.resolved.password };
   }
 
   private async executeSnowflakeQuery(
