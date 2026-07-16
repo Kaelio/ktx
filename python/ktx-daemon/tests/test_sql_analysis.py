@@ -167,6 +167,32 @@ def test_analyze_sql_batch_returns_bigquery_project_dataset_table_refs() -> None
     ]
 
 
+def test_analyze_sql_batch_accepts_hologres_dialect_as_postgres() -> None:
+    # Hologres has no sqlglot dialect; it must analyze as postgres, not error.
+    response = analyze_sql_batch_response(
+        AnalyzeSqlBatchRequest(
+            dialect="hologres",
+            items=[
+                AnalyzeSqlBatchItem(
+                    id="holo",
+                    sql="select l_orderkey from public.lineitem where l_quantity > 10",
+                )
+            ],
+            max_workers=1,
+        )
+    )
+
+    result = response.results["holo"]
+    assert result.error is None
+    assert [item.model_dump() for item in result.tables_touched] == [
+        {"catalog": None, "db": "public", "name": "lineitem"}
+    ]
+    assert result.columns_by_clause == {
+        "select": ["l_orderkey"],
+        "where": ["l_quantity"],
+    }
+
+
 def test_columns_from_nodes_ignores_non_expression_clause_values() -> None:
     assert _columns_from_nodes([True, False, None]) == []
 
@@ -240,3 +266,15 @@ def test_validate_read_only_sql_reports_parse_errors() -> None:
     assert response.ok is False
     assert response.error is not None
     assert "Invalid expression" in response.error
+
+
+def test_validate_read_only_sql_accepts_hologres_dialect() -> None:
+    response = validate_read_only_sql_response(
+        ValidateReadOnlySqlRequest(
+            dialect="hologres",
+            sql="select l_orderkey from public.lineitem",
+        )
+    )
+
+    assert response.ok is True
+    assert response.error is None
