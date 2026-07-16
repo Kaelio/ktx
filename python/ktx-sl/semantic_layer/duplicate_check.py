@@ -42,7 +42,7 @@ def validate_measure_duplicates(
         parsed: list[tuple[str, exp.Expression | None, str | None, frozenset[str]]] = []
         for m in source.measures:
             try:
-                quoted = quote_reserved_identifiers(m.expr)
+                quoted = quote_reserved_identifiers(m.expr, dialect)
                 tree = sqlglot.parse_one(f"SELECT {quoted}", read=dialect)
                 expr_node = tree.expressions[0] if tree.expressions else None
             except Exception:

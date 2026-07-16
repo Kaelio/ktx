@@ -42,6 +42,12 @@ function warehouseConnectionSchema<const Driver extends WarehouseDriver>(driver:
         .describe(
           'Maximum execution time for a single read-only query, in milliseconds (default 30000). Enforced as a server-side statement timeout for remote engines and by SIGKILL-ing a forked query subprocess for in-process SQLite. A query exceeding it is cancelled and returns a "query exceeded Ns" error so the agent can revise.',
         ),
+      query_policy: z
+        .enum(['read-only-sql', 'semantic-layer-only'])
+        .optional()
+        .describe(
+          'Agent-facing query authorship policy (default "read-only-sql"). "read-only-sql" allows parser-validated read-only SQL plus semantic-layer queries. "semantic-layer-only" rejects raw SQL on this connection (`ktx sql`, the sql_execution tool, and federated queries that include it) and restricts semantic-layer queries to measures predefined in the semantic-layer sources. ktx-internal scan and ingest queries are unaffected.',
+        ),
     })
     .describe(
       `${driver} warehouse connection. Additional driver-tunable fields (e.g. context.queryHistory) are accepted and passed through.`,

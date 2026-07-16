@@ -254,7 +254,7 @@ class JoinGraph:
         from sqlglot import exp as _exp
         from semantic_layer.parser import quote_reserved_identifiers
 
-        quoted = quote_reserved_identifiers(on_clause)
+        quoted = quote_reserved_identifiers(on_clause, self.dialect)
         tree = sqlglot.parse_one(
             f"SELECT 1 FROM _a JOIN _b ON {quoted}", read=self.dialect
         )

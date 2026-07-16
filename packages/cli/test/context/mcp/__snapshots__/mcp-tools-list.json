@@ -33,6 +33,10 @@
               },
               "hint": {
                 "type": "string"
+              },
+              "queryPolicy": {
+                "type": "string",
+                "const": "semantic-layer-only"
               }
             },
             "required": [
