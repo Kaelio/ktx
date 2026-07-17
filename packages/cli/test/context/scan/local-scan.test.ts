@@ -2209,6 +2209,39 @@ describe('local scan', () => {
       'raw-sources/warehouse/live-database/2026-04-29-170000-scan-run-athena/scan-report.json',
     );
   });
+
+  it('accepts hologres as a native standalone scan driver when the host supplies a live-database adapter', async () => {
+    await writeFile(
+      join(project.projectDir, 'ktx.yaml'),
+      [
+        'connections:',
+        '  warehouse:',
+        '    driver: hologres',
+        '    url: env:HOLOGRES_URL',
+        '    schemas:',
+        '      - public',
+        'ingest:',
+        '  adapters:',
+        '    - live-database',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    project = await loadKtxProject({ projectDir: project.projectDir });
+
+    const result = await runLocalScan({
+      project,
+      adapters: [fetchOnlyAdapter()],
+      connectionId: 'warehouse',
+      jobId: 'scan-run-hologres',
+      now: () => new Date('2026-04-29T18:00:00.000Z'),
+    });
+
+    expect(result.report.driver).toBe('hologres');
+    expect(result.report.artifactPaths.reportPath).toBe(
+      'raw-sources/warehouse/live-database/2026-04-29-180000-scan-run-hologres/scan-report.json',
+    );
+  });
 });
 
 describe('resolveEnabledTables', () => {

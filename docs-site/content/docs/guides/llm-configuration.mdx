@@ -14,9 +14,51 @@ Set `llm.provider.backend` to one of these values:
   configured `api_key` reference.
 - `vertex`: Use Vertex AI Anthropic models through Google Cloud credentials.
 - `gateway`: Use AI Gateway-compatible Anthropic model ids.
+- `openai-compatible`: Use any OpenAI-compatible chat completions endpoint
+  (Azure OpenAI, Alibaba Bailian/DashScope, vLLM, LiteLLM, Ollama, and similar)
+  through a base URL and an optional API key.
 - `claude-code`: Use your local Claude Code session through the Claude Agent
   SDK. **ktx** strips provider-routing environment variables from child processes.
 - `codex`: Use your local Codex authentication through the Codex SDK.
+
+## OpenAI-compatible endpoint
+
+Use `openai-compatible` to route ktx through any endpoint that speaks the OpenAI
+chat completions protocol. Set `base_url`; `api_key` is optional for endpoints
+that need no key (for example a local Ollama or vLLM server). Because
+OpenAI-compatible endpoints expose arbitrary model ids, set one model and reuse
+it for every role — override per role by hand if you need to.
+
+```yaml
+llm:
+  provider:
+    backend: openai-compatible
+    openaiCompatible:
+      api_key: env:DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  models:
+    default: qwen-max
+    triage: qwen-max
+    candidateExtraction: qwen-max
+    curator: qwen-max
+    reconcile: qwen-max
+    repair: qwen-max
+```
+
+Configure it non-interactively:
+
+```bash
+ktx setup \
+  --llm-backend openai-compatible \
+  --llm-base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --llm-model qwen-max \
+  --llm-api-key-env DASHSCOPE_API_KEY \
+  --no-input
+```
+
+Drop `--llm-api-key-env` (and `--llm-api-key-file`) for endpoints that require no
+key. Anthropic-style `llm.promptCaching` does not apply to OpenAI-compatible
+models and is ignored for this backend.
 
 ## Claude Code
 

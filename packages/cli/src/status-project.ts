@@ -273,6 +273,20 @@ async function buildLlmStatus(
       fix: hint ? `Set ${hint}` : 'Set the gateway api_key or rerun `ktx setup`',
     };
   }
+  if (backend === 'openai-compatible') {
+    const baseUrl = config.provider.openaiCompatible?.base_url;
+    if (!baseUrl || baseUrl.trim().length === 0) {
+      return {
+        backend,
+        model,
+        status: 'warn',
+        detail: 'base URL not configured',
+        fix: 'Set llm.provider.openaiCompatible.base_url or rerun `ktx setup`',
+      };
+    }
+    const resolved = resolveRef(config.provider.openaiCompatible?.api_key, env);
+    return { backend, model, status: 'ok', detail: resolved.resolved.length > 0 ? 'base URL set, key set' : 'base URL set' };
+  }
   if (backend === 'claude-code') {
     const modelName = model;
     if (options.fast === true) {

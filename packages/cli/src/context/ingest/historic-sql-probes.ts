@@ -87,6 +87,15 @@ const defaultHistoricSqlProbeRunnerFactories: Record<
       return new BigQueryJobsByProjectProbeRunner();
     },
   },
+  hologres: {
+    catalogName: 'hologres.hg_query_log',
+    load: async () => {
+      const { HologresQueryLogProbeRunner } = await import(
+        './historic-sql-probes/hologres-runner.js'
+      );
+      return new HologresQueryLogProbeRunner();
+    },
+  },
 };
 
 const DEFAULT_RUNNER_CACHE = new Map<HistoricSqlDialect, HistoricSqlProbeRunner>();

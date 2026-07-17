@@ -2,6 +2,7 @@ import type { createKtxEmbeddingProvider } from '../../llm/embedding-provider.js
 import type { createKtxLlmProvider } from '../../llm/model-provider.js';
 import type { KtxEmbeddingProvider } from '../../llm/types.js';
 import { createDefaultLocalIngestAdapters } from '../../context/ingest/local-adapters.js';
+import { getDriverRegistration, listSupportedDrivers } from '../connections/drivers.js';
 import { getLocalStageOnlyIngestStatus, type LocalIngestRunRecord, runLocalStageOnlyIngest } from '../../context/ingest/local-stage-ingest.js';
 import type { SourceAdapter } from '../../context/ingest/types.js';
 import { createLocalKtxLlmRuntimeFromConfig } from '../../context/llm/local-config.js';
@@ -137,23 +138,12 @@ const LOCAL_AUTHOR = 'ktx';
 const LOCAL_AUTHOR_EMAIL = 'ktx@example.com';
 
 function normalizeDriver(driver: string | undefined): KtxConnectionDriver {
-  const normalized = (driver ?? '').toLowerCase();
-  if (
-    normalized === 'postgres' ||
-    normalized === 'sqlite' ||
-    normalized === 'duckdb' ||
-    normalized === 'mysql' ||
-    normalized === 'clickhouse' ||
-    normalized === 'sqlserver' ||
-    normalized === 'bigquery' ||
-    normalized === 'snowflake' ||
-    normalized === 'athena' ||
-    normalized === 'mongodb'
-  ) {
-    return normalized;
+  const registration = getDriverRegistration(driver ?? '');
+  if (registration) {
+    return registration.driver;
   }
   throw new Error(
-    `Standalone ktx scan supports postgres/sqlite/duckdb/mysql/clickhouse/sqlserver/bigquery/snowflake/athena/mongodb in this phase, received "${driver ?? 'unknown'}"`,
+    `Standalone ktx scan supports ${listSupportedDrivers().join('/')} in this phase, received "${driver ?? 'unknown'}"`,
   );
 }
 

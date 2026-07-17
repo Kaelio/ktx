@@ -58,6 +58,7 @@ yarn-error.log*
 .claude
 .superpowers
 docs/superpowers
+.qoder
 
 # Editors and OS files
 .idea/

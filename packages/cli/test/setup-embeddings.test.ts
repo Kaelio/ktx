@@ -40,10 +40,13 @@ function makeIo() {
 function makePromptAdapter(options: {
   selectValues?: string[];
   passwordValue?: string;
+  textValues?: string[];
 }): KtxSetupEmbeddingsPromptAdapter {
   const selectValues = [...(options.selectValues ?? [])];
+  const textValues = [...(options.textValues ?? [])];
   return {
     select: vi.fn(async () => selectValues.shift() ?? 'retry'),
+    text: vi.fn(async () => textValues.shift() ?? ''),
     password: vi.fn(async () => options.passwordValue ?? 'embedding-secret'),
     cancel: vi.fn(),
   };
@@ -464,6 +467,98 @@ describe('setup embeddings step', () => {
       openai: { api_key: 'env:OPENAI_API_KEY' }, // pragma: allowlist secret
     });
     expect(io.stdout()).not.toContain('sk-openai-test');
+  });
+
+  it('configures an OpenAI-compatible endpoint with custom base URL, model, and dimensions from flags', async () => {
+    const io = makeIo();
+    const healthCheck = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runKtxSetupEmbeddingsStep(
+      {
+        projectDir: tempDir,
+        inputMode: 'disabled',
+        embeddingBackend: 'openai',
+        embeddingApiKeyEnv: 'KTX_MAAS_KEY',
+        embeddingBaseUrl: 'https://maas.example/compatible-mode/v1',
+        embeddingModel: 'text-embedding-v4',
+        embeddingDimensions: 1024,
+        embeddingBatchSize: 10,
+        cliVersion: '0.2.0',
+        runtimeInstallPolicy: 'auto',
+        skipEmbeddings: false,
+      },
+      io.io,
+      { env: { KTX_MAAS_KEY: 'sk-maas' }, healthCheck }, // pragma: allowlist secret
+    );
+
+    expect(result.status).toBe('ready');
+    expect(healthCheck).toHaveBeenCalledWith({
+      backend: 'openai',
+      model: 'text-embedding-v4',
+      dimensions: 1024,
+      openai: { apiKey: 'sk-maas', baseURL: 'https://maas.example/compatible-mode/v1' }, // pragma: allowlist secret
+    });
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.ingest.embeddings).toMatchObject({
+      backend: 'openai',
+      model: 'text-embedding-v4',
+      dimensions: 1024,
+      batchSize: 10,
+      openai: { api_key: 'env:KTX_MAAS_KEY', base_url: 'https://maas.example/compatible-mode/v1' }, // pragma: allowlist secret
+    });
+    // persistEmbeddingConfig mirrors the same config into the scan enrichment block,
+    // so the schema scan's embedding requests honor the endpoint's batch cap too.
+    expect(config.scan.enrichment.embeddings?.batchSize).toBe(10);
+  });
+
+  it('prompts for base URL, model, dimensions, and batch size in the interactive OpenAI flow', async () => {
+    const io = makeIo();
+    const healthCheck = vi.fn(async () => ({ ok: true as const }));
+    const prompts = makePromptAdapter({
+      selectValues: ['openai', 'env'],
+      textValues: ['https://maas.example/v1', 'text-embedding-v4', '1024', '10'],
+    });
+
+    const result = await runKtxSetupEmbeddingsStep(
+      { projectDir: tempDir, inputMode: 'auto', cliVersion: '0.2.0', runtimeInstallPolicy: 'auto', skipEmbeddings: false },
+      io.io,
+      { env: { OPENAI_API_KEY: 'sk-openai' }, healthCheck, prompts }, // pragma: allowlist secret
+    );
+
+    expect(result.status).toBe('ready');
+    expect(healthCheck).toHaveBeenCalledWith({
+      backend: 'openai',
+      model: 'text-embedding-v4',
+      dimensions: 1024,
+      openai: { apiKey: 'sk-openai', baseURL: 'https://maas.example/v1' }, // pragma: allowlist secret
+    });
+    const config = parseKtxProjectConfig(await readFile(join(tempDir, 'ktx.yaml'), 'utf-8'));
+    expect(config.ingest.embeddings).toMatchObject({
+      backend: 'openai',
+      model: 'text-embedding-v4',
+      dimensions: 1024,
+      batchSize: 10,
+      openai: { api_key: 'env:OPENAI_API_KEY', base_url: 'https://maas.example/v1' }, // pragma: allowlist secret
+    });
+  });
+
+  it('rejects a non-positive-integer dimensions value entered interactively', async () => {
+    const io = makeIo();
+    const healthCheck = vi.fn(async () => ({ ok: true as const }));
+    const prompts = makePromptAdapter({
+      selectValues: ['openai', 'env'],
+      textValues: ['', 'text-embedding-v4', 'not-a-number'],
+    });
+
+    const result = await runKtxSetupEmbeddingsStep(
+      { projectDir: tempDir, inputMode: 'auto', cliVersion: '0.2.0', runtimeInstallPolicy: 'auto', skipEmbeddings: false },
+      io.io,
+      { env: { OPENAI_API_KEY: 'sk-openai' }, healthCheck, prompts }, // pragma: allowlist secret
+    );
+
+    expect(result.status).toBe('missing-input');
+    expect(io.stderr()).toContain('must be a positive integer');
+    expect(healthCheck).not.toHaveBeenCalled();
   });
 
   it('can fall back to OpenAI after the default local daemon is unavailable', async () => {

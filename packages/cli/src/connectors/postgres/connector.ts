@@ -7,6 +7,7 @@ import { scopedTableNames } from '../../context/scan/table-ref.js';
 import {
   connectorTestFailure,
   createKtxConnectorCapabilities,
+  type KtxConnectionDriver,
   type KtxConnectorTestResult,
   type KtxColumnSampleInput,
   type KtxColumnSampleResult,
@@ -344,6 +345,15 @@ export function isKtxPostgresConnectionConfig(
   return driver === 'postgres';
 }
 
+// Hologres speaks the PostgreSQL wire protocol and exposes the same
+// pg_catalog/information_schema, so it shares this pool builder. Dispatch
+// predicates (isKtxPostgresConnectionConfig) stay per-driver so Hologres routes
+// to its own connector rather than the postgres one.
+function isPostgresWireDriver(driver: unknown): boolean {
+  const normalized = String(driver ?? '').toLowerCase();
+  return normalized === 'postgres' || normalized === 'hologres';
+}
+
 /** @internal */
 export function postgresPoolConfigFromConfig(input: {
   connectionId: string;
@@ -351,7 +361,7 @@ export function postgresPoolConfigFromConfig(input: {
   env?: NodeJS.ProcessEnv;
 }): KtxPostgresPoolConfig {
   const inputDriver = input.connection?.driver ?? 'unknown';
-  if (!isKtxPostgresConnectionConfig(input.connection)) {
+  if (!isPostgresWireDriver(input.connection?.driver)) {
     throw new Error(`Native PostgreSQL connector cannot run driver "${inputDriver}"`);
   }
 
@@ -405,7 +415,7 @@ export function postgresPoolConfigFromConfig(input: {
 
 export class KtxPostgresScanConnector implements KtxScanConnector {
   readonly id: string;
-  readonly driver = 'postgres' as const;
+  readonly driver: KtxConnectionDriver;
   readonly capabilities = createKtxConnectorCapabilities({
     tableSampling: true,
     columnSampling: true,
@@ -416,7 +426,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     estimatedRowCounts: true,
   });
 
-  private readonly connectionId: string;
+  protected readonly connectionId: string;
   private readonly connection: KtxPostgresConnectionConfig;
   private readonly poolConfig: KtxPostgresPoolConfig;
   private readonly poolFactory: KtxPostgresPoolFactory;
@@ -431,6 +441,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
   constructor(options: KtxPostgresScanConnectorOptions) {
     this.connectionId = options.connectionId;
     this.connection = options.connection ?? {};
+    this.driver = String(this.connection.driver ?? '').toLowerCase() === 'hologres' ? 'hologres' : 'postgres';
     this.poolConfig = postgresPoolConfigFromConfig({
       connectionId: options.connectionId,
       connection: options.connection,
@@ -440,7 +451,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     this.endpointResolver = options.endpointResolver;
     this.now = options.now ?? (() => new Date());
     this.deadlineMs = resolveQueryDeadlineMs(this.connection);
-    this.id = `postgres:${options.connectionId}`;
+    this.id = `${this.driver}:${options.connectionId}`;
   }
 
   async testConnection(): Promise<KtxConnectorTestResult> {
@@ -465,7 +476,7 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     }
     return {
       connectionId: this.connectionId,
-      driver: 'postgres',
+      driver: this.driver,
       extractedAt: this.now().toISOString(),
       scope: { schemas },
       metadata: {

@@ -15,7 +15,7 @@ export interface KtxLlmHealthCheckOptions {
 }
 
 function redactHealthCheckMessage(message: string, config: KtxLlmConfig): string {
-  const secrets = [config.anthropic?.apiKey, config.gateway?.apiKey].filter(
+  const secrets = [config.anthropic?.apiKey, config.gateway?.apiKey, config.openaiCompatible?.apiKey].filter(
     (value): value is string => typeof value === 'string' && value.length > 0,
   );
   return secrets.reduce((current, secret) => current.split(secret).join('[redacted]'), message);

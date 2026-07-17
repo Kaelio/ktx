@@ -90,6 +90,15 @@ _READ_WRITE_NODE_TYPES = (
 )
 
 
+# sqlglot has no "hologres" dialect; Hologres is Postgres wire/SQL compatible,
+# so parse and normalize it as postgres.
+_SQLGLOT_DIALECT_ALIASES = {"hologres": "postgres"}
+
+
+def _sqlglot_dialect(dialect: str) -> str:
+    return _SQLGLOT_DIALECT_ALIASES.get(dialect.strip().lower(), dialect)
+
+
 def _ordered_unique(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -271,7 +280,7 @@ def validate_read_only_sql_response(
     request: ValidateReadOnlySqlRequest,
 ) -> ValidateReadOnlySqlResponse:
     try:
-        statements = sqlglot.parse(request.sql, read=request.dialect)
+        statements = sqlglot.parse(request.sql, read=_sqlglot_dialect(request.dialect))
     except sqlglot.errors.SqlglotError as exc:
         return ValidateReadOnlySqlResponse(ok=False, error=f"Invalid expression: {exc}")
 
@@ -314,8 +323,9 @@ def _worker_count(request: AnalyzeSqlBatchRequest) -> int:
 def analyze_sql_batch_response(
     request: AnalyzeSqlBatchRequest,
 ) -> AnalyzeSqlBatchResponse:
-    catalog = _catalog_index(request.catalog, request.dialect)
-    payloads = [(item.id, item.sql, request.dialect, catalog) for item in request.items]
+    dialect = _sqlglot_dialect(request.dialect)
+    catalog = _catalog_index(request.catalog, dialect)
+    payloads = [(item.id, item.sql, dialect, catalog) for item in request.items]
     if _worker_count(request) == 1:
         analyzed = [_analyze_payload(payload) for payload in payloads]
     else:

@@ -3,7 +3,7 @@ import type { SqlAnalysisPort } from '../../../../context/sql-analysis/ports.js'
 
 export const HISTORIC_SQL_SOURCE_KEY = 'historic-sql' as const;
 
-const historicSqlDialectSchema = z.enum(['snowflake', 'bigquery', 'postgres']);
+const historicSqlDialectSchema = z.enum(['snowflake', 'bigquery', 'postgres', 'hologres']);
 export type HistoricSqlDialect = z.infer<typeof historicSqlDialectSchema>;
 
 const filterModeSchema = z.enum(['exclude', 'include', 'mark-only']);
@@ -43,7 +43,7 @@ const historicSqlCommonPullConfigSchema = z.object({
 });
 
 const historicSqlWindowedPullConfigSchema = historicSqlCommonPullConfigSchema.extend({
-  dialect: z.enum(['snowflake', 'bigquery']),
+  dialect: z.enum(['snowflake', 'bigquery', 'hologres']),
   windowDays: z.number().int().positive().default(90),
 });
 

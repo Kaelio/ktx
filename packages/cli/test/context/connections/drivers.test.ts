@@ -21,6 +21,11 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     url: 'postgresql://reader:secret@localhost:5432/analytics', // pragma: allowlist secret
     schemas: ['public'],
   }),
+  hologres: () => ({
+    driver: 'hologres',
+    url: 'postgresql://reader:secret@localhost:80/analytics', // pragma: allowlist secret
+    schemas: ['public'],
+  }),
   sqlite: () => ({ driver: 'sqlite', path: 'warehouse.db' }),
   duckdb: (projectDir) => ({ driver: 'duckdb', path: join(projectDir, 'warehouse.duckdb') }),
   mongodb: () => ({
@@ -78,7 +83,7 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
 };
 
 const allowedScopeKeys = new Set(['dataset_ids', 'databases', 'schemas', 'schema_names']);
-const historicSqlReaderDrivers = new Set<KtxConnectionDriver>(['postgres', 'bigquery', 'snowflake']);
+const historicSqlReaderDrivers = new Set<KtxConnectionDriver>(['postgres', 'hologres', 'bigquery', 'snowflake']);
 
 function assertExportedRegistryBoundaryTypes(input: {
   scopeConfigKey: KtxScopeConfigKey;
@@ -109,6 +114,7 @@ describe('driverRegistrations', () => {
       'bigquery',
       'clickhouse',
       'duckdb',
+      'hologres',
       'mongodb',
       'mysql',
       'postgres',

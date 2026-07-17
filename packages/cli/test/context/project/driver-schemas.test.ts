@@ -4,6 +4,7 @@ import { connectionConfigSchema } from '../../../src/context/project/driver-sche
 describe('connectionConfigSchema (driver discriminated union)', () => {
   it.each([
     ['postgres', 'postgres://user:pass@host:5432/db'], // pragma: allowlist secret
+    ['hologres', 'postgres://user:pass@host:80/db'], // pragma: allowlist secret
     ['mysql', 'mysql://user:pass@host:3306/db'], // pragma: allowlist secret
     ['snowflake', 'snowflake://account/db'],
     ['bigquery', 'bigquery://project/dataset'],

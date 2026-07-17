@@ -1,6 +1,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { devToolsMiddleware } from '@ai-sdk/devtools';
 import { createVertexAnthropic } from '@ai-sdk/google-vertex/anthropic';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createGateway, generateText, wrapLanguageModel, type LanguageModel } from 'ai';
 import { createKtxToolCallRepairHandler } from './repair.js';
 import type {
@@ -16,11 +17,13 @@ type AnthropicFactory = typeof createAnthropic;
 type AnthropicModelFactory = (modelId: string) => LanguageModel;
 type VertexAnthropicFactory = (options?: Parameters<typeof createVertexAnthropic>[0]) => AnthropicModelFactory;
 type GatewayFactory = (options?: Parameters<typeof createGateway>[0]) => AnthropicModelFactory;
+type OpenAICompatibleFactory = (options: Parameters<typeof createOpenAICompatible>[0]) => AnthropicModelFactory;
 
 export interface KtxLlmProviderFactoryDeps {
   createAnthropic?: (options?: Parameters<AnthropicFactory>[0]) => AnthropicModelFactory;
   createVertexAnthropic?: VertexAnthropicFactory;
   createGateway?: GatewayFactory;
+  createOpenAICompatible?: OpenAICompatibleFactory;
   generateText?: typeof generateText;
   devtoolsEnabled?: boolean;
   wrapLanguageModel?: typeof wrapLanguageModel;
@@ -173,6 +176,19 @@ class DefaultKtxLlmProvider implements KtxLlmProvider {
         location: config.vertex.location,
       });
       return (modelId) => vertex(modelId);
+    }
+
+    if (config.backend === 'openai-compatible') {
+      const baseURL = config.openaiCompatible?.baseURL;
+      if (!baseURL) {
+        throw new Error('openaiCompatible.baseURL is required when ktx LLM backend is openai-compatible');
+      }
+      const openaiCompatible = (deps.createOpenAICompatible ?? createOpenAICompatible)({
+        name: 'openai-compatible',
+        baseURL,
+        ...(config.openaiCompatible?.apiKey ? { apiKey: config.openaiCompatible.apiKey } : {}),
+      });
+      return (modelId) => openaiCompatible(modelId);
     }
 
     if (config.backend === 'gateway') {

@@ -206,6 +206,81 @@ describe('createKtxLlmProvider', () => {
     expect(gateway).toHaveBeenCalledWith('anthropic/claude-sonnet-4-6');
   });
 
+  it('uses an OpenAI-compatible endpoint with name, baseURL, and apiKey and no Anthropic beta header', () => {
+    const openaiModel = languageModel('qwen3.7-max', 'openai-compatible.chat');
+    const openaiCompatible = vi.fn(() => openaiModel);
+    const createOpenAICompatible = vi.fn(() => openaiCompatible);
+
+    const provider = createKtxLlmProvider(
+      {
+        backend: 'openai-compatible',
+        openaiCompatible: { apiKey: 'sk-openai-compatible', baseURL: 'https://maas.test/compatible-mode/v1' }, // pragma: allowlist secret
+        modelSlots: { default: 'qwen3.7-max' },
+        promptCaching: { enabled: false },
+      },
+      { createOpenAICompatible, devtoolsEnabled: false },
+    );
+
+    expect(provider.getModel('default')).toBe(openaiModel);
+    expect(createOpenAICompatible).toHaveBeenCalledWith({
+      name: 'openai-compatible',
+      baseURL: 'https://maas.test/compatible-mode/v1',
+      apiKey: 'sk-openai-compatible', // pragma: allowlist secret
+    });
+    expect(openaiCompatible).toHaveBeenCalledWith('qwen3.7-max');
+  });
+
+  it('omits the apiKey for an OpenAI-compatible endpoint that needs none', () => {
+    const openaiCompatible = vi.fn((modelId: string) => languageModel(modelId, 'openai-compatible.chat'));
+    const createOpenAICompatible = vi.fn(() => openaiCompatible);
+
+    const provider = createKtxLlmProvider(
+      {
+        backend: 'openai-compatible',
+        openaiCompatible: { baseURL: 'https://maas.test/v1' },
+        modelSlots: { default: 'qwen3.7-max' },
+        promptCaching: { enabled: false },
+      },
+      { createOpenAICompatible, devtoolsEnabled: false },
+    );
+
+    provider.getModel('default');
+    expect(createOpenAICompatible).toHaveBeenCalledWith({
+      name: 'openai-compatible',
+      baseURL: 'https://maas.test/v1',
+    });
+  });
+
+  it('throws when the OpenAI-compatible backend is missing a base URL', () => {
+    expect(() =>
+      createKtxLlmProvider(
+        {
+          backend: 'openai-compatible',
+          openaiCompatible: { apiKey: 'sk-openai-compatible' }, // pragma: allowlist secret
+          modelSlots: { default: 'qwen3.7-max' },
+          promptCaching: { enabled: false },
+        },
+        { createOpenAICompatible: vi.fn(() => vi.fn()) },
+      ),
+    ).toThrow('openaiCompatible.baseURL is required');
+  });
+
+  it('disables cache markers for OpenAI-compatible (non-Anthropic) models', () => {
+    const provider = createKtxLlmProvider(
+      {
+        backend: 'openai-compatible',
+        openaiCompatible: { baseURL: 'https://maas.test/v1' },
+        modelSlots: { default: 'qwen3.7-max' },
+        promptCaching: { enabled: true },
+      },
+      {
+        createOpenAICompatible: vi.fn(() => vi.fn((modelId: string) => languageModel(modelId, 'openai-compatible.chat'))),
+      },
+    );
+
+    expect(provider.cacheMarker('1h', 'qwen3.7-max')).toBeUndefined();
+  });
+
   it('uses explicit role overrides before default', () => {
     const anthropic = vi.fn((modelId: string) => languageModel(modelId, 'anthropic'));
 
