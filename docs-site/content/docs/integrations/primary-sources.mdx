@@ -735,6 +735,7 @@ nullability from how often the field is present:
 | Table sampling | Yes | Reads the most recent documents |
 | Nested analysis | Yes | Sub-documents and arrays modeled as opaque `json` |
 | Read-only SQL (`ktx sql`) | No | MongoDB is not a SQL source |
+| Row queries (`ktx mongo-query`) | Yes | Runs a read-only aggregation pipeline against a collection |
 
 ### Dialect notes
 
@@ -745,6 +746,13 @@ nullability from how often the field is present:
   same guarantee
 - `sample_size` trades inference coverage for speed; raise it for collections
   with highly variable documents
+
+### Querying rows
+
+MongoDB is not SQL-queryable, so `ktx sql` refuses a mongodb connection. Use
+[`ktx mongo-query`](/docs/cli-reference/ktx-mongo-query) to fetch rows by
+running a MongoDB aggregation pipeline, or the `mongo_query` MCP tool for the
+same capability from an agent client.
 
 ## Common errors
 

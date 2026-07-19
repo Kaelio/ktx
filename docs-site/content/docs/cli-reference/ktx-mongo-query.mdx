@@ -1,0 +1,103 @@
+---
+title: "ktx mongo-query"
+description: "Fetch rows from a MongoDB connection by running an aggregation pipeline."
+---
+
+Run a MongoDB aggregation pipeline against a `mongodb` connection in your
+**ktx** project. MongoDB is not a SQL source, so `ktx sql` refuses a mongodb
+connection — `ktx mongo-query` is the row-fetch path for MongoDB, and the
+`mongo_query` MCP tool is its agent-facing equivalent.
+
+## Command signature
+
+Use `ktx mongo-query` with a required connection id, a required collection
+name, and a positional aggregation pipeline given as a JSON array of stage
+objects.
+
+```bash
+ktx mongo-query '<pipeline-json>' --connection <id> --collection <name> [options]
+```
+
+## Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c`, `--connection <id>` | **ktx** database connection id. Required. | - |
+| `--collection <name>` | Collection to query. Required. | - |
+| `--database <name>` | Database name. | Connection's first configured database |
+| `--limit <n>` | Maximum documents to return. Must be between `1` and `10000`. | `1000` |
+| `--output <mode>` | Output mode: `pretty`, `plain` (TSV), or `json`. | `pretty` on a terminal, `plain` when piped or in CI (override with `KTX_OUTPUT`) |
+| `--json` | Shortcut for `--output=json` (overrides `--output`). | `false` |
+
+## Examples
+
+Quote the pipeline JSON in shell scripts and when it contains spaces or
+punctuation.
+
+```bash
+# Match and project fields from the business collection
+ktx mongo-query '[{"$match":{"city":"Indianapolis"}},{"$project":{"business_id":1,"city":1}}]' \
+  --connection mongo --collection business --limit 500
+
+# Query a non-default database
+ktx mongo-query '[{"$match":{"status":"open"}}]' \
+  --connection mongo \
+  --collection orders \
+  --database analytics
+
+# Print JSON for agents or scripts
+ktx mongo-query '[{"$match":{"status":"open"}}]' \
+  --connection mongo \
+  --collection orders \
+  --json
+
+# Print TSV rows
+ktx mongo-query '[{"$limit":10}]' \
+  -c mongo \
+  --collection orders \
+  --output plain
+```
+
+## Output
+
+Pretty output prints aligned columns and a final row count.
+
+```text
+business_id  city
+-----------  ------------
+1001         Indianapolis
+1002         Indianapolis
+
+2 rows
+```
+
+Plain output prints a TSV header row followed by TSV data rows.
+
+```text
+business_id	city
+1001	Indianapolis
+1002	Indianapolis
+```
+
+JSON output preserves connection id, headers, rows, and row count.
+
+```json
+{
+  "connectionId": "mongo",
+  "headers": ["business_id", "city"],
+  "rows": [
+    [1001, "Indianapolis"],
+    [1002, "Indianapolis"]
+  ],
+  "rowCount": 2
+}
+```
+
+## Common errors
+
+| Error | Cause | Recovery |
+|-------|-------|----------|
+| `must be a JSON aggregation pipeline array` | The pipeline argument is not valid JSON. | Pass a JSON array of pipeline-stage objects. |
+| `must be a JSON array of pipeline-stage objects` | The parsed JSON is not an array of objects. | Wrap each stage as an object inside a JSON array, e.g. `[{"$match":{...}}]`. |
+| `Connection "<id>" is not configured in ktx.yaml` | The connection id is wrong or missing from the project. | Run `ktx connection list` and retry with an exact id. |
+| `driver "<driver>" is not a MongoDB connection` | The connection id resolves to a non-mongodb driver. | Use a `mongodb` connection id, or use `ktx sql` for SQL-queryable drivers. |

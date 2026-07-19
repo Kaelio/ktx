@@ -5,6 +5,7 @@ import type { KtxEntityDetailsInput, KtxEntityDetailsResponse } from '../scan/en
 import type { KtxDiscoverDataInput, KtxDiscoverDataResponse } from '../../context/search/discover.js';
 import type { KtxDictionarySearchInput, KtxDictionarySearchResponse } from '../../context/sl/dictionary-search.js';
 import type { SemanticLayerQueryInput } from '../../context/sl/types.js';
+import type { KtxMongoQueryInput, KtxMongoQueryResult } from '../scan/types.js';
 import type { WikiSearchLaneSummary, WikiSearchMatchReason } from '../../context/wiki/types.js';
 
 interface KtxMcpTextContent {
@@ -181,6 +182,11 @@ export interface KtxSqlExecutionMcpPort {
 }
 
 /** @internal */
+export interface KtxMongoQueryMcpPort {
+  execute(input: KtxMongoQueryInput, options?: { onProgress?: KtxMcpProgressCallback }): Promise<KtxMongoQueryResult>;
+}
+
+/** @internal */
 export interface KtxDialectNotesMcpPort {
   read(input: { connectionId: string }): Promise<{ connectionId: string; dialect: string; notes: string }>;
 }
@@ -193,6 +199,7 @@ export interface KtxMcpContextPorts {
   dictionarySearch?: KtxDictionarySearchMcpPort;
   discover?: KtxDiscoverDataMcpPort;
   sqlExecution?: KtxSqlExecutionMcpPort;
+  mongoQuery?: KtxMongoQueryMcpPort;
   dialectNotes?: KtxDialectNotesMcpPort;
   memoryIngest?: MemoryIngestPort;
 }

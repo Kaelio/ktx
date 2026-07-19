@@ -6,6 +6,8 @@ import {
   type KtxColumnSampleInput,
   type KtxColumnSampleResult,
   type KtxConnectorTestResult,
+  type KtxMongoQueryInput,
+  type KtxMongoQueryResult,
   type KtxScanConnector,
   type KtxScanContext,
   type KtxScanInput,
@@ -50,6 +52,12 @@ export interface KtxMongoClient {
   listCollections(databaseName: string): Promise<KtxMongoListedCollection[]>;
   estimatedDocumentCount(databaseName: string, collectionName: string): Promise<number>;
   find(databaseName: string, collectionName: string, options: KtxMongoFindOptions): Promise<KtxMongoDocument[]>;
+  aggregate(
+    databaseName: string,
+    collectionName: string,
+    pipeline: readonly Record<string, unknown>[],
+    options: { limit: number },
+  ): Promise<KtxMongoDocument[]>;
   ping(databaseName: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -103,6 +111,20 @@ class DefaultMongoClient implements KtxMongoClient {
       .db(databaseName)
       .collection(collectionName)
       .find({}, { sort: options.sort, limit: options.limit, maxTimeMS: SAMPLE_MAX_TIME_MS, ...(options.projection ? { projection: options.projection } : {}) })
+      .toArray() as Promise<KtxMongoDocument[]>;
+  }
+
+  async aggregate(
+    databaseName: string,
+    collectionName: string,
+    pipeline: readonly Record<string, unknown>[],
+    options: { limit: number },
+  ): Promise<KtxMongoDocument[]> {
+    const client = await this.connectedClient();
+    return client
+      .db(databaseName)
+      .collection(collectionName)
+      .aggregate([...pipeline, { $limit: options.limit }], { maxTimeMS: SAMPLE_MAX_TIME_MS })
       .toArray() as Promise<KtxMongoDocument[]>;
   }
 
@@ -186,6 +208,15 @@ function unionDocumentKeys(documents: readonly KtxMongoDocument[]): string[] {
     }
   }
   return keys;
+}
+
+// MongoDB aggregation write stages ($out/$merge) persist results; mongo_query is read-only.
+function assertReadOnlyPipeline(pipeline: readonly Record<string, unknown>[]): void {
+  for (const stage of pipeline) {
+    if ('$out' in stage || '$merge' in stage) {
+      throw new Error('mongo_query pipelines must be read-only; $out and $merge stages are not allowed.');
+    }
+  }
 }
 
 export class KtxMongoDbScanConnector implements KtxScanConnector {
@@ -360,6 +391,18 @@ export class KtxMongoDbScanConnector implements KtxScanConnector {
       values.push(normalizeSampleValue(value));
     }
     return { values, nullCount, distinctCount: null };
+  }
+
+  async executeQuery(input: KtxMongoQueryInput, _ctx: KtxScanContext): Promise<KtxMongoQueryResult> {
+    this.assertConnection(input.connectionId);
+    assertReadOnlyPipeline(input.pipeline);
+    const database = input.database ?? this.databases[0]!;
+    const documents = await this.clientForQuery().aggregate(database, input.collection, input.pipeline, {
+      limit: input.limit,
+    });
+    const headers = unionDocumentKeys(documents);
+    const rows = documents.map((document) => headers.map((header) => normalizeSampleValue(document[header])));
+    return { headers, rows, rowCount: rows.length };
   }
 
   async listSchemas(): Promise<string[]> {

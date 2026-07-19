@@ -24,6 +24,7 @@ import { readLocalSlSource } from '../../context/sl/local-sl.js';
 import { assertSafeConnectionId } from '../../context/sl/source-files.js';
 import { assertConfiguredConnectionId } from '../../context/connections/configured-connections.js';
 import { readLocalKnowledgePage, searchLocalKnowledgePages } from '../wiki/local-knowledge.js';
+import { runMongoQuery } from './mongo-query-runner.js';
 import type { KtxMcpContextPorts, KtxMcpProgressCallback, KtxSqlExecutionResponse } from './types.js';
 
 interface CreateLocalProjectMcpContextPortsOptions {
@@ -52,6 +53,12 @@ function throwClassifiedQueryError(error: unknown): never {
     throw error;
   }
   throw new KtxQueryError(error instanceof Error ? error.message : String(error), { cause: error });
+}
+
+function projectHasMongoConnection(project: KtxLocalProject): boolean {
+  return Object.values(project.config.connections).some(
+    (connection) => normalizeConnectionDriver(connection) === 'mongodb',
+  );
 }
 
 async function executeValidatedReadOnlySql(
@@ -235,6 +242,19 @@ export function createLocalProjectMcpContextPorts(
     ports.sqlExecution = {
       async execute(input, executionOptions) {
         return executeValidatedReadOnlySql(project, options, input, executionOptions?.onProgress);
+      },
+    };
+  }
+
+  const mongoCreateConnector = options.localScan?.createConnector;
+  if (mongoCreateConnector && projectHasMongoConnection(project)) {
+    ports.mongoQuery = {
+      async execute(input) {
+        try {
+          return await runMongoQuery(mongoCreateConnector, input);
+        } catch (error) {
+          throwClassifiedQueryError(error);
+        }
       },
     };
   }

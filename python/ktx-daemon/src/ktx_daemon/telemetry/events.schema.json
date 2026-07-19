@@ -145,6 +145,18 @@
       ]
     },
     {
+      "name": "mongo_query_completed",
+      "description": "Emitted after ktx mongo-query completes validation and execution.",
+      "fields": [
+        "driver",
+        "isDemoConnection",
+        "stageCount",
+        "durationMs",
+        "outcome",
+        "errorClass"
+      ]
+    },
+    {
       "name": "wiki_query_completed",
       "description": "Emitted after a wiki query completes.",
       "fields": [
@@ -1051,6 +1063,77 @@
         "isDemoConnection",
         "queryVerb",
         "referencedTableCount",
+        "durationMs",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "mongo_query_completed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "cliVersion": {
+          "type": "string"
+        },
+        "nodeVersion": {
+          "type": "string"
+        },
+        "osPlatform": {
+          "type": "string"
+        },
+        "osRelease": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "node",
+            "daemon-py"
+          ]
+        },
+        "isCi": {
+          "type": "boolean"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "isDemoConnection": {
+          "type": "boolean"
+        },
+        "stageCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "error"
+          ]
+        },
+        "errorClass": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cliVersion",
+        "nodeVersion",
+        "osPlatform",
+        "osRelease",
+        "arch",
+        "runtime",
+        "isCi",
+        "driver",
+        "isDemoConnection",
+        "stageCount",
         "durationMs",
         "outcome"
       ],

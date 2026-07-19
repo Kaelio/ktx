@@ -4,6 +4,7 @@ import type { KtxConnectionArgs } from './connection.js';
 import type { KtxAdminReindexArgs } from './admin-reindex.js';
 import type { KtxDoctorArgs } from './doctor.js';
 import type { KtxKnowledgeArgs } from './knowledge.js';
+import type { KtxMongoQueryArgs } from './mongo-query.js';
 import type { KtxPublicIngestArgs } from './public-ingest.js';
 import type { KtxRuntimeArgs } from './runtime.js';
 import type { KtxSetupArgs } from './setup.js';
@@ -39,6 +40,7 @@ export interface KtxCliDeps {
   knowledge?: (args: KtxKnowledgeArgs, io: KtxCliIo) => Promise<number>;
   sl?: (args: KtxSlArgs, io: KtxCliIo) => Promise<number>;
   sql?: (args: KtxSqlArgs, io: KtxCliIo) => Promise<number>;
+  mongoQuery?: (args: KtxMongoQueryArgs, io: KtxCliIo) => Promise<number>;
   mcp?: {
     startDaemon?: typeof import('./managed-mcp-daemon.js').startKtxMcpDaemon;
     stopDaemon?: typeof import('./managed-mcp-daemon.js').stopKtxMcpDaemon;

@@ -40,6 +40,7 @@ function fakeClientFactory(): { factory: KtxMongoClientFactory; client: KtxMongo
       collectionName === 'users' ? 2 : 1,
     ),
     find: vi.fn(async (_databaseName: string, collectionName: string) => DOCUMENTS[collectionName] ?? []),
+    aggregate: vi.fn(async (_databaseName: string, collectionName: string) => DOCUMENTS[collectionName] ?? []),
     ping: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   };
@@ -184,6 +185,7 @@ describe('KtxMongoDbScanConnector.introspect', () => {
         return 2;
       }),
       find: vi.fn(async (_db: string, name: string) => DOCUMENTS[name] ?? DOCUMENTS.users!),
+      aggregate: vi.fn(async (_db: string, name: string) => DOCUMENTS[name] ?? DOCUMENTS.users!),
       ping: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
     };
@@ -237,5 +239,79 @@ describe('ktx sql against a MongoDB connection', () => {
         createConnector: () => connector(baseConnection, factory),
       }),
     ).rejects.toThrow(/does not support read-only SQL execution/);
+  });
+});
+
+describe('KtxMongoDbScanConnector.executeQuery', () => {
+  it('runs an aggregation pipeline and returns normalized rows keyed by the union of document fields', async () => {
+    const { factory, client } = fakeClientFactory();
+    const result = await connector(baseConnection, factory).executeQuery(
+      {
+        connectionId: 'mongo-prod',
+        collection: 'users',
+        pipeline: [{ $match: { age: { $gte: 18 } } }],
+        limit: 50,
+      },
+      { runId: 't' },
+    );
+
+    expect(client.aggregate).toHaveBeenCalledWith('app', 'users', [{ $match: { age: { $gte: 18 } } }], {
+      limit: 50,
+    });
+    expect(result.headers).toEqual(['_id', 'email', 'age', 'address']);
+    // _id is a BSON wrapper → String(...); address is a sub-document → JSON string.
+    expect(result.rows[0]).toEqual(['a1', 'a@x.com', 31, JSON.stringify({ city: 'NY' })]);
+    // Second document is missing age and address → null-filled to keep rows rectangular.
+    expect(result.rows[1]).toEqual(['a2', 'b@x.com', null, null]);
+    expect(result.rowCount).toBe(2);
+  });
+
+  it('rejects a query whose connection id does not match this connector', async () => {
+    const { factory } = fakeClientFactory();
+    await expect(
+      connector(baseConnection, factory).executeQuery(
+        { connectionId: 'other', collection: 'users', pipeline: [], limit: 10 },
+        { runId: 't' },
+      ),
+    ).rejects.toThrow(/cannot serve connection other/);
+  });
+
+  it('rejects a pipeline containing a $out write stage', async () => {
+    const { factory } = fakeClientFactory();
+    await expect(
+      connector(baseConnection, factory).executeQuery(
+        { connectionId: 'mongo-prod', collection: 'users', pipeline: [{ $out: 'exfiltrated' }], limit: 10 },
+        { runId: 't' },
+      ),
+    ).rejects.toThrow(/must be read-only/);
+  });
+
+  it('rejects a pipeline containing a $merge write stage', async () => {
+    const { factory } = fakeClientFactory();
+    await expect(
+      connector(baseConnection, factory).executeQuery(
+        { connectionId: 'mongo-prod', collection: 'users', pipeline: [{ $merge: { into: 'x' } }], limit: 10 },
+        { runId: 't' },
+      ),
+    ).rejects.toThrow(/must be read-only/);
+  });
+
+  it('runs against the requested database when input.database is given', async () => {
+    const { factory, client } = fakeClientFactory();
+    await connector(baseConnection, factory).executeQuery(
+      { connectionId: 'mongo-prod', collection: 'orders', database: 'analytics', pipeline: [], limit: 5 },
+      { runId: 't' },
+    );
+    expect(client.aggregate).toHaveBeenCalledWith('analytics', 'orders', [], { limit: 5 });
+  });
+
+  it('returns an empty result with no headers when the pipeline matches no documents', async () => {
+    const { factory, client } = fakeClientFactory();
+    (client.aggregate as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    const result = await connector(baseConnection, factory).executeQuery(
+      { connectionId: 'mongo-prod', collection: 'users', pipeline: [{ $match: { age: { $gte: 999 } } }], limit: 50 },
+      { runId: 't' },
+    );
+    expect(result).toEqual({ headers: [], rows: [], rowCount: 0 });
   });
 });
