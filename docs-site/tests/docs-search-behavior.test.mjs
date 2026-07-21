@@ -34,6 +34,28 @@ test("markdown negotiation uses the Next proxy convention", async () => {
   assert.doesNotMatch(proxy, /export function middleware/);
 });
 
+test("docs pages expose a canonical Markdown copy disclosure", async () => {
+  const page = await readDocsFile("app/docs/[[...slug]]/page.tsx");
+  const action = await readDocsFile("components/docs-page-actions.tsx");
+
+  assert.match(page, /<DocsPageActions/);
+  assert.match(page, /markdownHref=\{`\$\{page\.url\}\.md`\}/);
+  assert.doesNotMatch(page, /contentId/);
+  assert.doesNotMatch(page, /<DocsBody id=/);
+  assert.match(action, /await fetch\(markdownHref/);
+  assert.match(action, /await navigator\.clipboard\.writeText\(await response\.text\(\)\)/);
+  assert.match(action, /Copy page as Markdown for LLMs/);
+  assert.match(action, /View as Markdown/);
+  assert.match(action, /Open in ChatGPT/);
+  assert.match(action, /Open in Claude/);
+  assert.doesNotMatch(action, /role="menu"/);
+  assert.doesNotMatch(action, /role="menuitem"/);
+  assert.doesNotMatch(action, /document\.getElementById/);
+  assert.doesNotMatch(action, /mdxSource/);
+  assert.doesNotMatch(action, /stripFrontmatter/);
+  assert.doesNotMatch(action, /buildPageMarkdown/);
+});
+
 test("site background stacking does not target every body child", async () => {
   const css = await readDocsFile("app/global.css");
 
