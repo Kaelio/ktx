@@ -1,0 +1,31 @@
+name: Docs feedback
+description: Report a docs typo, gap, or confusing page
+title: "[docs] "
+labels: ["docs"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for documentation fixes, confusing examples, stale commands, or missing setup details.
+  - type: input
+    id: page
+    attributes:
+      label: Documentation page
+      description: The page where you found the issue.
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source file
+      description: The docs source file, if known.
+    validations:
+      required: false
+  - type: textarea
+    id: feedback
+    attributes:
+      label: What should change?
+      description: Tell us what is wrong, missing, stale, or confusing.
+      placeholder: This page says X, but it should say Y.
+    validations:
+      required: true

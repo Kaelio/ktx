@@ -139,7 +139,7 @@ ${links}`;
     .join("\n\n");
 }
 
-function absoluteUrl(path: string) {
+export function absoluteUrl(path: string) {
   return `${siteOrigin}${path}`;
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import { dirname, join } from "node:path";
@@ -17,6 +17,8 @@ let docsServer;
 let docsServerOutput = "";
 let nextEnvPath;
 let nextEnvContents;
+const docsSiteDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+const pnpmExecPath = process.env.npm_execpath;
 
 async function getAvailablePort() {
   const server = createServer();
@@ -64,29 +66,71 @@ before(async () => {
     return;
   }
 
-  const docsSiteDir = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-  );
   nextEnvPath = join(docsSiteDir, "next-env.d.ts");
   nextEnvContents = await readFile(nextEnvPath, "utf8");
 
   const port = await getAvailablePort();
   docsSiteUrl = `http://127.0.0.1:${port}`;
-  docsServer = spawn(
-    "pnpm",
-    ["exec", "next", "dev", "--hostname", "127.0.0.1", "--port", `${port}`],
-    {
-      cwd: docsSiteDir,
-      env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const pnpmArgs = [
+    "exec",
+    "next",
+    "dev",
+    "--hostname",
+    "127.0.0.1",
+    "--port",
+    `${port}`,
+  ];
+  const command =
+    pnpmExecPath === undefined
+      ? process.platform === "win32"
+        ? (process.env.ComSpec ?? "cmd.exe")
+        : "pnpm"
+      : process.execPath;
+  const args =
+    pnpmExecPath === undefined
+      ? process.platform === "win32"
+        ? ["/d", "/s", "/c", "pnpm", ...pnpmArgs]
+        : pnpmArgs
+      : [pnpmExecPath, ...pnpmArgs];
+
+  docsServer = spawn(command, args, {
+    cwd: docsSiteDir,
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   docsServer.stdout.on("data", appendDocsServerOutput);
   docsServer.stderr.on("data", appendDocsServerOutput);
 
   await waitForDocsServer();
 });
+
+async function listDocsPages(dir = join(docsSiteDir, "content", "docs")) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const pages = await Promise.all(
+    entries.map(async (entry) => {
+      const entryPath = join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        return listDocsPages(entryPath);
+      }
+
+      if (!entry.isFile() || !entry.name.endsWith(".mdx")) {
+        return [];
+      }
+
+      const sourcePath = entryPath
+        .slice(docsSiteDir.length + 1)
+        .replaceAll("\\", "/");
+      const routePath = sourcePath
+        .replace(/^content\/docs\//, "")
+        .replace(/(?:\/index)?\.mdx$/, "");
+
+      return [{ routePath, sourcePath: `docs-site/${sourcePath}` }];
+    }),
+  );
+
+  return pages.flat();
+}
 
 after(async () => {
   if (docsServer && docsServer.exitCode === null) {
@@ -220,6 +264,54 @@ test("/ktx/api/search returns docs search results", async () => {
     ),
     "search should return at least one docs result",
   );
+});
+
+test("docs pages render source edit and issue actions", async () => {
+  const pages = await listDocsPages();
+  assert.ok(pages.length > 0, "docs pages should be discovered from content");
+
+  const sampledPages = [
+    pages.find((page) => page.routePath === "getting-started/introduction"),
+    pages.find((page) => page.routePath === "cli-reference/ktx"),
+  ];
+
+  for (const page of sampledPages) {
+    assert.ok(page, "sample docs page should exist");
+
+    const response = await fetch(
+      `${docsSiteUrl}${docsBasePath}/docs/${page.routePath}`,
+    );
+    assert.equal(response.status, 200, page.routePath);
+
+    const html = await response.text();
+    assert.match(html, />Copy as Markdown</, page.routePath);
+    assert.match(html, />Suggest edits</, page.routePath);
+    assert.match(html, />Raise issue</, page.routePath);
+    assert.match(
+      html,
+      new RegExp(
+        `https://github\\.com/Kaelio/ktx/edit/main/${page.sourcePath}`,
+      ),
+      page.routePath,
+    );
+    assert.match(
+      html,
+      /https:\/\/github\.com\/Kaelio\/ktx\/issues\/new\?[^"]*template=docs_feedback\.yml/,
+      page.routePath,
+    );
+    assert.match(
+      html,
+      new RegExp(
+        `(?:\\?|&amp;)page=${encodeURIComponent(`https://docs.kaelio.com/ktx/docs/${page.routePath}`)}`,
+      ),
+      page.routePath,
+    );
+    assert.match(
+      html,
+      new RegExp(`(?:\\?|&amp;)source=${encodeURIComponent(page.sourcePath)}`),
+      page.routePath,
+    );
+  }
 });
 
 test("ktx.sh canonicalizes to a single /ktx basePath on the docs host", async () => {
