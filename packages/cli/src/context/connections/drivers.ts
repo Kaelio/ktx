@@ -211,6 +211,27 @@ export const driverRegistrations: Record<KtxConnectionDriver, KtxDriverRegistrat
       };
     },
   },
+  databricks: {
+    driver: 'databricks',
+    scopeConfigKey: 'schema_names',
+    hasHistoricSqlReader: false,
+    load: async () => {
+      const m = await import('../../connectors/databricks/connector.js');
+      return {
+        isConnectionConfig: (connection) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxDatabricksConnectionConfig>[0];
+          return m.isKtxDatabricksConnectionConfig(typedConnection);
+        },
+        createScanConnector: ({ connectionId, connection }) => {
+          const typedConnection = connection as Parameters<typeof m.isKtxDatabricksConnectionConfig>[0];
+          if (!m.isKtxDatabricksConnectionConfig(typedConnection)) {
+            throw invalidConnectionConfig('databricks');
+          }
+          return new m.KtxDatabricksScanConnector({ connectionId, connection: typedConnection });
+        },
+      };
+    },
+  },
   sqlserver: {
     driver: 'sqlserver',
     scopeConfigKey: 'schemas',

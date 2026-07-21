@@ -30,6 +30,7 @@ const DRIVER_TO_CONNECTION_TYPE: Record<string, ConnectionType> = {
   mysql: 'MYSQL',
   clickhouse: 'CLICKHOUSE',
   snowflake: 'SNOWFLAKE',
+  databricks: 'DATABRICKS',
   bigquery: 'BIGQUERY',
   athena: 'ATHENA',
 };

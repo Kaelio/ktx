@@ -447,7 +447,7 @@ export function npmSmokePackageJson(layout) {
 }
 
 export function npmSmokePnpmWorkspaceYaml() {
-  return ['packages:', '  - "."', 'allowBuilds:', '  better-sqlite3: true', ''].join('\n');
+  return ['packages:', '  - "."', 'allowBuilds:', '  better-sqlite3: true', '  lz4: true', ''].join('\n');
 }
 
 export function npmVerifySource() {

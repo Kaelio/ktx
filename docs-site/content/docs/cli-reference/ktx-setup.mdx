@@ -120,7 +120,7 @@ runtime features are missing.
 
 | Flag | Description |
 |------|-------------|
-| `--database <driver>` | Database driver to configure; repeatable. Choices: `sqlite`, `duckdb`, `postgres`, `mysql`, `clickhouse`, `sqlserver`, `bigquery`, `snowflake` |
+| `--database <driver>` | Database driver to configure; repeatable. Choices: `sqlite`, `duckdb`, `postgres`, `mysql`, `clickhouse`, `sqlserver`, `bigquery`, `snowflake`, `databricks`, `athena` |
 | `--database-connection-id <id>` | Existing selected connection id; repeatable. With `--database` or `--database-url`, connection id for the new connection. |
 | `--database-url <url>` | URL, `env:NAME`, or `file:/path` for one new URL-style database connection; also used as the SQLite or DuckDB path |
 | `--database-schema <schema>` | Database schema or dataset to include; repeatable |
@@ -131,8 +131,8 @@ context. Use `--skip-databases` only when intentionally leaving the project
 incomplete.
 
 `--database-schema` maps to the driver's scope field: `schemas` for PostgreSQL,
-MySQL, and SQL Server; `schema_names` for Snowflake; `dataset_ids` for
-BigQuery; and `databases` for ClickHouse.
+MySQL, and SQL Server; `schema_names` for Snowflake and Databricks;
+`dataset_ids` for BigQuery; and `databases` for ClickHouse.
 
 A BigQuery `--database-schema` value may be qualified as `project.dataset` to
 scan a dataset hosted in another project (such as
@@ -142,8 +142,8 @@ entries explicitly. See
 [Primary sources → BigQuery](/docs/integrations/primary-sources#cross-project-datasets).
 
 With `--no-input`, scope for a scope-bearing driver (PostgreSQL, MySQL,
-ClickHouse, SQL Server, BigQuery, Snowflake) must come from `--database-schema`
-or from existing connection config in `ktx.yaml` (for example
+ClickHouse, SQL Server, BigQuery, Snowflake, Databricks) must come from
+`--database-schema` or from existing connection config in `ktx.yaml` (for example
 `connections.<id>.dataset_ids`). When neither is set, the database step fails
 fast and prints the missing scope flag and config key — non-interactive setup
 never auto-discovers and scans every schema. SQLite has no scope and is

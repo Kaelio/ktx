@@ -28,5 +28,6 @@ verifyDepsBeforeRun: false
 allowBuilds:
   better-sqlite3: true
   esbuild: true
+  lz4: true
   sharp: true
 minimumReleaseAge: 10080

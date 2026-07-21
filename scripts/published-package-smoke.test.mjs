@@ -276,7 +276,7 @@ describe('published package smoke command construction', () => {
   it('allows native dependency build scripts in clean pnpm smoke installs', () => {
     assert.equal(
       publishedPackageSmokePnpmWorkspaceYaml(),
-      ['packages:', '  - "."', 'allowBuilds:', '  better-sqlite3: true', ''].join('\n'),
+      ['packages:', '  - "."', 'allowBuilds:', '  better-sqlite3: true', '  lz4: true', ''].join('\n'),
     );
   });
 

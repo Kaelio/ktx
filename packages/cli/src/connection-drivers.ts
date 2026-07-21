@@ -10,6 +10,7 @@ export const KTX_DATABASE_DRIVER_IDS = [
   'sqlserver',
   'bigquery',
   'snowflake',
+  'databricks',
   'athena',
 ] as const;
 

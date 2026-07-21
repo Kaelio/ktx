@@ -71,6 +71,7 @@ export type KtxSetupDatabaseDriver =
   | 'sqlserver'
   | 'bigquery'
   | 'snowflake'
+  | 'databricks'
   | 'athena'
   | 'mongodb';
 
@@ -156,6 +157,7 @@ const DRIVER_OPTIONS: Array<{ value: KtxSetupDatabaseDriver; label: string }> = 
   { value: 'postgres', label: 'PostgreSQL' },
   { value: 'bigquery', label: 'BigQuery' },
   { value: 'snowflake', label: 'Snowflake' },
+  { value: 'databricks', label: 'Databricks' },
   { value: 'mysql', label: 'MySQL' },
   { value: 'clickhouse', label: 'ClickHouse' },
   { value: 'sqlserver', label: 'SQL Server' },
@@ -185,6 +187,7 @@ const DEFAULT_CONNECTION_IDS: Record<KtxSetupDatabaseDriver, string> = {
   sqlserver: 'sqlserver-warehouse',
   bigquery: 'bigquery-warehouse',
   snowflake: 'snowflake-warehouse',
+  databricks: 'databricks-warehouse',
   athena: 'athena-warehouse',
   mongodb: 'mongodb-source',
 };
@@ -267,6 +270,14 @@ const SCOPE_DISCOVERY_SPECS: Partial<Record<KtxSetupDatabaseDriver, ScopeDiscove
     noun: 'schema',
     nounPlural: 'schemas',
     promptLabel: 'Snowflake schemas',
+    configArrayField: 'schema_names',
+    configSingleField: 'schema_name',
+    suggest: defaultSuggest,
+  },
+  databricks: {
+    noun: 'schema',
+    nounPlural: 'schemas',
+    promptLabel: 'Databricks schemas',
     configArrayField: 'schema_names',
     configSingleField: 'schema_name',
     suggest: defaultSuggest,
@@ -976,6 +987,86 @@ async function buildConnectionConfig(input: {
       privateKey: resolvedPrivateKey,
       ...(resolvedPassphrase ? { passphrase: resolvedPassphrase } : {}),
       ...(role ? { role } : {}),
+    };
+  }
+  if (driver === 'databricks') {
+    if (args.inputMode === 'disabled') return null;
+
+    const serverHostname = await promptText(
+      prompts,
+      'Databricks workspace hostname\nFor example dbc-12345678-abcd.cloud.databricks.com.',
+      stringConfigField(input.existingConnection, 'server_hostname'),
+    );
+    if (serverHostname === undefined) return 'back';
+    const httpPath = await promptText(
+      prompts,
+      'Databricks SQL warehouse HTTP path\nFor example /sql/1.0/warehouses/abc123.',
+      stringConfigField(input.existingConnection, 'http_path'),
+    );
+    if (httpPath === undefined) return 'back';
+    const catalog = await promptText(
+      prompts,
+      'Databricks catalog\nFor example main.',
+      stringConfigField(input.existingConnection, 'catalog'),
+    );
+    if (catalog === undefined) return 'back';
+    const authChoice = await prompts.select({
+      message: 'Databricks authentication method',
+      options: [
+        { value: 'pat', label: 'Personal Access Token' },
+        { value: 'oauth-m2m', label: 'OAuth machine-to-machine' },
+        { value: 'back', label: 'Back' },
+      ],
+    });
+    if (authChoice === 'back') return 'back';
+    const authMethod: 'pat' | 'oauth-m2m' = authChoice === 'oauth-m2m' ? 'oauth-m2m' : 'pat';
+    const scope = scriptedScopeConfigForDriver('databricks', args.databaseSchemas);
+    if (authMethod === 'pat') {
+      const tokenRef = await promptCredential({
+        prompts,
+        message: 'Databricks personal access token',
+        projectDir: args.projectDir,
+        connectionId: input.connectionId,
+        secretName: 'token', // pragma: allowlist secret
+      });
+      if (tokenRef === 'back') return 'back';
+      const resolvedTokenRef = tokenRef ?? stringConfigField(input.existingConnection, 'token');
+      if (!serverHostname || !httpPath || !catalog || !resolvedTokenRef) return null;
+      return {
+        driver: 'databricks',
+        authMethod: 'pat',
+        server_hostname: serverHostname,
+        http_path: httpPath,
+        catalog,
+        token: resolvedTokenRef,
+        ...scope,
+      };
+    }
+    const clientId = await promptText(
+      prompts,
+      'Databricks OAuth client ID',
+      stringConfigField(input.existingConnection, 'client_id'),
+    );
+    if (clientId === undefined) return 'back';
+    const clientSecretRef = await promptCredential({
+      prompts,
+      message: 'Databricks OAuth client secret',
+      projectDir: args.projectDir,
+      connectionId: input.connectionId,
+      secretName: 'client-secret', // pragma: allowlist secret
+    });
+    if (clientSecretRef === 'back') return 'back'; // pragma: allowlist secret
+    const resolvedClientSecretRef = clientSecretRef ?? stringConfigField(input.existingConnection, 'client_secret'); // pragma: allowlist secret
+    if (!serverHostname || !httpPath || !catalog || !clientId || !resolvedClientSecretRef) return null;
+    return {
+      driver: 'databricks',
+      authMethod: 'oauth-m2m',
+      server_hostname: serverHostname,
+      http_path: httpPath,
+      catalog,
+      client_id: clientId,
+      client_secret: resolvedClientSecretRef, // pragma: allowlist secret
+      ...scope,
     };
   }
   if (driver === 'athena') {

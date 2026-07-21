@@ -66,6 +66,7 @@ describe('local connection info helpers', () => {
     expect(localConnectionTypeForConfig('warehouse', { driver: 'postgres' })).toBe('POSTGRESQL');
     expect(localConnectionTypeForConfig('bq', { driver: 'bigquery', project_id: 'acme' })).toBe('BIGQUERY');
     expect(localConnectionTypeForConfig('snowflake', { driver: 'snowflake' })).toBe('SNOWFLAKE');
+    expect(localConnectionTypeForConfig('databricks', { driver: 'databricks' })).toBe('DATABRICKS');
     expect(localConnectionTypeForConfig('athena-warehouse', { driver: 'athena' })).toBe('ATHENA');
   });
 

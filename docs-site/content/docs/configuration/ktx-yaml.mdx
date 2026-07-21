@@ -113,6 +113,7 @@ context-source drivers share the map.
 | `sqlserver` | Warehouse | `driver` | `url`, `enabled_tables` |
 | `bigquery` | Warehouse | `driver` | `credentials_json`, `dataset_ids`, `enabled_tables`, `historicSql` |
 | `snowflake` | Warehouse | `driver` | `schema_names`, `enabled_tables`, `historicSql` |
+| `databricks` | Warehouse | `driver`, `server_hostname`, `http_path`, `catalog` | `schema_names`, `enabled_tables` |
 | `clickhouse` | Warehouse | `driver` | `url`, `database`, `databases`, `enabled_tables` |
 | `metabase` | Context source | `driver`, `api_url` | `api_key_ref`, `mappings` |
 | `looker` | Context source | `driver`, `base_url`, `client_id` | `client_secret_ref`, `mappings` |
@@ -172,6 +173,12 @@ connections:
     credentials_json: file:./service-account.json
     location: US
     dataset_ids: [analytics, mart]
+  databricks-warehouse:
+    driver: databricks
+    server_hostname: dbc-example.cloud.databricks.com
+    http_path: /sql/1.0/warehouses/abc123
+    catalog: main
+    schema_names: [analytics, mart]
 ```
 
 A BigQuery `dataset_ids` / `dataset_id` entry may be written `project.dataset`
@@ -187,7 +194,8 @@ defaults to `4`. This caps all concurrent SQL work for that connector instance,
 including schema introspection, table sampling, relationship profiling,
 relationship validation, and read-only SQL execution. BigQuery and ClickHouse
 do not expose `maxConnections` because their connectors don't use client-side
-connection pools.
+connection pools. Databricks opens short-lived SQL sessions per operation and
+also does not expose `maxConnections`.
 
 For Postgres, BigQuery, and Snowflake, `historicSql` and `context.queryHistory`
 toggle query-history ingest. The shape is connector-specific; the setup wizard

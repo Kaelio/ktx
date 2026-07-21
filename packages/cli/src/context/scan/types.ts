@@ -7,6 +7,7 @@ export type KtxConnectionDriver =
   | 'sqlserver'
   | 'bigquery'
   | 'snowflake'
+  | 'databricks'
   | 'mysql'
   | 'clickhouse'
   | 'athena'

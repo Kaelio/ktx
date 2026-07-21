@@ -104,8 +104,8 @@ upkeep and don't absorb the rest of your company's knowledge.
 - You only need one ad-hoc query - `psql` or a notebook will do
 
 Works with PostgreSQL, Snowflake, BigQuery, ClickHouse, MySQL, SQL Server,
-SQLite, DuckDB, Amazon Athena, and MongoDB. Integrates with dbt, MetricFlow,
-LookML, Looker, Metabase, Sigma, Notion, and Google Drive.
+SQLite, DuckDB, Databricks, Amazon Athena, and MongoDB. Integrates with dbt,
+MetricFlow, LookML, Looker, Metabase, Sigma, Notion, and Google Drive.
 
 ## Quick Start
 

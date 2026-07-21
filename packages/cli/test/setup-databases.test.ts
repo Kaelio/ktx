@@ -240,6 +240,7 @@ describe('setup databases step', () => {
         { value: 'postgres', label: 'PostgreSQL' },
         { value: 'bigquery', label: 'BigQuery' },
         { value: 'snowflake', label: 'Snowflake' },
+        { value: 'databricks', label: 'Databricks' },
         { value: 'mysql', label: 'MySQL' },
         { value: 'clickhouse', label: 'ClickHouse' },
         { value: 'sqlserver', label: 'SQL Server' },

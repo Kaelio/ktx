@@ -32,9 +32,10 @@ describe('per-dialect SQL notes', () => {
     expect(files).toEqual([...DIALECTS_WITH_NOTES].sort());
   });
 
-  it('does not author notes for unreachable dialects', () => {
-    // databricks appears in the resolver map but no connector produces it.
-    expect(DIALECTS_WITH_NOTES).not.toContain('databricks');
+  it('authors notes for every first-class warehouse dialect', () => {
+    expect(DIALECTS_WITH_NOTES).toContain('duckdb');
+    expect(DIALECTS_WITH_NOTES).toContain('databricks');
+    expect(DIALECTS_WITH_NOTES).toContain('athena');
   });
 
   it('answers the full rubric for every dialect', () => {

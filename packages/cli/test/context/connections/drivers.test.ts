@@ -70,6 +70,14 @@ const connectionFixtures: Record<KtxConnectionDriver, FixtureFactory> = {
     database: 'ANALYTICS',
     schema: 'PUBLIC',
   }),
+  databricks: () => ({
+    driver: 'databricks',
+    server_hostname: 'dbc-example.cloud.databricks.com',
+    http_path: '/sql/1.0/warehouses/abc',
+    catalog: 'main',
+    schema_name: 'sales',
+    token: 'secret', // pragma: allowlist secret
+  }),
   athena: () => ({
     driver: 'athena',
     region: 'us-east-1',
@@ -108,6 +116,7 @@ describe('driverRegistrations', () => {
       'athena',
       'bigquery',
       'clickhouse',
+      'databricks',
       'duckdb',
       'mongodb',
       'mysql',

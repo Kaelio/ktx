@@ -44,7 +44,8 @@ function databaseDriver(value: string): KtxSetupDatabaseDriver {
     value === 'clickhouse' ||
     value === 'sqlserver' ||
     value === 'bigquery' ||
-    value === 'snowflake'
+    value === 'snowflake' ||
+    value === 'databricks'
   ) {
     return value;
   }

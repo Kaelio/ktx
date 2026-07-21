@@ -1,6 +1,6 @@
 ---
 title: Primary Sources
-description: Connect ktx to PostgreSQL, Snowflake, BigQuery, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, MongoDB, or Amazon Athena.
+description: Connect ktx to PostgreSQL, Snowflake, BigQuery, Databricks, MySQL, ClickHouse, SQL Server, SQLite, DuckDB, MongoDB, or Amazon Athena.
 ---
 
 **ktx** connects to your data warehouse or database to build schema context,
@@ -26,7 +26,7 @@ Agents should prefer environment or file references over literal secrets.
 
 | Field | Required | Applies to | Description |
 |-------|----------|------------|-------------|
-| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, `mongodb`, or `athena` |
+| `driver` | Yes | all connections | Connector driver such as `postgres`, `snowflake`, `bigquery`, `databricks`, `mysql`, `clickhouse`, `sqlserver`, `sqlite`, `duckdb`, `mongodb`, or `athena` |
 | `url` | One of the connection methods | URL-style connectors | Database URL, `env:NAME`, or `file:/path/to/secret` |
 | `host`, `port`, `database`, `username`, `password` | One of the connection methods | PostgreSQL, MySQL, SQL Server | Field-by-field connection values |
 | `schema` or `schemas` | No | schema-aware warehouses | Single schema or list of schemas to scan |
@@ -195,6 +195,61 @@ artifact shape as Postgres and BigQuery.
 - Connection context set per query (`USE ROLE`, `USE WAREHOUSE`, `USE DATABASE`, `USE SCHEMA`)
 - Parameter binding uses positional `?` placeholders
 - Date values normalized to ISO 8601 strings
+
+---
+
+## Databricks
+
+Connects via the Databricks SQL Driver for Node.js. Supports Unity Catalog
+three-level namespaces, schema introspection, table sampling, column sampling,
+and read-only SQL execution.
+
+### Connection config
+
+```yaml title="ktx.yaml"
+connections:
+  my-databricks:
+    driver: databricks
+    server_hostname: dbc-example.cloud.databricks.com
+    http_path: /sql/1.0/warehouses/abc123
+    catalog: main
+    schema_names:
+      - sales
+      - finance
+    authMethod: pat
+    token: env:DATABRICKS_TOKEN
+```
+
+`ktx setup` discovers schemas after the connection is verified and writes the
+selected list to `schema_names`. For hand-written config, prefer
+`schema_names` even for a single schema. `schema_name: sales` is accepted as a
+single-schema shorthand only when `schema_names` is not set.
+
+### Authentication
+
+| Method | Config |
+|--------|--------|
+| Personal Access Token | `authMethod: pat`, `token: env:DATABRICKS_TOKEN` |
+| OAuth machine-to-machine | `authMethod: oauth-m2m`, `client_id`, `client_secret: env:DATABRICKS_CLIENT_SECRET` |
+
+### Features
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Tables & views | Yes | Via Unity Catalog `INFORMATION_SCHEMA.TABLES` |
+| Primary keys | Yes | Via table constraints when available to the service principal |
+| Foreign keys | No | Not emitted by the connector |
+| Row count estimates | No | - |
+| Column statistics | No | - |
+| Query history | No | Databricks query-history ingest is not implemented |
+| Table sampling | Yes | Uses read-only `SELECT ... LIMIT` sampling |
+
+### Dialect notes
+
+- Unity Catalog table names use `catalog.schema.table`
+- Identifiers are quoted with backticks
+- Parameter binding uses positional `?` placeholders
+- Read-only SQL is validated before execution
 
 ---
 

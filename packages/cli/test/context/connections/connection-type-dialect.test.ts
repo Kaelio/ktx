@@ -14,6 +14,7 @@ describe('connection type dialect resolution', () => {
       ['SQLSERVER', 'tsql'],
       ['BIGQUERY', 'bigquery'],
       ['SNOWFLAKE', 'snowflake'],
+      ['DATABRICKS', 'databricks'],
       ['MYSQL', 'mysql'],
       ['CLICKHOUSE', 'clickhouse'],
       ['ATHENA', 'athena'],
@@ -38,8 +39,9 @@ describe('connection type dialect resolution', () => {
     expect(warehouseTargetDialect('not-a-real-connection-type')).toBeNull();
   });
 
-  it('removes inherited non-ktx connection type values while keeping AWS Athena', () => {
+  it('removes inherited non-ktx connection type values while keeping ktx warehouse types', () => {
     expect(connectionTypeSchema.safeParse('ATHENA').success).toBe(true);
+    expect(connectionTypeSchema.safeParse('DATABRICKS').success).toBe(true);
 
     for (const removed of [
       'CENTRALREACH',

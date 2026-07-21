@@ -7,6 +7,7 @@ const CONNECTION_TYPE_TO_SQLGLOT = {
   SQLSERVER: 'tsql',
   BIGQUERY: 'bigquery',
   SNOWFLAKE: 'snowflake',
+  DATABRICKS: 'databricks',
   MYSQL: 'mysql',
   CLICKHOUSE: 'clickhouse',
   ATHENA: 'athena',

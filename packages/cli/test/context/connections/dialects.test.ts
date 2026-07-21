@@ -186,6 +186,36 @@ const fixtures: DialectFixture[] = [
     normalizedType: 'NUMBER(38,0)',
   },
   {
+    driver: 'databricks',
+    table: { catalog: 'main', db: 'sales', name: 'orders' },
+    quoteInput: 'order`items',
+    quotedIdentifier: '`order``items`',
+    formattedTable: '`main`.`sales`.`orders`',
+    display: 'main.sales.orders',
+    invalidDisplay: 'sales.orders',
+    columnDisplayTablePartCount: 3,
+    limitClause: 'LIMIT 25 OFFSET 5',
+    topClause: '',
+    randomFilter: 'RAND() < 0.25',
+    tableSampleClause: 'TABLESAMPLE (25 PERCENT)',
+    sampleQuery: 'SELECT `id`, `status` FROM `main`.`sales`.`orders` LIMIT 5',
+    columnSampleContains: "TRIM(CAST(`status` AS STRING)) != ''",
+    nullCountExpression: 'COUNT_IF(`status` IS NULL)',
+    distinctCountExpression: 'APPROX_COUNT_DISTINCT(`status`)',
+    textLengthExpression: 'LENGTH(CAST(`status` AS STRING))',
+    castToText: 'CAST(`status` AS STRING)',
+    sampleValueAggregation:
+      "(SELECT CONCAT_WS('\\u001F', COLLECT_LIST(CAST(value AS STRING))) FROM (SELECT status AS value FROM orders) AS relationship_profile_values)",
+    cardinalityContains: 'SELECT APPROX_COUNT_DISTINCT(val) AS cardinality',
+    randomizedCardinalityContains: 'ORDER BY RAND()',
+    distinctValuesContains: 'SELECT DISTINCT CAST(`status` AS STRING) AS val',
+    statisticsContains: null,
+    dimensionInput: 'TIMESTAMP_NTZ',
+    dimensionType: 'time',
+    nativeTypeInput: 'DECIMAL(12,2)',
+    normalizedType: 'DECIMAL(12,2)',
+  },
+  {
     driver: 'bigquery',
     table: { catalog: 'analytics-project', db: 'warehouse', name: 'orders' },
     quoteInput: 'order`items',
@@ -305,7 +335,7 @@ describe('getDialectForDriver', () => {
 
   it('throws with a supported-driver list for unknown drivers', () => {
     expect(() => getDialectForDriver('oracle')).toThrow(
-      'Unsupported driver "oracle". Supported drivers: athena, bigquery, clickhouse, duckdb, mongodb, mysql, postgres, snowflake, sqlite, sqlserver',
+      'Unsupported driver "oracle". Supported drivers: athena, bigquery, clickhouse, databricks, duckdb, mongodb, mysql, postgres, snowflake, sqlite, sqlserver',
     );
   });
 

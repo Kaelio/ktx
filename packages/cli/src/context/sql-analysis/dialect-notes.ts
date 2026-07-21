@@ -5,8 +5,7 @@ import type { SqlAnalysisDialect } from './ports.js';
 // Per-engine SQL syntax notes live as markdown files under ./dialects (one per
 // dialect), served by the sql_dialect_notes MCP tool. They are package-internal:
 // copy-runtime-assets.mjs ships them to dist, and they are never installed onto an
-// agent target. The set covers every dialect reachable from a configured warehouse
-// driver; databricks is intentionally absent because no connector produces it.
+// agent target. The set covers every dialect reachable from a configured warehouse driver.
 
 /** @internal Dialects with an authored ./dialects/<dialect>.md file. */
 export const DIALECTS_WITH_NOTES = [
@@ -17,6 +16,7 @@ export const DIALECTS_WITH_NOTES = [
   'sqlite',
   'duckdb',
   'clickhouse',
+  'databricks',
   'tsql',
   'athena',
 ] as const;

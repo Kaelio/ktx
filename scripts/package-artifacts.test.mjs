@@ -452,7 +452,7 @@ describe('verification snippets', () => {
     assert.equal(packageJson.devDependencies, undefined);
     assert.equal(
       npmSmokePnpmWorkspaceYaml(),
-      ['packages:', '  - "."', 'allowBuilds:', '  better-sqlite3: true', ''].join('\n'),
+      ['packages:', '  - "."', 'allowBuilds:', '  better-sqlite3: true', '  lz4: true', ''].join('\n'),
     );
   });
 

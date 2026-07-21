@@ -48,6 +48,14 @@ function hasSnowflakeDriver(connection: unknown): boolean {
   );
 }
 
+function hasDatabricksDriver(connection: unknown): boolean {
+  return (
+    typeof connection === 'object' &&
+    connection !== null &&
+    String((connection as { driver?: unknown }).driver ?? '').toLowerCase() === 'databricks'
+  );
+}
+
 type SnowflakeConnectorModule = typeof import('./connectors/snowflake/connector.js');
 
 function ktxCliDaemonDatabaseIntrospectionOptions(
@@ -179,6 +187,17 @@ function createKtxCliLiveDatabaseIntrospection(
           projectDir: project.projectDir,
         });
         return snowflake.extractSchema(connectionId, options);
+      }
+      if (hasDatabricksDriver(connection)) {
+        const { createDatabricksLiveDatabaseIntrospection } = await import('./connectors/databricks/live-database-introspection.js');
+        const { isKtxDatabricksConnectionConfig } = await import('./connectors/databricks/connector.js');
+        if (!isKtxDatabricksConnectionConfig(connection)) {
+          return daemon.extractSchema(connectionId, options);
+        }
+        const databricks = createDatabricksLiveDatabaseIntrospection({
+          connections: project.config.connections,
+        });
+        return databricks.extractSchema(connectionId, options);
       }
       return daemon.extractSchema(connectionId, options);
     },
