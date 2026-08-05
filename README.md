@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2FKaelio%2Fktx.svg)](https://mcptoplist.com/server/glama%2FKaelio%2Fktx)
+
 <h1 align="center">
   <img src="assets/ktx-lockup.svg" alt="ktx" width="500" />
 </h1>
