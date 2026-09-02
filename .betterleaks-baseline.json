@@ -1,0 +1,261 @@
+[
+ {
+  "RuleID": "generic-password",
+  "Description": "Detected a potential hardcoded password literal, which may expose account credentials.",
+  "StartLine": 39,
+  "EndLine": 39,
+  "StartColumn": 5,
+  "EndColumn": 29,
+  "Match": "password: REDACTED",
+  "Secret": "REDACTED",
+  "Attributes": {
+   "confidence": "medium",
+   "git.author_email": "lucamrtl@gmail.com",
+   "git.author_name": "Luca Martial",
+   "git.date": "2026-05-11T07:45:43Z",
+   "git.message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e",
+   "git.platform": "github",
+   "git.remote_url": "https://github.com/Kaelio/ktx",
+   "git.sha": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+   "path": "docs/content/docs/integrations/primary-sources.mdx",
+   "resource": "git.patch_content",
+   "url": "https://github.com/Kaelio/ktx/blob/cb9ab25456a4d58ba76da37125fdbe060d008705/docs/content/docs/integrations/primary-sources.mdx#L39"
+  },
+  "Tags": [],
+  "ComponentSets": [
+   {
+    "components": [
+     {
+      "RuleID": "generic-username",
+      "Optional": true,
+      "StartLine": 38,
+      "EndLine": 38,
+      "StartColumn": 4,
+      "EndColumn": 24,
+      "Match": " username: REDACTED",
+      "Secret": "REDACTED"
+     }
+    ]
+   }
+  ],
+  "Fingerprint": "cb9ab25456a4d58ba76da37125fdbe060d008705:docs/content/docs/integrations/primary-sources.mdx:generic-password:39",
+  "File": "docs/content/docs/integrations/primary-sources.mdx",
+  "SymlinkFile": "",
+  "Commit": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+  "Entropy": 3.640224,
+  "Author": "Luca Martial",
+  "Email": "lucamrtl@gmail.com",
+  "Date": "2026-05-11T07:45:43Z",
+  "Message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e"
+ },
+ {
+  "RuleID": "generic-password",
+  "Description": "Detected a potential hardcoded password literal, which may expose account credentials.",
+  "StartLine": 107,
+  "EndLine": 107,
+  "StartColumn": 5,
+  "EndColumn": 36,
+  "Match": "password: REDACTED",
+  "Secret": "REDACTED",
+  "Attributes": {
+   "confidence": "medium",
+   "git.author_email": "lucamrtl@gmail.com",
+   "git.author_name": "Luca Martial",
+   "git.date": "2026-05-11T07:45:43Z",
+   "git.message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e",
+   "git.platform": "github",
+   "git.remote_url": "https://github.com/Kaelio/ktx",
+   "git.sha": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+   "path": "docs/content/docs/integrations/primary-sources.mdx",
+   "resource": "git.patch_content",
+   "url": "https://github.com/Kaelio/ktx/blob/cb9ab25456a4d58ba76da37125fdbe060d008705/docs/content/docs/integrations/primary-sources.mdx#L107"
+  },
+  "Tags": [],
+  "ComponentSets": [
+   {
+    "components": [
+     {
+      "RuleID": "generic-username",
+      "Optional": true,
+      "StartLine": 102,
+      "EndLine": 102,
+      "StartColumn": 4,
+      "EndColumn": 20,
+      "Match": " account: REDACTED",
+      "Secret": "REDACTED"
+     }
+    ]
+   },
+   {
+    "components": [
+     {
+      "RuleID": "generic-username",
+      "Optional": true,
+      "StartLine": 106,
+      "EndLine": 106,
+      "StartColumn": 4,
+      "EndColumn": 25,
+      "Match": " username: REDACTED",
+      "Secret": "REDACTED"
+     }
+    ]
+   }
+  ],
+  "Fingerprint": "cb9ab25456a4d58ba76da37125fdbe060d008705:docs/content/docs/integrations/primary-sources.mdx:generic-password:107",
+  "File": "docs/content/docs/integrations/primary-sources.mdx",
+  "SymlinkFile": "",
+  "Commit": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+  "Entropy": 3.9705732,
+  "Author": "Luca Martial",
+  "Email": "lucamrtl@gmail.com",
+  "Date": "2026-05-11T07:45:43Z",
+  "Message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e"
+ },
+ {
+  "RuleID": "generic-password",
+  "Description": "Detected a potential hardcoded password literal, which may expose account credentials.",
+  "StartLine": 250,
+  "EndLine": 250,
+  "StartColumn": 5,
+  "EndColumn": 29,
+  "Match": "password: REDACTED",
+  "Secret": "REDACTED",
+  "Attributes": {
+   "confidence": "medium",
+   "git.author_email": "lucamrtl@gmail.com",
+   "git.author_name": "Luca Martial",
+   "git.date": "2026-05-11T07:45:43Z",
+   "git.message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e",
+   "git.platform": "github",
+   "git.remote_url": "https://github.com/Kaelio/ktx",
+   "git.sha": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+   "path": "docs/content/docs/integrations/primary-sources.mdx",
+   "resource": "git.patch_content",
+   "url": "https://github.com/Kaelio/ktx/blob/cb9ab25456a4d58ba76da37125fdbe060d008705/docs/content/docs/integrations/primary-sources.mdx#L250"
+  },
+  "Tags": [],
+  "ComponentSets": [
+   {
+    "components": [
+     {
+      "RuleID": "generic-username",
+      "Optional": true,
+      "StartLine": 249,
+      "EndLine": 249,
+      "StartColumn": 4,
+      "EndColumn": 21,
+      "Match": " username: REDACTED",
+      "Secret": "REDACTED"
+     }
+    ]
+   }
+  ],
+  "Fingerprint": "cb9ab25456a4d58ba76da37125fdbe060d008705:docs/content/docs/integrations/primary-sources.mdx:generic-password:250",
+  "File": "docs/content/docs/integrations/primary-sources.mdx",
+  "SymlinkFile": "",
+  "Commit": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+  "Entropy": 3.7735572,
+  "Author": "Luca Martial",
+  "Email": "lucamrtl@gmail.com",
+  "Date": "2026-05-11T07:45:43Z",
+  "Message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e"
+ },
+ {
+  "RuleID": "generic-password",
+  "Description": "Detected a potential hardcoded password literal, which may expose account credentials.",
+  "StartLine": 309,
+  "EndLine": 309,
+  "StartColumn": 5,
+  "EndColumn": 32,
+  "Match": "password: REDACTED",
+  "Secret": "REDACTED",
+  "Attributes": {
+   "confidence": "medium",
+   "git.author_email": "lucamrtl@gmail.com",
+   "git.author_name": "Luca Martial",
+   "git.date": "2026-05-11T07:45:43Z",
+   "git.message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e",
+   "git.platform": "github",
+   "git.remote_url": "https://github.com/Kaelio/ktx",
+   "git.sha": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+   "path": "docs/content/docs/integrations/primary-sources.mdx",
+   "resource": "git.patch_content",
+   "url": "https://github.com/Kaelio/ktx/blob/cb9ab25456a4d58ba76da37125fdbe060d008705/docs/content/docs/integrations/primary-sources.mdx#L309"
+  },
+  "Tags": [],
+  "ComponentSets": [
+   {
+    "components": [
+     {
+      "RuleID": "generic-username",
+      "Optional": true,
+      "StartLine": 308,
+      "EndLine": 308,
+      "StartColumn": 4,
+      "EndColumn": 24,
+      "Match": " username: REDACTED",
+      "Secret": "REDACTED"
+     }
+    ]
+   }
+  ],
+  "Fingerprint": "cb9ab25456a4d58ba76da37125fdbe060d008705:docs/content/docs/integrations/primary-sources.mdx:generic-password:309",
+  "File": "docs/content/docs/integrations/primary-sources.mdx",
+  "SymlinkFile": "",
+  "Commit": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+  "Entropy": 3.9057646,
+  "Author": "Luca Martial",
+  "Email": "lucamrtl@gmail.com",
+  "Date": "2026-05-11T07:45:43Z",
+  "Message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e"
+ },
+ {
+  "RuleID": "generic-password",
+  "Description": "Detected a potential hardcoded password literal, which may expose account credentials.",
+  "StartLine": 368,
+  "EndLine": 368,
+  "StartColumn": 5,
+  "EndColumn": 32,
+  "Match": "password: REDACTED",
+  "Secret": "REDACTED",
+  "Attributes": {
+   "confidence": "medium",
+   "git.author_email": "lucamrtl@gmail.com",
+   "git.author_name": "Luca Martial",
+   "git.date": "2026-05-11T07:45:43Z",
+   "git.message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e",
+   "git.platform": "github",
+   "git.remote_url": "https://github.com/Kaelio/ktx",
+   "git.sha": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+   "path": "docs/content/docs/integrations/primary-sources.mdx",
+   "resource": "git.patch_content",
+   "url": "https://github.com/Kaelio/ktx/blob/cb9ab25456a4d58ba76da37125fdbe060d008705/docs/content/docs/integrations/primary-sources.mdx#L368"
+  },
+  "Tags": [],
+  "ComponentSets": [
+   {
+    "components": [
+     {
+      "RuleID": "generic-username",
+      "Optional": true,
+      "StartLine": 367,
+      "EndLine": 367,
+      "StartColumn": 4,
+      "EndColumn": 24,
+      "Match": " username: REDACTED",
+      "Secret": "REDACTED"
+     }
+    ]
+   }
+  ],
+  "Fingerprint": "cb9ab25456a4d58ba76da37125fdbe060d008705:docs/content/docs/integrations/primary-sources.mdx:generic-password:368",
+  "File": "docs/content/docs/integrations/primary-sources.mdx",
+  "SymlinkFile": "",
+  "Commit": "cb9ab25456a4d58ba76da37125fdbe060d008705",
+  "Entropy": 3.7254806,
+  "Author": "Luca Martial",
+  "Email": "lucamrtl@gmail.com",
+  "Date": "2026-05-11T07:45:43Z",
+  "Message": "docs: add title attributes to config code blocks\n\nTriggers VS Code tab styling on the docs' YAML/config blocks\nwhere surrounding prose names the file. Mechanical, ~1 edit\nacross the guides section (building-context.mdx); primary-sources.mdx\nand context-sources.mdx already had title= on their Connection config\nblocks, so only the prose-named semantic source output example needed\nupdating.\n\nCo-Authored-By: Claude Sonnet 4.6 \u003cnoreply@anthropic.com\u003e"
+ }
+]

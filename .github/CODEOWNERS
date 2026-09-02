@@ -1,0 +1,4 @@
+# Protect the organization secret-scanning control and reviewed baseline.
+/.github/CODEOWNERS @andreybavt @luca-martial
+/.github/workflows/secret-scan.yml @andreybavt @luca-martial
+/.betterleaks-baseline.json @andreybavt @luca-martial
