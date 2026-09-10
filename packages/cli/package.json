@@ -103,7 +103,7 @@
     "ajv": "8.20.0",
     "ink-testing-library": "^4.0.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.11"
   },
   "license": "Apache-2.0",
   "repository": {
