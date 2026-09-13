@@ -8,12 +8,13 @@ import type { ManagedPythonCommandRuntime } from '../src/managed-python-command.
 import type { ManagedPythonDaemonStartResult } from '../src/managed-python-daemon.js';
 import type { ManagedPythonDaemonLayout } from '../src/managed-python-runtime.js';
 
-function makeIo() {
+function makeIo(stdoutIsTty = false) {
   let stdout = '';
   let stderr = '';
   return {
     io: {
       stdout: {
+        isTTY: stdoutIsTty,
         write: (chunk: string) => {
           stdout += chunk;
         },
@@ -160,6 +161,49 @@ describe('ensureManagedLocalEmbeddingsDaemon', () => {
     });
 
     expect(io.stderr()).toContain('Using ktx daemon: http://127.0.0.1:61234');
+  });
+
+  it('keeps the spinner static on a TTY so the daemon start cannot leave stdin in raw mode', async () => {
+    // Regression test for #361. On a TTY the animated clack spinner takes
+    // stdin over through @clack/core's block(), which calls setRawMode(true)
+    // and is never undone, killing Ctrl-C for the rest of the ingest. The
+    // static spinner writes to stderr only and never touches stdin, so the
+    // giveaway is that stdout stays completely empty even when it is a TTY.
+    const io = makeIo(true);
+
+    await ensureManagedLocalEmbeddingsDaemon({
+      cliVersion: '0.2.0',
+      projectDir: '/work/proj',
+      installPolicy: 'auto',
+      io: io.io,
+      ensureRuntime: vi.fn(async () => runtime()),
+      startDaemon: vi.fn(async () => daemonResult('started')),
+    });
+
+    expect(io.stdout()).toBe('');
+    expect(io.stderr()).toContain('Starting ktx embedding daemon');
+    expect(io.stderr()).toContain('Started ktx daemon: http://127.0.0.1:61234');
+  });
+
+  it('reports the failure through the same static spinner and rethrows', async () => {
+    const io = makeIo(true);
+    const boom = new Error('daemon exploded');
+
+    await expect(
+      ensureManagedLocalEmbeddingsDaemon({
+        cliVersion: '0.2.0',
+        projectDir: '/work/proj',
+        installPolicy: 'auto',
+        io: io.io,
+        ensureRuntime: vi.fn(async () => runtime()),
+        startDaemon: vi.fn(async () => {
+          throw boom;
+        }),
+      }),
+    ).rejects.toBe(boom);
+
+    expect(io.stdout()).toBe('');
+    expect(io.stderr()).toContain('ktx embedding daemon failed to start');
   });
 });
 

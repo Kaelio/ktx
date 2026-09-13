@@ -1,6 +1,6 @@
 import type { KtxEmbeddingConfig } from './llm/types.js';
 import type { KtxCliIo } from './cli-runtime.js';
-import { createCliSpinner } from './clack.js';
+import { createStaticCliSpinner } from './clack.js';
 import {
   ensureManagedPythonCommandRuntime,
   type KtxManagedPythonInstallPolicy,
@@ -66,8 +66,11 @@ export async function ensureManagedLocalEmbeddingsDaemon(
     io: options.io,
     feature: 'local-embeddings',
   });
-  const spinner = createCliSpinner(options.io);
-  spinner.start('Starting ktx embedding daemon (first run downloads the model)…');
+  // Static, stderr-only spinner on purpose: the animated clack spinner seizes
+  // stdin through @clack/core's block() and leaves the tty in raw mode, which
+  // stops Ctrl-C from generating SIGINT for the rest of the ingest.
+  const spinner = createStaticCliSpinner(options.io);
+  spinner.start('Starting ktx embedding daemon (first run downloads the model)\u2026');
   let daemon: ManagedPythonDaemonStartResult;
   try {
     daemon = await startDaemon({
