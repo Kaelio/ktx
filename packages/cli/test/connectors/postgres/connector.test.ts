@@ -65,7 +65,7 @@ function metadataResults(): Map<string, FakeQueryResponse> {
       },
     ],
     [
-      "tc.constraint_type = 'FOREIGN KEY'",
+      "con.contype = 'f'",
       {
         rows: [
           {
@@ -287,7 +287,7 @@ describe('KtxPostgresScanConnector', () => {
       Object.assign(new Error('permission denied for information_schema'), { code: '42501' }),
     );
     results.set(
-      "tc.constraint_type = 'FOREIGN KEY'",
+      "con.contype = 'f'",
       Object.assign(new Error('relation information_schema.key_column_usage does not exist'), { code: '42P01' }),
     );
     const connector = new KtxPostgresScanConnector({

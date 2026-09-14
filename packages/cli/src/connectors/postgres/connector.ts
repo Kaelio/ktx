@@ -697,29 +697,34 @@ export class KtxPostgresScanConnector implements KtxScanConnector {
     if (!primaryKeysResult.ok) {
       snapshotWarnings.push(primaryKeysResult.warning);
     }
+    // information_schema.constraint_column_usage only lists tables owned by a
+    // currently enabled role, so a non-owner role sees zero foreign keys without
+    // any error. pg_catalog.pg_constraint has no ownership gate, and pairing
+    // conkey/confkey by ordinality keeps composite keys column-aligned.
     const foreignKeysResult = await tryConstraintQuery(
       { schema, kind: 'foreign_key', isDeniedError },
       () =>
         this.queryRaw<PostgresForeignKeyRow>(
           `
       SELECT
-        tc.table_name,
-        kcu.column_name,
-        ccu.table_schema AS foreign_table_schema,
-        ccu.table_name AS foreign_table_name,
-        ccu.column_name AS foreign_column_name,
-        tc.constraint_name
-      FROM information_schema.table_constraints AS tc
-      JOIN information_schema.key_column_usage AS kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
-      JOIN information_schema.constraint_column_usage AS ccu
-        ON ccu.constraint_name = tc.constraint_name
-        AND ccu.table_schema = tc.table_schema
-      WHERE tc.constraint_type = 'FOREIGN KEY'
-        AND tc.table_schema = $1
-        ${tableConstraintScopeClause}
-      ORDER BY tc.table_name, kcu.column_name
+        c.relname AS table_name,
+        a.attname AS column_name,
+        fn.nspname AS foreign_table_schema,
+        fc.relname AS foreign_table_name,
+        fa.attname AS foreign_column_name,
+        con.conname AS constraint_name
+      FROM pg_catalog.pg_constraint con
+      JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_catalog.pg_class fc ON fc.oid = con.confrelid
+      JOIN pg_catalog.pg_namespace fn ON fn.oid = fc.relnamespace
+      CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(attnum, fattnum, ordinality)
+      JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+      JOIN pg_catalog.pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = k.fattnum
+      WHERE con.contype = 'f'
+        AND n.nspname = $1
+        ${pgCatalogScopeClause}
+      ORDER BY c.relname, a.attname
       `,
           [schema, ...scopeValues],
         ),
