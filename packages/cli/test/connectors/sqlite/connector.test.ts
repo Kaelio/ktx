@@ -110,6 +110,28 @@ describe('KtxSqliteScanConnector', () => {
     }
   });
 
+  it('expands ~/ in a file: path reference to the home directory', () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = tempDir;
+    writeFileSync(join(tempDir, 'sqlite-path.txt'), dbPath, 'utf-8');
+
+    try {
+      expect(
+        sqliteDatabasePathFromConfig({
+          connectionId: 'warehouse',
+          projectDir: tempDir,
+          connection: { driver: 'sqlite', path: 'file:~/sqlite-path.txt' },
+        }),
+      ).toBe(dbPath);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
   it('introspects schema, primary keys, row counts, views, and foreign keys', async () => {
     const connector = new KtxSqliteScanConnector({
       connectionId: 'warehouse',

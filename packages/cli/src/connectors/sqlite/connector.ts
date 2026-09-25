@@ -1,6 +1,5 @@
 import Database from 'better-sqlite3';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork, type ChildProcess } from 'node:child_process';
@@ -11,6 +10,7 @@ import { normalizeQueryRows } from '../../context/connections/query-executor.js'
 import { connectorTestFailure, createKtxConnectorCapabilities, type KtxConnectorTestResult, type KtxColumnSampleInput, type KtxColumnSampleResult, type KtxColumnStatsInput, type KtxColumnStatsResult, type KtxQueryResult, type KtxReadOnlyQueryInput, type KtxScanConnector, type KtxScanContext, type KtxScanInput, type KtxScanWarning, type KtxSchemaForeignKey, type KtxSchemaSnapshot, type KtxSchemaTable, type KtxTableListEntry, type KtxTableRef, type KtxTableSampleInput, type KtxTableSampleResult } from '../../context/scan/types.js';
 import { scopedTableNames } from '../../context/scan/table-ref.js';
 import { tryIntrospectObject } from '../../context/scan/object-introspection.js';
+import { resolveStringReference as resolveSharedStringReference } from '../shared/string-reference.js';
 
 export interface KtxSqliteConnectionConfig {
   driver?: string;
@@ -100,17 +100,12 @@ function stringConfigValue(
 }
 
 function resolveStringReference(key: keyof KtxSqliteConnectionConfig, value: string): string {
-  if (value.startsWith('env:')) {
-    return process.env[value.slice('env:'.length)] ?? '';
-  }
   // `file:` on the `url` key is SQLite's native URI form (e.g. `file:///db.sqlite`), not a
   // file-contents reference — skip the read so the URI passes through verbatim.
-  if (key !== 'url' && value.startsWith('file:')) {
-    const rawPath = value.slice('file:'.length);
-    const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(1)) : rawPath;
-    return readFileSync(path, 'utf-8').trim();
+  if (key === 'url' && value.startsWith('file:')) {
+    return value;
   }
-  return value;
+  return resolveSharedStringReference(value, process.env);
 }
 
 function sqlitePathFromUrl(url: string): string {
