@@ -829,6 +829,46 @@ describe('local scan enrichment', () => {
     expect(second.relationships).toEqual(first.relationships);
   });
 
+  it('does not replay a descriptions stage that finished with undescribed tables', async () => {
+    const stateStore = memoryEnrichmentStateStore();
+    const scanConnector = connector();
+    const providers = createDeterministicLocalScanEnrichmentProviders();
+    const run = (runId: string) =>
+      runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'enriched',
+        detectRelationships: false,
+        connector: scanConnector,
+        context: { runId },
+        providers,
+        stateStore,
+        syncId: runId,
+        llmIdentity: { model: 'fake', baseUrlConfigured: false },
+      });
+
+    // The LLM fails for one table (rate limit, dropped connection): the run
+    // still finishes, with that table left undescribed.
+    const describe = providers.llmRuntime.generateObject.bind(providers.llmRuntime);
+    const generateObject = vi
+      .spyOn(providers.llmRuntime, 'generateObject')
+      .mockImplementation(async (request) => {
+        if (request.prompt.includes('orders')) {
+          throw new Error('429 rate limited');
+        }
+        return describe(request);
+      });
+    const first = await run('gap-run-1');
+    expect(first.descriptionUpdates.filter((update) => update.tableDescription === null)).toHaveLength(1);
+
+    generateObject.mockReset();
+    generateObject.mockImplementation(describe);
+    const second = await run('gap-run-2');
+
+    expect(second.state.resumedStages).not.toContain('descriptions');
+    expect(generateObject).toHaveBeenCalled();
+    expect(second.descriptionUpdates.every((update) => update.tableDescription !== null)).toBe(true);
+  });
+
   it('marks a budget-truncated relationship stage partial, persists it, and re-runs only when the budget is raised', async () => {
     const executor = new InMemorySqliteExecutor();
     try {

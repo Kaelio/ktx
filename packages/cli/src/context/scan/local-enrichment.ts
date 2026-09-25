@@ -590,6 +590,8 @@ async function runEnrichmentStage<TOutput>(input: {
    * spec-20 per-table resume record.
    */
   forceRecompute?: boolean;
+  /** A completed row whose output fails this check is a miss, so an incomplete result is retried, not replayed. */
+  reusable?: (output: TOutput) => boolean;
   compute: () => Promise<TOutput>;
 }): Promise<TOutput> {
   if (!input.forceRecompute) {
@@ -598,7 +600,7 @@ async function runEnrichmentStage<TOutput>(input: {
       stage: input.stage,
       inputHash: input.inputHash,
     });
-    if (existing) {
+    if (existing && (input.reusable?.(existing.output) ?? true)) {
       input.resumedStages.push(input.stage);
       input.completedStages.push(input.stage);
       return existing.output;
@@ -746,6 +748,7 @@ export async function runLocalScanEnrichment(
         inputHash: descriptionsHash,
         now,
         forceRecompute: forcesStage('descriptions'),
+        reusable: (output) => output.every(isEnrichedDescriptionUpdate),
         resumedStages: state.resumedStages,
         completedStages: state.completedStages,
         failedStages: state.failedStages,
