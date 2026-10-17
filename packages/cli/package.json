@@ -70,7 +70,7 @@
     "better-sqlite3": "^12.10.0",
     "commander": "14.0.3",
     "fflate": "^0.8.3",
-    "handlebars": "^4.7.9",
+    "handlebars": "^4.7.10",
     "ink": "^7.0.3",
     "lookml-parser": "7.1.0",
     "minimatch": "^10.2.5",
