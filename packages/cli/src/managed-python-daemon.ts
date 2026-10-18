@@ -17,14 +17,18 @@ import {
 } from './managed-python-runtime.js';
 import { sanitizeChildProxyEnv } from './proxy-env.js';
 
+type ManagedPythonDaemonStartFailure = 'spawn-failed' | 'exited-before-ready' | 'version-mismatch' | 'readiness-timeout';
+
 export class ManagedPythonDaemonStartError extends Error {
   readonly detail: string;
   readonly stderrLog: string;
-  constructor(detail: string, stderrLog: string) {
-    super(`ktx daemon failed to start: ${detail}. stderr: ${stderrLog}`);
+  readonly reason: ManagedPythonDaemonStartFailure;
+  constructor(detail: string, stderrLog: string, reason: ManagedPythonDaemonStartFailure, options?: ErrorOptions) {
+    super(`ktx daemon failed to start: ${detail}. stderr: ${stderrLog}`, options);
     this.name = 'ManagedPythonDaemonStartError';
     this.detail = detail;
     this.stderrLog = stderrLog;
+    this.reason = reason;
   }
 }
 
@@ -90,6 +94,10 @@ export interface ManagedPythonDaemonStopAllResult {
 export interface ManagedPythonDaemonChild {
   pid?: number;
   unref(): void;
+  once(event: 'error', listener: (error: Error) => void): unknown;
+  once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  removeListener(event: 'error', listener: (error: Error) => void): unknown;
+  removeListener(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
 }
 
 /** @internal */
@@ -106,6 +114,7 @@ export type ManagedPythonDaemonSpawn = (
 /** @internal */
 export type ManagedPythonDaemonFetch = (
   url: string,
+  init?: { signal?: AbortSignal },
 ) => Promise<{
   ok: boolean;
   status: number;
@@ -171,8 +180,8 @@ function hasFeatures(state: ManagedPythonDaemonState, features: KtxRuntimeFeatur
   return normalizeFeatures(features).every((feature) => state.features.includes(feature));
 }
 
-function defaultFetch(url: string): ReturnType<ManagedPythonDaemonFetch> {
-  return fetch(url) as ReturnType<ManagedPythonDaemonFetch>;
+function defaultFetch(url: string, init?: { signal?: AbortSignal }): ReturnType<ManagedPythonDaemonFetch> {
+  return fetch(url, init) as ReturnType<ManagedPythonDaemonFetch>;
 }
 
 function defaultProcessAlive(pid: number): boolean {
@@ -223,13 +232,18 @@ async function writeState(path: string, state: ManagedPythonDaemonState): Promis
   await writeFile(path, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+type HealthResult = { ok: true } | { ok: false; detail: string; versionMismatch?: true };
+
 async function healthOk(input: {
-  state: ManagedPythonDaemonState;
+  state: Pick<ManagedPythonDaemonState, 'host' | 'port'>;
   cliVersion: string;
   fetch: ManagedPythonDaemonFetch;
-}): Promise<{ ok: true } | { ok: false; detail: string }> {
+  timeoutMs?: number;
+}): Promise<HealthResult> {
+  const controller = new AbortController();
+  const timeout = input.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), input.timeoutMs);
   try {
-    const response = await input.fetch(`${baseUrl(input.state)}/health`);
+    const response = await input.fetch(`${baseUrl(input.state)}/health`, { signal: controller.signal });
     if (!response.ok) {
       return { ok: false, detail: `Health check returned HTTP ${response.status}: ${await response.text()}` };
     }
@@ -245,11 +259,17 @@ async function healthOk(input: {
       return {
         ok: false,
         detail: `Daemon version ${String(record.version)} does not match CLI ${input.cliVersion}`,
+        versionMismatch: true,
       };
     }
     return { ok: true };
   } catch (error) {
+    if (controller.signal.aborted) {
+      return { ok: false, detail: `Health check timed out after ${input.timeoutMs}ms` };
+    }
     return { ok: false, detail: describeError(error) };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -310,41 +330,124 @@ export async function allocateDaemonPort(): Promise<number> {
   });
 }
 
-async function waitForHealth(input: {
-  state: ManagedPythonDaemonState;
+const HEALTH_PROBE_TIMEOUT_MS = 1_000;
+
+interface DaemonChildWatch {
+  failure: Promise<ManagedPythonDaemonStartError>;
+  dispose(): void;
+}
+
+function watchDaemonChild(child: ManagedPythonDaemonChild, stderrLog: string): DaemonChildWatch {
+  let dispose = () => {};
+  const failure = new Promise<ManagedPythonDaemonStartError>((resolve) => {
+    const onError = (error: Error) => {
+      resolve(
+        new ManagedPythonDaemonStartError(`could not spawn ktx-daemon: ${describeError(error)}`, stderrLog, 'spawn-failed', {
+          cause: error,
+        }),
+      );
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      const outcome = signal ? `signal ${signal}` : `exit code ${code}`;
+      resolve(
+        new ManagedPythonDaemonStartError(
+          `ktx-daemon exited before becoming healthy (${outcome})`,
+          stderrLog,
+          'exited-before-ready',
+        ),
+      );
+    };
+    child.once('error', onError);
+    child.once('exit', onExit);
+    dispose = () => {
+      child.removeListener('error', onError);
+      child.removeListener('exit', onExit);
+    };
+  });
+  return { failure, dispose: () => dispose() };
+}
+
+async function waitForReadiness(input: {
+  endpoint: Pick<ManagedPythonDaemonState, 'host' | 'port'>;
+  stderrLog: string;
   cliVersion: string;
   fetch: ManagedPythonDaemonFetch;
+  childFailure: Promise<ManagedPythonDaemonStartError>;
   timeoutMs: number;
   pollIntervalMs: number;
 }): Promise<void> {
   const deadline = Date.now() + input.timeoutMs;
+  // Probes abort on their own timeout, so a hung connection overruns the deadline by at most one probe.
+  const probeTimeoutMs = Math.min(HEALTH_PROBE_TIMEOUT_MS, input.timeoutMs);
   let lastDetail = 'daemon did not answer health checks';
-  while (Date.now() <= deadline) {
-    const health = await healthOk({
-      state: input.state,
-      cliVersion: input.cliVersion,
-      fetch: input.fetch,
-    });
+  for (;;) {
+    const health = await Promise.race([
+      healthOk({ state: input.endpoint, cliVersion: input.cliVersion, fetch: input.fetch, timeoutMs: probeTimeoutMs }),
+      input.childFailure,
+    ]);
+    if (health instanceof ManagedPythonDaemonStartError) {
+      throw health;
+    }
     if (health.ok) {
       return;
     }
+    if (health.versionMismatch) {
+      throw new ManagedPythonDaemonStartError(health.detail, input.stderrLog, 'version-mismatch');
+    }
     lastDetail = health.detail;
-    await delay(input.pollIntervalMs);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    const childFailed = await Promise.race([delay(Math.min(input.pollIntervalMs, remainingMs)), input.childFailure]);
+    if (childFailed) {
+      throw childFailed;
+    }
   }
-  const finalHealth = await healthOk({
-    state: input.state,
-    cliVersion: input.cliVersion,
-    fetch: input.fetch,
-  });
-  if (finalHealth.ok) {
-    return;
-  }
-  lastDetail = finalHealth.detail;
-  throw new ManagedPythonDaemonStartError(lastDetail, input.state.stderrLog);
+  throw new ManagedPythonDaemonStartError(
+    `not healthy after ${input.timeoutMs}ms: ${lastDetail}`,
+    input.stderrLog,
+    'readiness-timeout',
+  );
 }
 
 async function removeState(layout: ManagedPythonDaemonLayout): Promise<void> {
   await rm(layout.daemonStatePath, { force: true });
+}
+
+function sameDaemon(left: ManagedPythonDaemonState, right: ManagedPythonDaemonState): boolean {
+  return left.pid === right.pid && left.port === right.port && left.startedAt === right.startedAt;
+}
+
+// Re-reads the state right before acting so an attempt working from an older observation cannot stop
+// or unpublish a daemon that another attempt recorded in the meantime.
+async function clearObservedDaemon(input: {
+  layout: ManagedPythonDaemonLayout;
+  status: ManagedPythonDaemonStatus;
+  processAlive: (pid: number) => boolean;
+  killProcess: ManagedPythonDaemonKillProcess;
+}): Promise<void> {
+  if (input.status.kind === 'stopped') {
+    return;
+  }
+  const observed = input.status.state;
+  let current: ManagedPythonDaemonState | undefined;
+  try {
+    current = await readState(input.layout.daemonStatePath);
+  } catch {
+    if (!observed) {
+      await removeState(input.layout);
+    }
+    return;
+  }
+  if (observed && current && sameDaemon(current, observed)) {
+    await stopRecordedDaemon({
+      layout: input.layout,
+      state: observed,
+      processAlive: input.processAlive,
+      killProcess: input.killProcess,
+    });
+  }
 }
 
 async function stopRecordedDaemon(input: {
@@ -677,21 +780,18 @@ export async function startManagedPythonDaemon(
   const killProcess = options.killProcess ?? defaultKillProcess;
   const fetchImpl = options.fetch ?? defaultFetch;
 
-  const status = await readManagedPythonDaemonStatus({
+  const statusOptions = {
     cliVersion: options.cliVersion,
     projectDir: options.projectDir,
     ...layoutOverrides,
     fetch: fetchImpl,
     processAlive,
-  });
+  };
+  const status = await readManagedPythonDaemonStatus(statusOptions);
   if (options.force !== true && status.kind === 'running' && hasFeatures(status.state, features)) {
     return { status: 'reused', layout, state: status.state, baseUrl: status.baseUrl };
   }
-  if ('state' in status && status.state) {
-    await stopRecordedDaemon({ layout, state: status.state, processAlive, killProcess });
-  } else {
-    await removeState(layout);
-  }
+  await clearObservedDaemon({ layout, status, processAlive, killProcess });
 
   const installed = await installRuntime({
     cliVersion: options.cliVersion,
@@ -718,13 +818,36 @@ export async function startManagedPythonDaemon(
         }),
       },
     );
+    const childWatch = watchDaemonChild(child, layout.daemonStderrPath);
     child.unref();
-    if (!child.pid) {
-      throw new Error(`ktx daemon did not report a pid. stderr: ${layout.daemonStderrPath}`);
+    let pid: number;
+    try {
+      await waitForReadiness({
+        endpoint: { host: '127.0.0.1', port },
+        stderrLog: layout.daemonStderrPath,
+        cliVersion: options.cliVersion,
+        fetch: fetchImpl,
+        childFailure: childWatch.failure,
+        timeoutMs: options.startupTimeoutMs ?? 30_000,
+        pollIntervalMs: options.pollIntervalMs ?? 100,
+      });
+      if (!child.pid) {
+        throw new ManagedPythonDaemonStartError('ktx-daemon did not report a pid', layout.daemonStderrPath, 'spawn-failed');
+      }
+      pid = child.pid;
+    } catch (error) {
+      // This attempt never published state, so only its own child is stopped; the state file may
+      // already record a daemon that another attempt started.
+      if (child.pid && processAlive(child.pid)) {
+        killProcess(child.pid);
+      }
+      throw error;
+    } finally {
+      childWatch.dispose();
     }
     const state: ManagedPythonDaemonState = {
       schemaVersion: 1,
-      pid: child.pid,
+      pid,
       host: '127.0.0.1',
       port,
       version: options.cliVersion,
@@ -733,20 +856,13 @@ export async function startManagedPythonDaemon(
       stdoutLog: layout.daemonStdoutPath,
       stderrLog: layout.daemonStderrPath,
     };
-    try {
-      await waitForHealth({
-        state,
-        cliVersion: options.cliVersion,
-        fetch: fetchImpl,
-        timeoutMs: options.startupTimeoutMs ?? 30_000,
-        pollIntervalMs: options.pollIntervalMs ?? 100,
-      });
-    } catch (error) {
-      if (processAlive(state.pid)) {
-        killProcess(state.pid);
+    if (options.force !== true) {
+      const latest = await readManagedPythonDaemonStatus(statusOptions);
+      if (latest.kind === 'running' && latest.state.pid !== pid && hasFeatures(latest.state, features)) {
+        // Another attempt published a usable daemon while this one started; keep a single recorded daemon.
+        killProcess(pid);
+        return { status: 'reused', layout, state: latest.state, baseUrl: latest.baseUrl };
       }
-      await removeState(layout);
-      throw error;
     }
     await writeState(layout.daemonStatePath, state);
     return { status: 'started', layout, state, baseUrl: baseUrl(state) };

@@ -541,6 +541,38 @@ describe('createLocalProjectMcpContextPorts', () => {
     expect(connector.cleanup).toHaveBeenCalled();
   });
 
+  it('propagates a daemon connectivity fault from read-only validation without executing the SQL', async () => {
+    const project = await initKtxProject({ projectDir: tempDir });
+    project.config.connections.warehouse = {
+      driver: 'snowflake',
+      url: 'env:DATABASE_URL',
+    };
+    const fault = new Error(
+      'ktx daemon at http://127.0.0.1:61002 refused the connection (ECONNREFUSED) after recovering from ' +
+        'http://127.0.0.1:61001; giving up after 2 attempts',
+    );
+    fault.name = 'ManagedPythonDaemonUnavailableError';
+    const connector = testConnector(testSnapshot(), { headers: [], rows: [], totalRows: 0, rowCount: 0 });
+    const sqlAnalysis = {
+      analyzeForFingerprint: vi.fn(),
+      analyzeBatch: vi.fn(),
+      validateReadOnly: vi.fn(async () => {
+        throw fault;
+      }),
+    };
+    const ports = createLocalProjectMcpContextPorts(project, {
+      sqlAnalysis,
+      localScan: { createConnector: vi.fn(async () => connector) },
+      embeddingService: null,
+    });
+
+    const execution = ports.sqlExecution?.execute({ connectionId: 'warehouse', sql: 'select 1', maxRows: 10 });
+
+    await expect(execution).rejects.toBe(fault);
+    await expect(execution).rejects.not.toBeInstanceOf(KtxExpectedError);
+    expect(connector.executeReadOnly).not.toHaveBeenCalled();
+  });
+
   it('exposes local scan entity details through MCP ports', async () => {
     const project = await initKtxProject({ projectDir: tempDir });
     project.config.connections.warehouse = {
