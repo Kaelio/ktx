@@ -388,7 +388,11 @@ describe('setup embeddings step', () => {
       {
         env: {},
         ensureLocalEmbeddings: vi.fn(async () => {
-          throw new ManagedPythonDaemonStartError('fetch failed: connect ECONNREFUSED 127.0.0.1:61234', stderrLog);
+          throw new ManagedPythonDaemonStartError(
+            'fetch failed: connect ECONNREFUSED 127.0.0.1:61234',
+            stderrLog,
+            'readiness-timeout',
+          );
         }),
       },
     );
