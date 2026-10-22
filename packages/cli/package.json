@@ -63,7 +63,7 @@
     "@looker/sdk": "^26.8.0",
     "@looker/sdk-node": "^26.8.0",
     "@looker/sdk-rtl": "^21.6.5",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@notionhq/client": "^5.22.0",
     "@openai/codex-sdk": "^0.133.0",
     "ai": "^6.0.188",
