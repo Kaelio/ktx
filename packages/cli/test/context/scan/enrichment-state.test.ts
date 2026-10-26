@@ -61,6 +61,7 @@ describe('scan enrichment state', () => {
   });
 
   afterEach(async () => {
+    store?.close();
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -292,6 +293,7 @@ describe('scan enrichment state', () => {
       recreated.findCompletedStage({ connectionId: 'warehouse', stage: 'descriptions', inputHash: 'hash' }),
     ).resolves.toMatchObject({ runId: 'new-run', output: ['fresh'] });
     await expect(recreated.listRunStages('old-run')).resolves.toEqual([]);
+    recreated.close();
   });
 
   it('lists scan stages through the shared cache metadata', async () => {

@@ -66,6 +66,7 @@ export interface KtxScanEnrichmentStateStore {
   ): Promise<void>;
   saveFailedStage(input: Omit<KtxScanEnrichmentFailedStage, 'status' | 'output'>): Promise<void>;
   listRunStages(runId: string): Promise<KtxScanEnrichmentStageRecord[]>;
+  close?(): void;
 }
 
 /** Description-LLM identity: the inputs that change a description's content. */

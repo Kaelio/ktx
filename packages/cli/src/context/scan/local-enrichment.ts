@@ -491,7 +491,18 @@ async function generateDescriptions(input: {
     ),
   );
   await flush(true);
-  await input.progress?.update(1, `Generated descriptions for ${totalTables} tables`);
+  const enrichedCount = enrichedById.size;
+  if (totalTables > 0 && enrichedCount === 0) {
+    throw new Error(
+      `Failed to generate descriptions for all ${totalTables} tables; check LLM configuration or provider connectivity`,
+    );
+  }
+  await input.progress?.update(
+    1,
+    enrichedCount === totalTables
+      ? `Generated descriptions for ${totalTables} tables`
+      : `Generated descriptions for ${enrichedCount}/${totalTables} tables (${totalTables - enrichedCount} failed)`,
+  );
   // Full set in snapshot order: recovered + freshly enriched, null for any still-failed.
   return input.snapshot.tables.map((table) => enrichedById.get(tableRefKey(tableRef(table))) ?? nullDescriptionUpdate(table));
 }
@@ -599,9 +610,15 @@ async function runEnrichmentStage<TOutput>(input: {
       inputHash: input.inputHash,
     });
     if (existing) {
-      input.resumedStages.push(input.stage);
-      input.completedStages.push(input.stage);
-      return existing.output;
+      const isPartiallyEnrichedDescriptions =
+        input.stage === 'descriptions' &&
+        Array.isArray(existing.output) &&
+        existing.output.some((update) => !isEnrichedDescriptionUpdate(update as KtxScanDescriptionUpdate));
+      if (!isPartiallyEnrichedDescriptions) {
+        input.resumedStages.push(input.stage);
+        input.completedStages.push(input.stage);
+        return existing.output;
+      }
     }
   }
 
