@@ -145,4 +145,8 @@ export class SqliteLocalScanEnrichmentStateStore implements KtxScanEnrichmentSta
       .filter((record) => record.namespace.startsWith('scan:'))
       .map((record) => toScanRecord(record));
   }
+
+  close(): void {
+    this.cache.close?.();
+  }
 }

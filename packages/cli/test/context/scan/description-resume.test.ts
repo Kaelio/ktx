@@ -115,12 +115,16 @@ describe('descriptions stage incremental persistence + resume', () => {
     await project.fileStore.writeFile(PROGRESS_PATH, `${JSON.stringify(record, null, 2)}\n`, 'ktx', 'ktx@example.com', 'edit');
   }
 
+  let activeStateStore: SqliteLocalScanEnrichmentStateStore | null = null;
+
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ktx-desc-resume-'));
     project = await initKtxProject({ projectDir: join(tempDir, 'project') });
   });
 
   afterEach(async () => {
+    activeStateStore?.close();
+    activeStateStore = null;
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -174,6 +178,7 @@ describe('descriptions stage incremental persistence + resume', () => {
 
   it('persists the other tables and completes the stage when one table fails', async () => {
     const stateStore = new SqliteLocalScanEnrichmentStateStore({ dbPath: join(tempDir, 'state.sqlite') });
+    activeStateStore = stateStore;
     let calls = 0;
     const runtime: KtxLlmRuntimePort = {
       generateText: vi.fn(async () => 'AI column description'),
@@ -226,6 +231,81 @@ describe('descriptions stage incremental persistence + resume', () => {
     };
     expect(shard.tables.customers?.descriptions?.ai).toBe('AI table description');
     expect(shard.tables.orders?.descriptions?.ai).toBeUndefined();
+
+    // Second run: should re-enter compute() rather than short-circuiting on incomplete cache,
+    // recover customers + products from resumeStore, and only call LLM for orders.
+    let run2Calls = 0;
+    const runtime2: KtxLlmRuntimePort = {
+      generateText: vi.fn(async () => 'AI column description'),
+      generateObject: vi.fn(async () => {
+        run2Calls += 1;
+        return { tableDescription: 'AI orders description', columns: [] };
+      }) as KtxLlmRuntimePort['generateObject'],
+      runAgentLoop: vi.fn(),
+      subprocessForkSpec: () => null,
+    };
+
+    const result2 = await runLocalScanEnrichment({
+      connectionId: 'warehouse',
+      mode: 'enriched',
+      connector: connector(),
+      snapshot,
+      context: { runId: 'run-retry' },
+      providers: { llmRuntime: runtime2, embedding: null },
+      descriptionResumeStore: createKtxScanDescriptionResumeStore({
+        project,
+        connectionId: 'warehouse',
+        syncId: 'sync-1',
+        driver: 'postgres',
+      }),
+      stateStore,
+      syncId: 'sync-1',
+      relationshipSettings: relationshipsDisabled(),
+    });
+
+    // Exactly 1 LLM call made: only for the previously failed 'orders' table!
+    expect(run2Calls).toBe(1);
+    const byName2 = new Map(result2.descriptionUpdates.map((update) => [update.table.name, update]));
+    expect(byName2.get('orders')?.tableDescription).toBe('AI orders description');
+    expect(byName2.get('customers')?.tableDescription).toBe('AI table description');
+    expect(byName2.get('products')?.tableDescription).toBe('AI table description');
+  });
+
+  it('fails the stage and records a failed stage when all tables fail LLM description generation', async () => {
+    const stateStore = new SqliteLocalScanEnrichmentStateStore({ dbPath: join(tempDir, 'state-fail.sqlite') });
+    activeStateStore = stateStore;
+    const failingRuntime: KtxLlmRuntimePort = {
+      generateText: vi.fn(async () => 'AI column description'),
+      generateObject: vi.fn(async () => {
+        throw new Error('LLM gateway returned 404');
+      }) as KtxLlmRuntimePort['generateObject'],
+      runAgentLoop: vi.fn(),
+      subprocessForkSpec: () => null,
+    };
+
+    await expect(
+      runLocalScanEnrichment({
+        connectionId: 'warehouse',
+        mode: 'enriched',
+        connector: connector(),
+        snapshot,
+        context: { runId: 'run-all-failed' },
+        providers: { llmRuntime: failingRuntime, embedding: null },
+        descriptionResumeStore: createKtxScanDescriptionResumeStore({
+          project,
+          connectionId: 'warehouse',
+          syncId: 'sync-1',
+          driver: 'postgres',
+        }),
+        stateStore,
+        syncId: 'sync-1',
+        relationshipSettings: relationshipsDisabled(),
+      }),
+    ).rejects.toThrow('Failed to generate descriptions for all 3 tables');
+
+    const stages = await stateStore.listRunStages('run-all-failed');
+    expect(stages.some((stage) => stage.stage === 'descriptions' && stage.status === 'failed')).toBe(true);
+    expect(stages.some((stage) => stage.stage === 'descriptions' && stage.status === 'completed')).toBe(false);
   });
 
   it('rewrites only the manifest shards that gained a changed table', async () => {

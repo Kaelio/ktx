@@ -44,6 +44,7 @@ export interface ContentResultCache {
   saveFailedResult(input: Omit<ContentResultCacheFailed, 'status' | 'output'>): Promise<void>;
   deleteResult(input: ContentResultCacheLookup): Promise<void>;
   listRunResults(runId: string): Promise<ContentResultCacheRecord[]>;
+  close?(): void;
 }
 
 function stableJson(value: unknown): string {

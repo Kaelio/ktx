@@ -278,4 +278,8 @@ export class SqliteContentResultCache implements ContentResultCache {
       .all(runId) as ResultRow[];
     return rows.map((row) => parseResultRow(row));
   }
+
+  close(): void {
+    this.db.close();
+  }
 }
